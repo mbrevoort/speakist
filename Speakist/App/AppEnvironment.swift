@@ -1,0 +1,64 @@
+import Foundation
+import Combine
+
+/// Dependency container. Lazily constructed and shared across the app.
+@MainActor
+final class AppEnvironment: ObservableObject {
+    let preferences: Preferences
+    let keychain: KeychainStore
+    let permissions: PermissionCoordinator
+    let deviceMonitor: DeviceMonitor
+    let audioArchive: AudioArchive
+    let historyStore: HistoryStore
+    let correctionStore: CorrectionStore
+    let usageTracker: UsageTracker
+    let audioRecorder: AudioRecorder
+    let cursorInserter: CursorInserter
+    let focusedFieldProbe: FocusedFieldProbe
+    let transcriptionService: TranscriptionService
+    let hudController: HUDController
+    let notifier: Notifier
+    let updater: UpdaterController
+
+    init() {
+        Logger.shared.bootstrap()
+        let prefs = Preferences()
+        self.preferences = prefs
+        self.keychain = KeychainStore()
+        self.permissions = PermissionCoordinator()
+        self.deviceMonitor = DeviceMonitor()
+        self.audioArchive = AudioArchive(preferences: prefs)
+        self.historyStore = HistoryStore()
+        self.correctionStore = CorrectionStore()
+        self.usageTracker = UsageTracker(historyStore: historyStore)
+        self.audioRecorder = AudioRecorder(preferences: prefs, deviceMonitor: deviceMonitor)
+        self.cursorInserter = CursorInserter()
+        self.focusedFieldProbe = FocusedFieldProbe()
+        self.hudController = HUDController(preferences: prefs)
+        self.notifier = Notifier()
+        self.updater = UpdaterController()
+        self.transcriptionService = TranscriptionService(
+            preferences: prefs,
+            keychain: keychain,
+            correctionStore: correctionStore,
+            historyStore: historyStore,
+            audioArchive: audioArchive,
+            cursorInserter: cursorInserter,
+            focusedFieldProbe: focusedFieldProbe,
+            hud: hudController,
+            notifier: notifier,
+            usage: usageTracker
+        )
+        hudController.bind(to: audioRecorder)
+    }
+
+    func start() {
+        deviceMonitor.start()
+        historyStore.bootstrap()
+        correctionStore.bootstrap()
+        audioArchive.bootstrap()
+        historyStore.purgeExpired(days: preferences.retentionDays, maxEntries: preferences.maxHistoryEntries)
+        audioArchive.pruneToKeepLast(preferences.keepAudio ? preferences.keepAudioCount : 0)
+        updater.bootstrap()
+    }
+}

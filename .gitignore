@@ -1,0 +1,25 @@
+.DS_Store
+*.xcodeproj
+*.xcworkspace
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.pbxuser
+*.perspectivev3
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+Pods/
+.swiftpm/
+.build/
+fastlane/report.xml
+fastlane/screenshots
+*.log
+*~
+.#*
+
+# Local Claude Code overrides (team-wide ones go in .claude/settings.json)
+.claude/settings.local.json
