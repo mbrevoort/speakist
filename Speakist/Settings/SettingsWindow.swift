@@ -267,10 +267,10 @@ struct TranscriptionSettingsView: View {
             }
 
             Section {
-                Toggle("Voice commands → punctuation", isOn: Binding(
+                Toggle("Voice commands for punctuation", isOn: Binding(
                     get: { prefs.dictationMode },
                     set: { prefs.dictationMode = $0 }))
-                Text("Say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and Deepgram converts them to the matching characters instead of typing them out.")
+                Text("When on, say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and they\u2019re converted to the matching characters. Trade-off: Deepgram stops inferring punctuation from pauses, so you need to say commands explicitly. Leave off for natural, automatically-punctuated speech.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
 

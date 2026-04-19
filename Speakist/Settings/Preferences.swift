@@ -42,7 +42,15 @@ final class Preferences: ObservableObject {
     init() {
         defaults.register(defaults: [
             K.deepgramModel: DeepgramModel.nova3.rawValue,
-            K.dictationMode: true,
+            // Dictation mode is opt-in. When ON, Deepgram converts spoken
+            // commands ("period", "comma", "new paragraph") to characters —
+            // but as a side effect it becomes much less aggressive about
+            // inferring punctuation from pauses/intonation. For natural
+            // push-to-talk where most users just speak conversationally, OFF
+            // produces cleanly-punctuated output; ON suits users who want
+            // explicit control. See:
+            //   https://developers.deepgram.com/docs/dictation
+            K.dictationMode: false,
             K.includeFillerWords: false,
             K.convertMeasurements: false,
             K.maskProfanity: false,
@@ -71,6 +79,9 @@ final class Preferences: ObservableObject {
     }
     /// Enables Deepgram's dictation mode — "period", "new line", "new paragraph"
     /// and other spoken punctuation commands are converted to characters.
+    /// Trade-off: this disables much of the model's automatic punctuation
+    /// inference, so when ON you're expected to say commands explicitly.
+    /// Default OFF so natural speech → cleanly-punctuated text.
     var dictationMode: Bool {
         get { defaults.bool(forKey: K.dictationMode) }
         set { defaults.set(newValue, forKey: K.dictationMode); objectWillChange.send() }
