@@ -21,5 +21,17 @@ fastlane/screenshots
 *~
 .#*
 
+# Web (Next.js on Cloudflare) — duplicated in web/.gitignore for clarity.
+web/node_modules/
+web/.next/
+web/.pnpm-store/
+web/.wrangler/
+web/.dev.vars
+web/.vercel/
+web/.env
+web/.env.local
+web/.env.*.local
+web/drizzle/meta/
+
 # Local Claude Code overrides (team-wide ones go in .claude/settings.json)
 .claude/settings.local.json

@@ -1,0 +1,37 @@
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Node
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Cloudflare / wrangler
+.wrangler/
+.dev.vars
+
+# Next-on-pages output (hosted on Cloudflare, not Vercel)
+.vercel/
+
+# Drizzle metadata
+drizzle/meta/
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.DS_Store
+.vercel
+.idea/
+.vscode/

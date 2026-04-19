@@ -1,0 +1,63 @@
+# Cloudflare configuration for Speakist.
+#
+# Dev vs prod are separate Cloudflare Pages projects, each with their own D1
+# database. Local `wrangler dev` uses a file-backed SQLite under .wrangler/
+# (local mirror of the dev D1). See SETUP.md for the initial setup.
+#
+# After running `wrangler d1 create speakist-dev` and ...-prod, paste the
+# returned `database_id` values into the right blocks below.
+
+name = "speakist-web"
+compatibility_date = "2026-04-19"
+compatibility_flags = ["nodejs_compat"]
+
+# `@cloudflare/next-on-pages` emits Pages output here.
+pages_build_output_dir = ".vercel/output/static"
+
+# -----------------------------------------------------------------------------
+# Default (dev) bindings — used by `wrangler dev`, `wrangler pages dev`,
+# and `wrangler pages deploy --project-name speakist-dev`.
+# -----------------------------------------------------------------------------
+
+[[d1_databases]]
+binding = "DB"
+database_name = "speakist-dev"
+database_id = "__FILL_ME_IN__"
+migrations_dir = "drizzle/migrations"
+
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "__FILL_ME_IN__"
+
+# [[r2_buckets]]
+# binding = "AUDIO"
+# bucket_name = "speakist-audio-dev"
+
+# [[queues.producers]]
+# queue = "speakist-tasks-dev"
+# binding = "QUEUE"
+
+# -----------------------------------------------------------------------------
+# Production — used by `wrangler pages deploy --project-name speakist-prod`.
+# Same binding names as dev (code doesn't change), different backing resources.
+# -----------------------------------------------------------------------------
+
+[env.production]
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "speakist-prod"
+database_id = "__FILL_ME_IN__"
+migrations_dir = "drizzle/migrations"
+
+# [[env.production.kv_namespaces]]
+# binding = "CACHE"
+# id = "__FILL_ME_IN__"
+
+# [[env.production.r2_buckets]]
+# binding = "AUDIO"
+# bucket_name = "speakist-audio-prod"
+
+# [[env.production.queues.producers]]
+# queue = "speakist-tasks-prod"
+# binding = "QUEUE"
