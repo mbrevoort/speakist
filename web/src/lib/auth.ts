@@ -25,7 +25,8 @@ import {
 
 /**
  * Build the Auth.js config. We build lazily because the Drizzle adapter needs
- * the D1 binding (from getRequestContext), which only exists inside a request.
+ * the D1 binding (via getCloudflareContext), which only exists inside a
+ * request scope.
  */
 export function buildAuthConfig(): NextAuthConfig {
   const db = getDb();

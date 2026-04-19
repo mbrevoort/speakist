@@ -1,22 +1,35 @@
-# Cloudflare configuration for Speakist.
+# Cloudflare Worker configuration for Speakist.
 #
-# Dev vs prod are separate Cloudflare Pages projects, each with their own D1
-# database. Local `wrangler dev` uses a file-backed SQLite under .wrangler/
-# (local mirror of the dev D1). See SETUP.md for the initial setup.
+# OpenNext emits a single Worker at .open-next/worker.js that serves the
+# entire Next.js app (SSR + API routes), with static assets under
+# .open-next/assets/ served via the ASSETS binding.
+#
+# Dev vs prod are separate Workers (different `name`, different D1 dbs)
+# managed via wrangler environments. `pnpm deploy:dev` uses the default
+# block below; `pnpm deploy:prod` uses [env.production].
 #
 # After running `wrangler d1 create speakist-dev` and ...-prod, paste the
 # returned `database_id` values into the right blocks below.
 
-name = "speakist-web"
+name = "speakist-web-dev"
+main = ".open-next/worker.js"
 compatibility_date = "2026-04-19"
+# nodejs_compat activates the Workers Node.js v2 compat layer (auto at
+# compatibility_date >= 2024-09-23). Required so Auth.js + Drizzle + Stripe
+# SDK run unmodified.
 compatibility_flags = ["nodejs_compat"]
 
-# `@cloudflare/next-on-pages` emits Pages output here.
-pages_build_output_dir = ".vercel/output/static"
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[observability]
+enabled = true
 
 # -----------------------------------------------------------------------------
-# Default (dev) bindings — used by `wrangler dev`, `wrangler pages dev`,
-# and `wrangler pages deploy --project-name speakist-dev`.
+# Default (dev) bindings — used by `wrangler dev`, `opennextjs-cloudflare
+# preview`, and `opennextjs-cloudflare deploy` (which becomes the
+# `speakist-web-dev` Worker).
 # -----------------------------------------------------------------------------
 
 [[d1_databases]]
@@ -38,11 +51,12 @@ migrations_dir = "drizzle/migrations"
 # binding = "QUEUE"
 
 # -----------------------------------------------------------------------------
-# Production — used by `wrangler pages deploy --project-name speakist-prod`.
-# Same binding names as dev (code doesn't change), different backing resources.
+# Production — invoked via `opennextjs-cloudflare deploy --env production`.
+# A fully separate Worker name + D1 database. No shared state with dev.
 # -----------------------------------------------------------------------------
 
 [env.production]
+name = "speakist-web-prod"
 
 [[env.production.d1_databases]]
 binding = "DB"

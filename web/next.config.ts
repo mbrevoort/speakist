@@ -1,17 +1,14 @@
 import type { NextConfig } from "next";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
-// `setupDevPlatform()` wires Cloudflare bindings (D1, KV, R2, Queues) into
-// `next dev` so `getRequestContext().env.DB` works locally the same way it
-// does in deployed Workers. Without this, the dev server has no DB binding.
-// See: https://developers.cloudflare.com/pages/framework-guides/nextjs/ssr/local-development/
-if (process.env.NODE_ENV === "development") {
-  const { setupDevPlatform } = await import("@cloudflare/next-on-pages/next-dev");
-  await setupDevPlatform();
-}
+// Wires Cloudflare bindings (D1, KV, R2, Queues) into `next dev` so
+// `getCloudflareContext().env.DB` works locally the same way it does in the
+// deployed Worker. Without this, the dev server has no D1 binding.
+// The helper is a no-op in production / build contexts.
+initOpenNextCloudflareForDev();
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // `next-on-pages` handles Worker output; no custom output mode needed here.
 };
 
 export default nextConfig;

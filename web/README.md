@@ -19,8 +19,7 @@ usage and stays cheap at scale.
 | Layer | Choice |
 |---|---|
 | Framework | **Next.js 15** (App Router) + TypeScript + Tailwind + shadcn/ui |
-| Hosting | **Cloudflare Pages** (no commercial-use restriction, unlimited bandwidth free) |
-| Runtime | **Cloudflare Workers** (edge) via `@cloudflare/next-on-pages` |
+| Hosting / Runtime | **Cloudflare Workers** (with Static Assets) via **OpenNext** (`@opennextjs/cloudflare`) — entire app runs in one Worker; static assets served from the edge via the `ASSETS` binding; no commercial-use restriction, unlimited bandwidth free |
 | Database | **Cloudflare D1** (managed SQLite, 5 GB free) |
 | ORM | **Drizzle** (type-safe, tiny, SQLite-native) |
 | Auth | **Auth.js v5** (NextAuth) — magic-link only, Drizzle adapter |
@@ -75,7 +74,8 @@ web/
 │       └── 0000_init.sql       # handwritten to match schema.ts exactly
 ├── scripts/
 │   └── seed.sql                # super admin + demo org + $5 bonus
-├── wrangler.toml               # Cloudflare bindings (dev + production)
+├── wrangler.toml               # Cloudflare Worker config (dev + production)
+├── open-next.config.ts         # OpenNext adapter config
 ├── drizzle.config.ts           # drizzle-kit config
 └── SETUP.md
 ```

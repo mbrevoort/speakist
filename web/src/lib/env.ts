@@ -3,9 +3,9 @@
 // Two runtimes to keep in mind:
 //   * Node-ish for `next dev` / build → plain process.env
 //   * Cloudflare Workers for deployed routes → process.env is polyfilled by
-//     next-on-pages, but the canonical surface for bindings (D1, KV, R2) is
-//     `getRequestContext().env`, not process.env. This file is only for
-//     scalar *secrets* and public URLs, never for bindings.
+//     OpenNext's nodejs_compat layer, but the canonical surface for bindings
+//     (D1, KV, R2) is `getCloudflareContext().env`, not process.env. This
+//     file is only for scalar *secrets* and public URLs, never for bindings.
 //
 // AUTH_SECRET / RESEND_* etc. are set via:
 //   * Local dev:  .env.local (not committed)

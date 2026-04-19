@@ -27,7 +27,7 @@ web/.next/
 web/.pnpm-store/
 web/.wrangler/
 web/.dev.vars
-web/.vercel/
+web/.open-next/
 web/.env
 web/.env.local
 web/.env.*.local

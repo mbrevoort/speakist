@@ -9,10 +9,10 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
 
-    "pages:build": "npx @cloudflare/next-on-pages",
-    "pages:preview": "pnpm pages:build && wrangler pages dev",
-    "deploy:dev": "pnpm pages:build && wrangler pages deploy .vercel/output/static --project-name speakist-dev --branch dev",
-    "deploy:prod": "pnpm pages:build && wrangler pages deploy .vercel/output/static --project-name speakist-prod --branch main",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare preview",
+    "deploy:dev": "opennextjs-cloudflare deploy",
+    "deploy:prod": "opennextjs-cloudflare deploy --env production",
 
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply speakist-dev --local",
@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.2",
+    "@opennextjs/cloudflare": "^1.0.0",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-label": "^2.1.0",
@@ -46,7 +47,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@cloudflare/next-on-pages": "^1.13.5",
     "@cloudflare/workers-types": "^4.20241022.0",
     "@types/node": "^22.8.1",
     "@types/react": "npm:types-react@19.0.0-rc.1",
@@ -59,7 +59,6 @@
     "tailwindcss": "^3.4.14",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
-    "vercel": "^37.14.0",
     "wrangler": "^3.84.0"
   },
   "overrides": {

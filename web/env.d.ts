@@ -1,20 +1,19 @@
 // Type declarations for Cloudflare bindings surfaced via
-// `@cloudflare/next-on-pages`. These match the [[d1_databases]] etc. blocks
-// in wrangler.toml — if you add a binding there, add it here too.
+// `@opennextjs/cloudflare`. `getCloudflareContext()` is typed against the
+// global `CloudflareEnv` interface — match the [[d1_databases]] etc. blocks
+// in wrangler.toml here so `env.DB` is typed.
 
 import type { D1Database } from "@cloudflare/workers-types";
 
 declare global {
-  namespace CloudflareEnv {
-    interface Env {
-      /** Main application database (Drizzle client is initialized from this). */
-      DB: D1Database;
+  interface CloudflareEnv {
+    /** Main application database (Drizzle client is initialized from this). */
+    DB: D1Database;
 
-      // Phase 4+: additional bindings will go here as we add them.
-      // KV: KVNamespace;
-      // AUDIO: R2Bucket;
-      // QUEUE: Queue;
-    }
+    // Phase 4+: additional bindings will go here as we add them.
+    // CACHE: KVNamespace;
+    // AUDIO: R2Bucket;
+    // QUEUE: Queue;
   }
 }
 

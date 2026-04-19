@@ -21,8 +21,8 @@ pnpm-debug.log*
 .wrangler/
 .dev.vars
 
-# Next-on-pages output (hosted on Cloudflare, not Vercel)
-.vercel/
+# OpenNext build output (Worker + assets)
+.open-next/
 
 # Drizzle metadata
 drizzle/meta/

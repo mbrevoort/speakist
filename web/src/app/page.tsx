@@ -1,7 +1,5 @@
 // Placeholder landing page. Replaced in Phase 2 with the full marketing site.
 
-export const runtime = "edge";
-
 export default function Home() {
   return (
     <main className="min-h-screen flex items-center justify-center">

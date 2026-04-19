@@ -3,11 +3,17 @@
 One-page path from fresh clone to running dev environment on Cloudflare.
 Every step is idempotent; re-running is safe.
 
+We deploy via the **OpenNext Cloudflare adapter** (`@opennextjs/cloudflare`),
+which emits a single Worker that serves the entire Next.js app (SSR + API
+routes) with static assets via Cloudflare's `ASSETS` binding. The older
+`@cloudflare/next-on-pages` approach is deprecated — don't use it.
+
 ## Prerequisites
 
 - **Node.js 20+** and **pnpm** (`npm install -g pnpm`)
 - A **Cloudflare account** (free) → https://dash.cloudflare.com/sign-up
-- **wrangler** CLI will be installed locally via pnpm — no global install needed.
+- `wrangler` and OpenNext adapter are installed locally via pnpm — no global
+  installs needed.
 
 ## 1. Install dependencies
 
@@ -15,9 +21,6 @@ Every step is idempotent; re-running is safe.
 cd web
 pnpm install
 ```
-
-This also installs `wrangler` and `drizzle-kit` as local devDependencies,
-so everything works via `pnpm <command>` or `pnpm exec <binary>`.
 
 ## 2. Sign in to Cloudflare
 
@@ -62,7 +65,7 @@ pnpm db:migrate:local
 ```
 
 `wrangler` keeps a local SQLite file under `.wrangler/state/` that mirrors
-the remote DB. `next dev` + `wrangler pages dev` both read this.
+the remote DB. `next dev` reads this.
 
 Sanity check:
 
@@ -108,31 +111,52 @@ To test magic-link sign-in:
 3. Look at your `pnpm dev` console — the magic link is printed there
 4. Click it; you're signed in with super-admin privileges
 
-## 9. (When ready to deploy) Create the Pages project
+To preview the **built Worker** locally (closer to what ships to prod):
 
 ```bash
-pnpm pages:build                                # builds .vercel/output/static
-pnpm exec wrangler pages project create speakist-dev --production-branch main
-pnpm deploy:dev                                  # uploads the build
+pnpm cf:preview
 ```
 
-Then migrate + seed the **remote** dev database:
+This runs `opennextjs-cloudflare build` then serves the Worker via
+`wrangler dev`.
+
+## 9. Deploy to Cloudflare
+
+```bash
+# Dev Worker — deploys as `speakist-web-dev`
+pnpm deploy:dev
+
+# Prod Worker — deploys as `speakist-web-prod`
+pnpm deploy:prod
+```
+
+First deploy creates the Worker; subsequent deploys update it. No separate
+"create project" step needed (unlike Pages).
+
+Then migrate + seed the **remote** databases:
 
 ```bash
 pnpm db:migrate:dev
 pnpm db:seed:dev
+# later, for prod:
+pnpm db:migrate:prod
 ```
 
-And set production secrets (prompts for value, encrypted at rest in CF):
+Set production secrets (prompts for value, encrypted at rest):
 
 ```bash
-pnpm exec wrangler pages secret put AUTH_SECRET --project-name speakist-dev
-pnpm exec wrangler pages secret put AUTH_URL --project-name speakist-dev
-pnpm exec wrangler pages secret put RESEND_API_KEY --project-name speakist-dev
-# ... etc for the secrets in .env.example
+pnpm exec wrangler secret put AUTH_SECRET
+pnpm exec wrangler secret put AUTH_URL
+pnpm exec wrangler secret put RESEND_API_KEY
+# ... etc for every secret in .env.example
+
+# For prod:
+pnpm exec wrangler secret put AUTH_SECRET --env production
+# ... etc
 ```
 
-Production is the same flow with `speakist-prod` and `--remote --prod`.
+Attach a custom domain (optional) in the Cloudflare dashboard:
+Workers → speakist-web-prod → Settings → Triggers → Custom Domains.
 
 ## Services you'll need (free tiers fine)
 
@@ -146,40 +170,44 @@ Production is the same flow with `speakist-prod` and `--remote --prod`.
 ## Dev ↔ Prod workflow
 
 - **Daily dev**: `pnpm dev` for tight iteration (uses local D1 mirror).
-- **Integration check**: `pnpm deploy:dev` → test against real D1 on your
-  dev Pages site.
+- **Integration check**: `pnpm deploy:dev` → test against the real
+  `speakist-web-dev` Worker + remote D1.
 - **Ship to prod**: `pnpm deploy:prod` (or wire into a GitHub Action on
   merge to main).
 
-Different D1 dbs, different Cloudflare Pages projects, different env vars —
-they never touch each other. No shared data, no "oops I ran the dev seed
-against prod" risk.
+Different D1 dbs, different Workers, different secrets — they never touch
+each other. No shared data, no "oops I ran the dev seed against prod" risk.
 
 ## Troubleshooting
 
-- **`getRequestContext is not available`** — you're calling `getDb()` from
-  client code or during build. Move to a server component / route handler,
-  or mark the page with `export const runtime = "edge"` if it's SSR.
+- **`getCloudflareContext is not available`** — you're calling `getDb()`
+  from client code or during build. Move to a server component / route
+  handler / server action.
 - **`D1_ERROR: no such table: users`** — you haven't run `pnpm db:migrate:local`
   yet, or `wrangler.toml` points at a different database name.
 - **Magic-link email never arrives in dev** — look at your `pnpm dev`
   console output; when `RESEND_API_KEY` is unset the link prints there.
-- **"No Cloudflare env bindings found in next dev"** — make sure
-  `next.config.ts` is calling `setupDevPlatform()` and your wrangler.toml
-  is valid. `pnpm exec wrangler d1 list` should show your databases.
+- **"No Cloudflare env bindings found in next dev"** — confirm
+  `next.config.ts` calls `initOpenNextCloudflareForDev()` and your
+  wrangler.toml is valid. `pnpm exec wrangler d1 list` should show your dbs.
 - **D1 `database_id` not set** — if you skipped step 3/4, `wrangler dev`
   will error. Paste the ids into `wrangler.toml`.
+- **Build fails with "Cannot find module '@cloudflare/next-on-pages'"** —
+  that package is deprecated. If you see references to it, you're on an
+  older branch; pull latest.
 
 ## Commands cheat-sheet
 
 | Task | Command |
 |---|---|
 | Dev server | `pnpm dev` |
+| Preview built Worker locally | `pnpm cf:preview` |
+| Build Worker only | `pnpm cf:build` |
+| Deploy dev Worker | `pnpm deploy:dev` |
+| Deploy prod Worker | `pnpm deploy:prod` |
 | Local D1 migrate | `pnpm db:migrate:local` |
-| Dev D1 migrate | `pnpm db:migrate:dev` |
-| Prod D1 migrate | `pnpm db:migrate:prod` |
+| Dev D1 migrate (remote) | `pnpm db:migrate:dev` |
+| Prod D1 migrate (remote) | `pnpm db:migrate:prod` |
 | Generate next migration | `pnpm db:generate` |
-| Drizzle studio (inspect DB) | `pnpm db:studio` |
+| Drizzle studio (inspect schema) | `pnpm db:studio` |
 | Local query | `pnpm exec wrangler d1 execute speakist-dev --local --command="..."` |
-| Deploy dev | `pnpm deploy:dev` |
-| Deploy prod | `pnpm deploy:prod` |
