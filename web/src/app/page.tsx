@@ -1,22 +1,31 @@
-// Placeholder landing page. Replaced in Phase 2 with the full marketing site.
+// Marketing landing page.
+//
+// Layout: Nav → Hero → ValueProps → HowItWorks → Pricing (RSC, reads D1) →
+// FinalCTA → Footer. Pricing is the only block that can't be fully static;
+// everything else is pure markup. OpenNext still SSRs the whole page (so
+// the pricing query runs on the Worker), but the static sections are
+// effectively free.
+
+import { Nav } from "@/components/marketing/nav";
+import { Hero } from "@/components/marketing/hero";
+import { ValueProps } from "@/components/marketing/value-props";
+import { HowItWorks } from "@/components/marketing/how-it-works";
+import { Pricing } from "@/components/marketing/pricing";
+import { FinalCTA } from "@/components/marketing/cta";
+import { Footer } from "@/components/marketing/footer";
 
 export default function Home() {
   return (
-    <main className="min-h-screen flex items-center justify-center">
-      <div className="max-w-xl text-center space-y-4 px-6">
-        <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-          Speakist — coming soon
-        </p>
-        <h1 className="text-4xl font-semibold tracking-tight">
-          Push-to-talk dictation for macOS.
-        </h1>
-        <p className="text-lg text-muted-foreground">
-          Hold a key, speak, release. Clean text appears at your cursor in any app.
-        </p>
-        <p className="text-sm text-muted-foreground pt-8">
-          Phase 1 scaffold. Marketing site lands in Phase 2.
-        </p>
-      </div>
-    </main>
+    <div className="flex min-h-screen flex-col">
+      <Nav />
+      <main className="flex-1">
+        <Hero />
+        <ValueProps />
+        <HowItWorks />
+        <Pricing />
+        <FinalCTA />
+      </main>
+      <Footer />
+    </div>
   );
 }
