@@ -16,7 +16,7 @@ export function FinalCTA() {
         </p>
         <div className="mt-10 flex flex-wrap justify-center gap-4">
           <Button asChild size="xl">
-            <Link href="/api/auth/signin">Start with $5 free</Link>
+            <Link href="/auth/signin">Start with $5 free</Link>
           </Button>
           <Button asChild size="xl" variant="outline">
             <Link href="#pricing">See pricing details</Link>

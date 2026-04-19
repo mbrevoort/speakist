@@ -95,7 +95,7 @@ export async function Pricing() {
 
             <div className="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <Button asChild size="lg" className="flex-1">
-                <Link href="/api/auth/signin">
+                <Link href="/auth/signin">
                   Get your ${signupBonusDollars.toFixed(0)} free credit
                 </Link>
               </Button>
