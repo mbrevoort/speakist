@@ -124,6 +124,17 @@ export const organizations = sqliteTable(
     autoJoinDomain: text("auto_join_domain"),
 
     stripeCustomerId: text("stripe_customer_id"),
+
+    // Billing (Phase 4). Auto-top-up triggers when the balance drops below
+    // threshold during a debit. Null threshold/amount means "use defaults
+    // from pricing_config". `stripeDefaultPaymentMethodId` is populated the
+    // first time a Checkout top-up completes with setup_future_usage on,
+    // and is required for off-session auto-top-up charges.
+    autoTopupEnabled: bool("auto_topup_enabled").notNull().default(false),
+    autoTopupThresholdMillicents: integer("auto_topup_threshold_millicents"),
+    autoTopupAmountMillicents: integer("auto_topup_amount_millicents"),
+    stripeDefaultPaymentMethodId: text("stripe_default_payment_method_id"),
+
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
     updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
   },
