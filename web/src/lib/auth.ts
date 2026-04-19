@@ -22,6 +22,7 @@ import {
   users,
   verificationTokens,
 } from "@/lib/db/schema";
+import { provisionNewUser } from "@/lib/orgs";
 
 /**
  * Build the Auth.js config. We build lazily because the Drizzle adapter needs
@@ -116,10 +117,27 @@ export function buildAuthConfig(): NextAuthConfig {
     },
 
     events: {
-      // Phase 3 hooks: createUser → auto-join org by domain, grant signup
-      // bonus, etc. Left as a no-op here so Phase 1 boots.
-      async createUser(/* { user } */) {
-        // TODO(phase-3): auto_join_domain match + credit_ledger signup_bonus row.
+      async createUser({ user }) {
+        // Fires once per new user, after the users row is inserted. We
+        // either (a) auto-join them to an org whose auto_join_domain matches
+        // their email domain, or (b) create their own "{name}'s Workspace"
+        // org, add them as owner, and grant the signup bonus. See
+        // src/lib/orgs.ts for the decision tree.
+        if (!user.id) return;
+        try {
+          const result = await provisionNewUser(user.id);
+          console.log(
+            `[auth] provisioned new user ${user.email} → ${result.kind}${
+              "orgId" in result ? ` (org=${result.orgId})` : ""
+            }`
+          );
+        } catch (err) {
+          // Don't block sign-in if provisioning partially fails. A logged-in
+          // user with no org will land on /dashboard and the shell will
+          // detect the missing org and show a "Provisioning failed" state,
+          // which is better than losing the session entirely.
+          console.error("[auth] provisionNewUser failed:", err);
+        }
       },
     },
 
