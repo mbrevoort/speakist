@@ -21,17 +21,5 @@ fastlane/screenshots
 *~
 .#*
 
-# Web (Next.js) — most of these are duplicated in web/.gitignore for clarity,
-# but git respects the outer rules so webapp builds don't leak into Xcode commits.
-web/node_modules/
-web/.next/
-web/.pnpm-store/
-web/.vercel/
-web/.env
-web/.env.local
-web/.env.*.local
-web/supabase/.branches/
-web/supabase/.temp/
-
 # Local Claude Code overrides (team-wide ones go in .claude/settings.json)
 .claude/settings.local.json

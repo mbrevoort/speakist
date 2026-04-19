@@ -4,7 +4,6 @@ Push-to-talk dictation for macOS. Hold a shortcut, speak, release — transcribe
 
 - **Product spec** → [docs/speakist-prd.md](docs/speakist-prd.md)
 - **Architecture** → [docs/architecture.md](docs/architecture.md)
-- **Web app & SaaS backend** → [web/](web/) ([setup](web/SETUP.md))
 
 ## Requirements
 
