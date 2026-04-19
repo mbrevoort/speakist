@@ -41,13 +41,20 @@ export function buildAuthConfig(): NextAuthConfig {
 
     session: { strategy: "database" },
 
-    // Phase 3 reintroduces `pages: { signIn, verifyRequest, error }` pointing
-    // at branded /auth/* routes. For Phase 1 we let Auth.js render its
-    // built-in pages at /api/auth/signin etc. — unstyled but functional,
-    // which is exactly what we need for the foundation smoke test.
+    pages: {
+      signIn: "/auth/signin",
+      verifyRequest: "/auth/verify-request",
+      error: "/auth/error",
+    },
 
     providers: [
       Resend({
+        // Provider `id` stays "resend" (Auth.js convention, used by our
+        // signIn("resend", …) calls). `name` is what the default UI would
+        // render; ours doesn't use it, but we override it anyway so that if
+        // the default UI ever surfaces (e.g. during a misconfig) it says
+        // "Email" instead of the service we happen to buy delivery from.
+        name: "Email",
         apiKey: process.env.RESEND_API_KEY ?? "resend-missing",
         from: process.env.RESEND_FROM_EMAIL ?? "noreply@speakist.brevoort.com",
         // Intercept the outgoing email so we can (a) log the link in dev and
