@@ -41,11 +41,10 @@ export function buildAuthConfig(): NextAuthConfig {
 
     session: { strategy: "database" },
 
-    pages: {
-      signIn: "/auth/signin",
-      verifyRequest: "/auth/verify",
-      error: "/auth/error",
-    },
+    // Phase 3 reintroduces `pages: { signIn, verifyRequest, error }` pointing
+    // at branded /auth/* routes. For Phase 1 we let Auth.js render its
+    // built-in pages at /api/auth/signin etc. — unstyled but functional,
+    // which is exactly what we need for the foundation smoke test.
 
     providers: [
       Resend({
