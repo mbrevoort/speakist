@@ -10,7 +10,7 @@ Push-to-talk dictation for macOS. Hold a shortcut, speak, release — transcribe
 - macOS 14 Sonoma or newer
 - Xcode 15+
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) — `brew install xcodegen`
-- A Deepgram or OpenAI API key
+- A Deepgram API key
 
 ## Building
 
@@ -29,31 +29,29 @@ make run
 
 1. Launch the app. Speakist lives in your menu bar only — no Dock icon.
 2. Onboarding asks for **Microphone** and **Accessibility** permissions. Both are required.
-3. Paste your Deepgram or OpenAI API key in Settings → Transcription.
+3. Paste your Deepgram API key in Settings → Transcription.
 4. Hold **⌃⌘X** anywhere on your Mac, speak, release. Text appears at the cursor.
-
-Hold **Shift** when you release to skip the LLM cleanup pass.
 
 ## Project layout
 
 ```
 Speakist/
 ├── App/              # @main, AppDelegate, DI container
-├── MenuBar/          # NSStatusItem controller
+├── MenuBar/          # NSStatusItem controller, programmatic glyph
 ├── Shortcut/         # Global shortcut manager (KeyboardShortcuts)
-├── Recording/        # AVAudioEngine capture
-├── Transcription/    # Deepgram + OpenAI clients, cleanup pass
-├── Paste/            # Clipboard + synthetic Cmd+V
-├── Corrections/      # Diff engine, correction store, vocab builder
+├── Recording/        # AVAudioEngine capture + device monitor
+├── Transcription/    # Deepgram client + orchestrator
+├── Paste/            # Clipboard + synthetic Cmd+V + AX focus probe
+├── Corrections/      # Diff engine, correction store, keyterm builder
 ├── History/          # SQLite-backed history + audio archive
 ├── Settings/         # Settings window, Keychain, preferences
-├── HUD/              # Recording overlay
+├── HUD/              # Recording overlay + live waveform
 ├── Onboarding/       # First-run flow
 ├── Permissions/      # Mic + Accessibility helpers
-├── Usage/            # Per-provider usage tallies
+├── Usage/            # Deepgram minute rollups
 ├── Updates/          # Sparkle integration
 ├── Logging/          # os.Logger + file sink
-└── Resources/        # Asset catalog, default prompt
+└── Resources/        # Asset catalog, brand colors
 ```
 
 ## Distribution (maintainers)

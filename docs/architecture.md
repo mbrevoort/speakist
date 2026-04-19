@@ -47,8 +47,7 @@ AudioRecorder  CursorInserter FocusedField   HUDController   Updater
        (shortcut trigger)
        ShortcutManager ──▶ AudioRecorder ──▶ TranscriptionService
                                                    │
-                                                   ├─▶ DeepgramClient / OpenAITranscribeClient
-                                                   ├─▶ CleanupClient (gpt-4o-mini, optional)
+                                                   ├─▶ DeepgramClient
                                                    ├─▶ CursorInserter (clipboard + ⌘V)
                                                    ├─▶ HistoryStore + AudioArchive
                                                    └─▶ UsageTracker + HUDController + Notifier
@@ -58,7 +57,7 @@ AudioRecorder  CursorInserter FocusedField   HUDController   Updater
 
 - **Main actor** owns all UI, permissions, preferences, SQLite access, and the menu bar. `AppEnvironment`, `HistoryStore`, `CorrectionStore`, `Preferences`, `KeychainStore`, `PermissionCoordinator`, `HUDController`, `MenuBarController`, `AppDelegate`, and all SwiftUI views are `@MainActor`.
 - **AudioRecorder** is deliberately *not* main-actor-isolated. Its mic tap closure runs on Core Audio's internal thread; `start`/`stop` are marked `@MainActor` so mutations to state always happen on main. The tap reads `self.converter` / `self.outputFile` directly — safe because we install/remove the tap synchronously before those properties change.
-- **STT and cleanup clients** (`DeepgramClient`, `OpenAITranscribeClient`, `CleanupClient`) are `struct`s with `Sendable` conformance, so they can be awaited from any actor without reference-capture concerns.
+- **STT client** (`DeepgramClient`) is a `struct` with `Sendable` conformance, so it can be awaited from any actor without reference-capture concerns.
 - **Sqlite writes** go through `DatabaseQueue.write { … }` (GRDB serializes internally).
 
 ### 2.2 Activation policy
@@ -75,18 +74,18 @@ Speakist/
 ├── MenuBar/             NSStatusItem controller + programmatically-drawn brand glyph
 ├── Shortcut/            Wraps KeyboardShortcuts, owns push-to-talk state machine
 ├── Recording/           AVAudioEngine capture + device enumeration + live RMS levels
-├── Transcription/       Provider-agnostic orchestrator + Deepgram/OpenAI/Cleanup clients
+├── Transcription/       Deepgram client + orchestrator
 ├── Paste/               Clipboard-snapshot + synthetic ⌘V, plus AX focus probe
-├── Corrections/         Word-level Myers diff → correction pairs → SQLite store → STT/LLM vocab
+├── Corrections/         Word-level Myers diff → correction pairs → SQLite store → Deepgram keyterms
 ├── History/             SQLite-backed transcription log, FTS5 search, audio archive, UI window
 ├── Settings/            SettingsWindowController + SwiftUI sidebar + tab views + Keychain + Preferences
 ├── HUD/                 Floating borderless panel with pulsing dot + live waveform + timer
 ├── Onboarding/          First-run 4-pane flow (welcome, permissions, provider, launch-at-login)
 ├── Permissions/         Mic + Accessibility state machine with TCC polling
-├── Usage/               Per-provider minute/token rollups + cost estimation
+├── Usage/               Deepgram minute rollups + cost estimation
 ├── Updates/             Sparkle 2 integration
 ├── Logging/             os.Logger façade with rotating 5MB file sink
-└── Resources/           Assets.xcassets (app icon, accent color), brand colors, default cleanup prompt
+└── Resources/           Assets.xcassets (app icon, accent color), brand colors
 ```
 
 ---
@@ -107,13 +106,7 @@ Speakist/
                                                             build keyterms from CorrectionStore
                                                                          │
                                                                          ▼
-                                                            STT client.transcribe() (+1 retry)
-                                                                         │
-                                                                         ▼
-                                                            if cleanupEnabled & !shift & OpenAI key:
-                                                                 CleanupClient.clean(rawTranscript,
-                                                                                     systemPrompt,
-                                                                                     corrections)
+                                                            DeepgramClient.transcribe() (+1 retry)
                                                                          │
                                                                          ▼
                                                             FocusedFieldProbe.probe() → AX editable?
@@ -129,8 +122,6 @@ Speakist/
                                                             HUDController.hide()
                                                             NSSound.Pop playback (if enabled)
 ```
-
-Hold **Shift** at release → `skipCleanup = true` (raw transcript pasted).
 
 The one-retry-with-backoff lives in `TranscriptionService.withRetry`; `TranscriptionError.authFailure` cases never retry.
 
@@ -157,22 +148,17 @@ Audio files live in `~/Library/Application Support/Speakist/Audio/<uuid>.wav`, m
 1. User edits a history row's `final_transcript`.
 2. `DiffEngine.corrections(from:raw, to:edited)` runs a Myers-LCS token diff, extracts 1–4-token replacement runs, filters out pure punctuation/case-only edits.
 3. Each `CorrectionPair` is ingested into the `corrections` table (upsert on `(from, to)` with incrementing `count` and `last_seen`).
-4. On the next transcription, `VocabularyBuilder.keyterms(for:from:)` returns the top N *proper-noun-like* corrections (capitalized / has a digit) to feed into the STT provider's custom-vocab slot (`keyterm` for Deepgram Nova-3, `keywords` for Nova-2, `prompt` for OpenAI — budgeted ≤ 224 tokens).
-5. `VocabularyBuilder.cleanupDictionary(from:)` returns **all** corrections (not just proper nouns) which get injected into the LLM cleanup system prompt as a literal dictionary block.
+4. On the next transcription, `VocabularyBuilder.keyterms(from:)` returns the top 50 *proper-noun-like* corrections (capitalized / has a digit) to feed into Deepgram's custom-vocab slot (`keyterm[]` for Nova-3, `keywords[]` for Nova-2).
 
 ---
 
-## 6. Provider clients
-
-All three clients conform to a single `TranscriptionClient` protocol or are structs with a similar shape. They own no state beyond their API key + model selection, so they're `Sendable` and can be constructed per-request.
+## 6. Deepgram client
 
 | Client | Endpoint | Retry | Custom-vocab slot |
 |---|---|---|---|
 | [`DeepgramClient`](../Speakist/Transcription/DeepgramClient.swift) | `POST /v1/listen` | 1× @ 500ms | `keyterm[]` (Nova-3) or `keywords[]` (Nova-2) |
-| [`OpenAITranscribeClient`](../Speakist/Transcription/OpenAITranscribeClient.swift) | `POST /v1/audio/transcriptions` (multipart) | 1× @ 500ms | `prompt` (≤ 224 tokens, char-budgeted) |
-| [`CleanupClient`](../Speakist/Transcription/CleanupClient.swift) | `POST /v1/chat/completions` | failures silent; fall back to raw transcript | `system` prompt gets the user's prompt + correction dictionary |
 
-Errors map into a unified `TranscriptionError` enum (`.authFailed`, `.rateLimited`, `.serverError(Int, String?)`, `.network(String)`, etc.). `TranscriptionService` handles them centrally — `.authFailure` surfaces a user-visible notification, transient failures write a `transcription_status = "failed"` history row that the user can re-run from the History window.
+The client owns no state beyond its API key + model selection — it's a `Sendable` struct constructed per-request. Errors map into a unified `TranscriptionError` enum (`.authFailed`, `.rateLimited`, `.serverError(Int, String?)`, `.network(String)`, etc.). `TranscriptionService` handles them centrally — `.authFailure` surfaces a user-visible notification, transient failures write a `transcription_status = "failed"` history row that the user can re-run from the History window.
 
 ---
 
@@ -226,9 +212,9 @@ Both grants are TCC-keyed on the signed binary hash. Ad-hoc rebuilds change that
 
 ### 9.3 Settings ([`SettingsWindowController`](../Speakist/Settings/SettingsWindowController.swift) + [`SettingsWindow`](../Speakist/Settings/SettingsWindow.swift))
 
-Sidebar layout using `NavigationSplitView`. Nine sections: General, Shortcuts, Audio, Transcription, Cleanup, Vocabulary, History, Usage, About. Minimum window size 720×520; sidebar fixed between 200–260pt.
+Sidebar layout using `NavigationSplitView`. Eight sections: General, Shortcuts, Audio, Transcription, Vocabulary, History, Usage, About. Minimum window size 720×520; sidebar fixed between 200–260pt.
 
-Keys live in the Keychain (service `com.brevoort-studio.speakist.apikeys`, account = provider name). All other preferences live in `UserDefaults` via [`Preferences`](../Speakist/Settings/Preferences.swift), an `ObservableObject` wrapper.
+The Deepgram key lives in the Keychain (service `com.brevoort-studio.speakist.apikeys`, account `deepgram`). All other preferences live in `UserDefaults` via [`Preferences`](../Speakist/Settings/Preferences.swift), an `ObservableObject` wrapper.
 
 ### 9.4 History window ([`HistoryWindow`](../Speakist/History/HistoryWindow.swift))
 
@@ -236,7 +222,7 @@ Two-pane split view: searchable/filterable list on the left, per-entry detail on
 
 ### 9.5 Onboarding ([`OnboardingWindow`](../Speakist/Onboarding/OnboardingWindow.swift))
 
-Four panes: Welcome → Permissions → Provider setup + test recording → Launch-at-login. Uses `canAdvance` gates so the Continue button only enables when each pane's requirements are met.
+Four panes: Welcome → Permissions → Deepgram setup + test recording → Launch-at-login. Uses `canAdvance` gates so the Continue button only enables when each pane's requirements are met.
 
 ---
 

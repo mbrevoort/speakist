@@ -161,17 +161,23 @@ private struct DetailView: View {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(finalDraft, forType: .string)
                         } label: { Label("Copy", systemImage: "doc.on.doc") }
+                            .labelStyle(.iconOnly)
+                            .help("Copy transcript")
 
                         if entry.audioPath != nil {
                             Button {
                                 Task { await env.transcriptionService.retranscribe(entryID: entry.id) }
                             } label: { Label("Re-transcribe", systemImage: "arrow.clockwise") }
+                                .labelStyle(.iconOnly)
+                                .help("Re-transcribe from saved audio")
                         }
                         Button(role: .destructive) {
                             showingDeleteConfirm = true
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .labelStyle(.iconOnly)
+                        .help("Delete this entry")
                     }
                 }
 
@@ -234,7 +240,6 @@ private struct DetailView: View {
         var parts: [String] = []
         parts.append(entry.provider + (entry.model.isEmpty ? "" : " \(entry.model)"))
         parts.append(String(format: "%.1fs", Double(entry.durationMs) / 1000.0))
-        parts.append(entry.cleanupApplied ? "cleaned" : "raw")
         parts.append(entry.pasteStatus)
         if let bundle = entry.targetBundleID { parts.append(bundle) }
         return parts.joined(separator: " • ")

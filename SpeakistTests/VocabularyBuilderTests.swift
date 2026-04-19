@@ -16,7 +16,7 @@ final class VocabularyBuilderTests: XCTestCase {
         store.ingest(pairs: [
             CorrectionPair(from: "brevort", to: "Brevoort", isProperNounLike: true)
         ])
-        let terms = VocabularyBuilder.keyterms(for: .deepgram, from: store)
+        let terms = VocabularyBuilder.keyterms(from: store)
         XCTAssertTrue(terms.contains("Brevoort"))
         XCTAssertFalse(terms.contains("the"), "Common-word corrections should not be promoted to STT keyterms")
     }

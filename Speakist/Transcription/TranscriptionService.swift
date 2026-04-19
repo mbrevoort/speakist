@@ -3,7 +3,6 @@ import AppKit
 
 struct TranscriptionRequest {
     let recording: RecordingResult
-    let skipCleanup: Bool
     let maxDurationHit: Bool
 }
 
@@ -55,19 +54,17 @@ final class TranscriptionService {
         }
 
         guard let client = buildClient() else {
-            let provider = preferences.activeProvider
-            notifier.missingApiKey(provider: provider.displayName)
+            notifier.missingApiKey(provider: "Deepgram")
             hud.hide()
             let archivedURL = audioArchive.archive(tempURL: request.recording.url, id: entryID)
             historyStore.save(TranscriptionEntry(
                 id: entryID,
                 createdAt: createdAt,
                 durationMs: durationMs,
-                provider: provider.rawValue,
+                provider: "deepgram",
                 model: "",
                 rawTranscript: "",
                 finalTranscript: "",
-                cleanupApplied: false,
                 audioPath: archivedURL?.path,
                 targetBundleID: focus.bundleID,
                 pasteStatus: "failed",
@@ -77,12 +74,10 @@ final class TranscriptionService {
             return
         }
 
-        let keyterms = VocabularyBuilder.keyterms(
-            for: preferences.activeProvider,
-            from: correctionStore)
+        let keyterms = VocabularyBuilder.keyterms(from: correctionStore)
         let language = preferences.language.isEmpty ? nil : preferences.language
 
-        // 1) Transcribe with 1 retry.
+        // Transcribe with 1 retry.
         var rawText = ""
         var audioSeconds = request.recording.durationSeconds
         do {
@@ -115,36 +110,8 @@ final class TranscriptionService {
             return
         }
 
-        // 2) Optional cleanup pass.
-        var finalText = rawText
-        var cleanupApplied = false
-        var cleanupIn = 0
-        var cleanupOut = 0
-        var cleanupError: String?
-
-        let shouldCleanup = preferences.cleanupEnabled && !request.skipCleanup
-        if shouldCleanup, let openAIKey = keychain.get(.openai), !openAIKey.isEmpty {
-            let cleanup = CleanupClient(apiKey: openAIKey, model: preferences.cleanupModel)
-            let dict = preferences.includeCorrectionsInCleanup
-                ? VocabularyBuilder.cleanupDictionary(from: correctionStore)
-                : [:]
-            do {
-                let result = try await cleanup.clean(
-                    rawTranscript: rawText,
-                    systemPrompt: preferences.cleanupSystemPrompt,
-                    corrections: dict)
-                finalText = result.text.isEmpty ? rawText : result.text
-                cleanupApplied = true
-                cleanupIn = result.inputTokens
-                cleanupOut = result.outputTokens
-            } catch {
-                cleanupError = error.localizedDescription
-                Logger.shared.warn("cleanup failed, using raw transcript: \(error.localizedDescription)")
-            }
-        }
-
-        // 3) Paste.
-        let outcome = await cursorInserter.insert(text: finalText, hasEditableFocus: focus.hasEditableFocus)
+        // Paste.
+        let outcome = await cursorInserter.insert(text: rawText, hasEditableFocus: focus.hasEditableFocus)
         let pasteStatus: String
         switch outcome {
         case .pasted: pasteStatus = "pasted"
@@ -156,7 +123,7 @@ final class TranscriptionService {
             notifier.pasteFailed()
         }
 
-        // 4) Persist.
+        // Persist.
         let archivedURL = audioArchive.archive(tempURL: request.recording.url, id: entryID)
         let entry = TranscriptionEntry(
             id: entryID,
@@ -165,22 +132,18 @@ final class TranscriptionService {
             provider: client.providerLabel,
             model: client.modelLabel,
             rawTranscript: rawText,
-            finalTranscript: finalText,
-            cleanupApplied: cleanupApplied,
+            finalTranscript: rawText,
             audioPath: archivedURL?.path,
             targetBundleID: focus.bundleID,
             pasteStatus: pasteStatus,
-            transcriptionStatus: cleanupError == nil ? "ok" : "cleanup_failed",
-            errorMessage: cleanupError,
+            transcriptionStatus: "ok",
+            errorMessage: nil,
             editedAt: nil)
         historyStore.save(entry)
         usage.record(provider: client.providerLabel,
                      model: client.modelLabel,
-                     audioSeconds: audioSeconds,
-                     cleanupInputTokens: cleanupApplied ? cleanupIn : nil,
-                     cleanupOutputTokens: cleanupApplied ? cleanupOut : nil)
+                     audioSeconds: audioSeconds)
 
-        // 5) Finish.
         playStopSound()
         hud.hide()
     }
@@ -190,13 +153,11 @@ final class TranscriptionService {
               let path = entry.audioPath else { return }
         let url = URL(fileURLWithPath: path)
         let recording = RecordingResult(url: url, durationSeconds: Double(entry.durationMs) / 1000.0)
-        // Copy to a temp URL since `process` may move / delete it.
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("Speakist-retry-\(UUID().uuidString).wav")
         try? FileManager.default.copyItem(at: url, to: tempURL)
         await process(TranscriptionRequest(
             recording: RecordingResult(url: tempURL, durationSeconds: recording.durationSeconds),
-            skipCleanup: false,
             maxDurationHit: false))
     }
 
@@ -224,7 +185,6 @@ final class TranscriptionService {
             model: client.modelLabel,
             rawTranscript: "",
             finalTranscript: "",
-            cleanupApplied: false,
             audioPath: archivedURL?.path,
             targetBundleID: bundleID,
             pasteStatus: "failed",
@@ -236,14 +196,16 @@ final class TranscriptionService {
     // MARK: - Helpers
 
     private func buildClient() -> TranscriptionClient? {
-        switch preferences.activeProvider {
-        case .deepgram:
-            guard let key = keychain.get(.deepgram), !key.isEmpty else { return nil }
-            return DeepgramClient(apiKey: key, model: preferences.deepgramModel)
-        case .openai:
-            guard let key = keychain.get(.openai), !key.isEmpty else { return nil }
-            return OpenAITranscribeClient(apiKey: key, model: preferences.openaiTranscribeModel)
-        }
+        guard let key = keychain.get(.deepgram), !key.isEmpty else { return nil }
+        return DeepgramClient(
+            apiKey: key,
+            model: preferences.deepgramModel,
+            dictation: preferences.dictationMode,
+            fillerWords: preferences.includeFillerWords,
+            measurements: preferences.convertMeasurements,
+            profanityFilter: preferences.maskProfanity,
+            detectLanguage: preferences.autoDetectLanguage,
+            replaceRules: VocabularyBuilder.replaceRules(from: correctionStore))
     }
 
     private func withRetry<T>(_ work: () async throws -> T) async throws -> T {

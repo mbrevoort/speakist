@@ -115,11 +115,25 @@ final class CorrectionStore: ObservableObject {
             .map(\.toText)
     }
 
-    /// All corrections as a `{from → to}` dictionary for the cleanup prompt.
-    func dictionary(limit: Int) -> [(String, String)] {
-        all.sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) })
-            .prefix(limit)
-            .map { ($0.fromText, $0.toText) }
+    /// All corrections formatted for Deepgram's `replace=find:replacement`
+    /// param. The find side is lowercased because Deepgram matches it case-
+    /// insensitively; the replacement preserves the user's intended casing.
+    /// De-duplicated on the lowercased find so we don't send conflicting
+    /// pairs that Deepgram would resolve unpredictably.
+    func replaceRules(limit: Int) -> [ReplaceRule] {
+        var seen = Set<String>()
+        var out: [ReplaceRule] = []
+        for row in all.sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) }) {
+            let find = row.fromText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let replacement = row.toText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !find.isEmpty, !replacement.isEmpty else { continue }
+            guard find != replacement.lowercased() else { continue }
+            guard !seen.contains(find) else { continue }
+            seen.insert(find)
+            out.append(ReplaceRule(find: find, replacement: replacement))
+            if out.count >= limit { break }
+        }
+        return out
     }
 
     // MARK: - Internal

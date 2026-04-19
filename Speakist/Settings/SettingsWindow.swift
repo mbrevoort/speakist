@@ -20,7 +20,7 @@ struct BrandHeader: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, shortcuts, audio, transcription, cleanup, vocabulary, history, usage, about
+    case general, shortcuts, audio, transcription, vocabulary, history, usage, about
 
     var id: String { rawValue }
 
@@ -30,7 +30,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: return "Shortcuts"
         case .audio: return "Audio"
         case .transcription: return "Transcription"
-        case .cleanup: return "Cleanup"
         case .vocabulary: return "Vocabulary"
         case .history: return "History"
         case .usage: return "Usage"
@@ -44,7 +43,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: return "keyboard"
         case .audio: return "mic"
         case .transcription: return "waveform"
-        case .cleanup: return "sparkles"
         case .vocabulary: return "character.book.closed"
         case .history: return "clock.arrow.circlepath"
         case .usage: return "chart.bar"
@@ -104,7 +102,6 @@ struct SettingsWindow: View {
         case .shortcuts: ShortcutsSettingsView()
         case .audio: AudioSettingsView()
         case .transcription: TranscriptionSettingsView()
-        case .cleanup: CleanupSettingsView()
         case .vocabulary: VocabularySettingsView()
         case .history: HistorySettingsView()
         case .usage: UsageSettingsView()
@@ -151,7 +148,7 @@ struct ShortcutsSettingsView: View {
                     Spacer()
                     KeyboardShortcuts.Recorder(for: .pushToTalk)
                 }
-                Text("Hold Shift as you release to skip the cleanup pass and paste the raw transcript.")
+                Text("Hold the shortcut, speak, and release to transcribe.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
@@ -244,21 +241,23 @@ struct TranscriptionSettingsView: View {
     @EnvironmentObject var env: AppEnvironment
 
     @State private var deepgramKey: String = ""
-    @State private var openaiKey: String = ""
     @State private var testOutput: String = ""
     @State private var testing = false
 
     var body: some View {
         Form {
-            Section("Provider") {
-                Picker("Active provider", selection: Binding(
-                    get: { prefs.activeProvider },
-                    set: { prefs.activeProvider = $0 })) {
-                    ForEach(TranscriptionProvider.allCases) { p in
-                        Text(p.displayName).tag(p)
+            Section("Deepgram") {
+                SecureField("API key", text: $deepgramKey, onCommit: {
+                    keychain.set(deepgramKey, for: .deepgram)
+                })
+                Button("Save key") { keychain.set(deepgramKey, for: .deepgram) }
+                Picker("Model", selection: Binding(
+                    get: { prefs.deepgramModel },
+                    set: { prefs.deepgramModel = $0 })) {
+                    ForEach(DeepgramModel.allCases) { m in
+                        Text(m.displayName).tag(m)
                     }
                 }
-                .pickerStyle(.segmented)
                 Picker("Language", selection: Binding(
                     get: { prefs.language },
                     set: { prefs.language = $0 })) {
@@ -267,32 +266,40 @@ struct TranscriptionSettingsView: View {
                 }
             }
 
-            Section("Deepgram") {
-                SecureField("API key", text: $deepgramKey, onCommit: {
-                    keychain.set(deepgramKey, for: .deepgram)
-                })
-                Button("Save") { keychain.set(deepgramKey, for: .deepgram) }
-                Picker("Model", selection: Binding(
-                    get: { prefs.deepgramModel },
-                    set: { prefs.deepgramModel = $0 })) {
-                    ForEach(DeepgramModel.allCases) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
-            }
+            Section {
+                Toggle("Voice commands → punctuation", isOn: Binding(
+                    get: { prefs.dictationMode },
+                    set: { prefs.dictationMode = $0 }))
+                Text("Say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and Deepgram converts them to the matching characters instead of typing them out.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
 
-            Section("OpenAI") {
-                SecureField("API key", text: $openaiKey, onCommit: {
-                    keychain.set(openaiKey, for: .openai)
-                })
-                Button("Save") { keychain.set(openaiKey, for: .openai) }
-                Picker("Transcription model", selection: Binding(
-                    get: { prefs.openaiTranscribeModel },
-                    set: { prefs.openaiTranscribeModel = $0 })) {
-                    ForEach(OpenAITranscribeModel.allCases) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
+                Toggle("Include filler words (\u{201C}um\u{201D}, \u{201C}uh\u{201D})", isOn: Binding(
+                    get: { prefs.includeFillerWords },
+                    set: { prefs.includeFillerWords = $0 }))
+                Text("Off by default so dictation reads cleanly. Turn on for verbatim capture.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                Toggle("Convert measurements (\u{201C}milligram\u{201D} \u{2192} \u{201C}mg\u{201D})", isOn: Binding(
+                    get: { prefs.convertMeasurements },
+                    set: { prefs.convertMeasurements = $0 }))
+
+                Toggle("Mask profanity", isOn: Binding(
+                    get: { prefs.maskProfanity },
+                    set: { prefs.maskProfanity = $0 }))
+                Text("Replaces profanity with asterisks.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                Toggle("Auto-detect language", isOn: Binding(
+                    get: { prefs.autoDetectLanguage },
+                    set: { prefs.autoDetectLanguage = $0 }))
+                Text("Overrides the language setting above. Useful if you dictate in multiple languages; slight accuracy cost on single-language clips.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Formatting")
             }
 
             Section("Diagnostics") {
@@ -311,7 +318,6 @@ struct TranscriptionSettingsView: View {
         .padding()
         .onAppear {
             deepgramKey = keychain.get(.deepgram) ?? ""
-            openaiKey = keychain.get(.openai) ?? ""
         }
     }
 
@@ -332,10 +338,18 @@ struct TranscriptionSettingsView: View {
             return
         }
         testOutput = "Transcribing…"
-        guard let client = buildClient() else {
-            testOutput = "No API key configured."
+        guard let key = keychain.get(.deepgram), !key.isEmpty else {
+            testOutput = "No Deepgram key configured."
             return
         }
+        let client = DeepgramClient(
+            apiKey: key,
+            model: prefs.deepgramModel,
+            dictation: prefs.dictationMode,
+            fillerWords: prefs.includeFillerWords,
+            measurements: prefs.convertMeasurements,
+            profanityFilter: prefs.maskProfanity,
+            detectLanguage: prefs.autoDetectLanguage)
         do {
             let result = try await client.transcribe(
                 audioURL: rec.url,
@@ -346,58 +360,6 @@ struct TranscriptionSettingsView: View {
             testOutput = "Error: \(error.localizedDescription)"
         }
         try? FileManager.default.removeItem(at: rec.url)
-    }
-
-    private func buildClient() -> TranscriptionClient? {
-        switch prefs.activeProvider {
-        case .deepgram:
-            guard let k = keychain.get(.deepgram), !k.isEmpty else { return nil }
-            return DeepgramClient(apiKey: k, model: prefs.deepgramModel)
-        case .openai:
-            guard let k = keychain.get(.openai), !k.isEmpty else { return nil }
-            return OpenAITranscribeClient(apiKey: k, model: prefs.openaiTranscribeModel)
-        }
-    }
-}
-
-// MARK: - Cleanup
-
-struct CleanupSettingsView: View {
-    @EnvironmentObject var prefs: Preferences
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Enable cleanup pass (requires OpenAI key)", isOn: Binding(
-                    get: { prefs.cleanupEnabled },
-                    set: { prefs.cleanupEnabled = $0 }))
-                Picker("Cleanup model", selection: Binding(
-                    get: { prefs.cleanupModel },
-                    set: { prefs.cleanupModel = $0 })) {
-                    ForEach(CleanupModel.allCases) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
-                .disabled(!prefs.cleanupEnabled)
-                Toggle("Include learned corrections in the prompt", isOn: Binding(
-                    get: { prefs.includeCorrectionsInCleanup },
-                    set: { prefs.includeCorrectionsInCleanup = $0 }))
-                .disabled(!prefs.cleanupEnabled)
-            }
-
-            Section("System prompt") {
-                TextEditor(text: Binding(
-                    get: { prefs.cleanupSystemPrompt },
-                    set: { prefs.cleanupSystemPrompt = $0 }))
-                .font(.system(.callout, design: .monospaced))
-                .frame(minHeight: 220)
-                Button("Restore default") {
-                    prefs.cleanupSystemPrompt = Preferences.defaultCleanupPrompt
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
     }
 }
 
@@ -415,7 +377,7 @@ struct VocabularySettingsView: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            Text("Speakist promotes proper-noun edits to your STT custom-vocabulary and injects every correction into the cleanup prompt.")
+            Text("Corrections are applied two ways per transcription: proper-noun entries bias Deepgram's acoustic model (so the mistake is less likely to happen again), and every entry is applied as a post-transcription find/replace so any remaining miss still gets fixed in the final text.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
@@ -555,14 +517,11 @@ struct UsageSettingsView: View {
                 .labelsHidden()
             }
 
-            row(provider: "deepgram", label: "Deepgram Nova-3", model: DeepgramModel.nova3.rawValue)
-            row(provider: "deepgram", label: "Deepgram Nova-2", model: DeepgramModel.nova2.rawValue)
-            row(provider: "openai", label: "OpenAI mini-transcribe", model: OpenAITranscribeModel.gpt4oMiniTranscribe.rawValue)
-            row(provider: "openai", label: "OpenAI gpt-4o transcribe", model: OpenAITranscribeModel.gpt4oTranscribe.rawValue)
-            row(provider: "openai", label: "OpenAI whisper-1", model: OpenAITranscribeModel.whisper1.rawValue)
+            row(label: "Deepgram Nova-3", model: DeepgramModel.nova3.rawValue)
+            row(label: "Deepgram Nova-2", model: DeepgramModel.nova2.rawValue)
 
             Divider()
-            Text("Rates (editable) are per-minute for transcription and per 1M tokens for the cleanup model. Published rates change — adjust these to match your account.")
+            Text("Rates (USD/min) are editable. Published Deepgram rates change — adjust these to match your account.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
@@ -574,21 +533,6 @@ struct UsageSettingsView: View {
                     rateField(title: "Deepgram Nova-2 / min", value: Binding(
                         get: { prefs.rateDeepgramNova2 },
                         set: { prefs.rateDeepgramNova2 = $0 }))
-                    rateField(title: "OpenAI mini-transcribe / min", value: Binding(
-                        get: { prefs.rateOpenAIMiniTranscribe },
-                        set: { prefs.rateOpenAIMiniTranscribe = $0 }))
-                    rateField(title: "OpenAI gpt-4o transcribe / min", value: Binding(
-                        get: { prefs.rateOpenAITranscribe },
-                        set: { prefs.rateOpenAITranscribe = $0 }))
-                    rateField(title: "OpenAI whisper-1 / min", value: Binding(
-                        get: { prefs.rateOpenAIWhisper },
-                        set: { prefs.rateOpenAIWhisper = $0 }))
-                    rateField(title: "Cleanup input / 1M tokens", value: Binding(
-                        get: { prefs.rateCleanupInputPer1M },
-                        set: { prefs.rateCleanupInputPer1M = $0 }))
-                    rateField(title: "Cleanup output / 1M tokens", value: Binding(
-                        get: { prefs.rateCleanupOutputPer1M },
-                        set: { prefs.rateCleanupOutputPer1M = $0 }))
                 }
             }
             .formStyle(.grouped)
@@ -597,9 +541,9 @@ struct UsageSettingsView: View {
     }
 
     @ViewBuilder
-    private func row(provider: String, label: String, model: String) -> some View {
-        let rollup = usage.rollup(provider: provider, window: window)
-        let cost = usage.cost(for: rollup, provider: provider, model: model, preferences: prefs)
+    private func row(label: String, model: String) -> some View {
+        let rollup = usage.rollup(provider: "deepgram", window: window)
+        let cost = usage.cost(for: rollup, model: model, preferences: prefs)
         let minutes = rollup.totalAudioSeconds / 60.0
         HStack {
             Text(label).frame(width: 220, alignment: .leading)
@@ -641,7 +585,7 @@ struct AboutSettingsView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Image("AppIcon")
+            Image(nsImage: MenuBarIcon.make(fill: NSColor.speakistPeach))
                 .resizable().aspectRatio(contentMode: .fit)
                 .frame(width: 96, height: 96)
             Text("Speakist").font(.title.weight(.semibold))
@@ -652,7 +596,7 @@ struct AboutSettingsView: View {
                 env.updater.checkForUpdates()
             }
             Divider()
-            Text("Speakist keeps your data local. Audio and history live in Application Support. API keys live in the Keychain. Nothing is sent anywhere except the STT and optional cleanup endpoints you configured.")
+            Text("Speakist keeps your data local. Audio and history live in Application Support. Your Deepgram key lives in the Keychain. Audio is only sent to Deepgram for transcription.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

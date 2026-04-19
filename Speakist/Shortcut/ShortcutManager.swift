@@ -51,8 +51,7 @@ final class ShortcutManager {
 
     private func pushUp() {
         guard env.audioRecorder.isRecording else { return }
-        let shift = NSEvent.modifierFlags.contains(.shift)
-        finishRecording(skipCleanup: shift)
+        finishRecording()
     }
 
     // MARK: - Toggle mode
@@ -61,7 +60,7 @@ final class ShortcutManager {
         guard !env.preferences.shortcutPaused else { return }
         if env.audioRecorder.isRecording {
             isToggleRecording = false
-            finishRecording(skipCleanup: false)
+            finishRecording()
         } else {
             guard env.permissions.mic == .granted else { env.notifier.micDenied(); return }
             guard env.permissions.accessibility == .granted else { env.notifier.accessibilityDenied(); return }
@@ -87,7 +86,7 @@ final class ShortcutManager {
         scheduleMaxDurationCutoff()
     }
 
-    private func finishRecording(skipCleanup: Bool) {
+    private func finishRecording() {
         cancelMaxDurationTimer()
         guard let result = env.audioRecorder.stop() else {
             env.hudController.hide()
@@ -108,7 +107,6 @@ final class ShortcutManager {
         Task { @MainActor in
             await env.transcriptionService.process(TranscriptionRequest(
                 recording: result,
-                skipCleanup: skipCleanup,
                 maxDurationHit: hitMax))
         }
     }
@@ -122,7 +120,7 @@ final class ShortcutManager {
             Task { @MainActor in
                 guard let self, self.env.audioRecorder.isRecording else { return }
                 self.didHitMaxDuration = true
-                self.finishRecording(skipCleanup: false)
+                self.finishRecording()
             }
         }
     }

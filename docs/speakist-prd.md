@@ -6,7 +6,7 @@
 
 ## 1. Context
 
-Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, Wispr Flow), bound to specific apps, or locked to Apple's built-in dictation (which is slow to activate and middling in quality). Speakist is a focused, single-purpose utility: **hold a key, talk, release, get clean text at your cursor**. It leverages high-quality cloud STT (Deepgram or OpenAI) plus an optional LLM cleanup pass, and quietly learns from the user's corrections so recurring errors (names, jargon) stop happening.
+Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, Wispr Flow), bound to specific apps, or locked to Apple's built-in dictation (which is slow to activate and middling in quality). Speakist is a focused, single-purpose utility: **hold a key, talk, release, get clean text at your cursor**. It leverages Deepgram's Nova transcription models and quietly learns from the user's corrections so recurring errors (names, jargon) stop happening.
 
 **Intended outcome**: a background Mac utility that "just works" in any text field in any app, and gets better the more it's used without any explicit training step.
 
@@ -17,15 +17,16 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 ### Goals (v1)
 - Push-to-talk transcription that inserts text at the current cursor in any macOS app.
 - Menu-bar-only app (no Dock icon, not in Cmd+Tab).
-- Support Deepgram (Nova-3) and OpenAI (Whisper / `gpt-4o-mini-transcribe`) as interchangeable STT providers.
-- Optional GPT-4o-mini cleanup pass with a user-editable system prompt.
+- Deepgram STT (Nova-3 default; Nova-2 optional).
 - Searchable, editable transcription history kept in SQLite.
-- Correction-learning loop: edits in history feed back into future transcriptions via STT custom-vocab and the cleanup prompt dictionary.
+- Correction-learning loop: edits in history feed back into future transcriptions via Deepgram custom-vocab keyterms.
 - First-class brand: warm, playful peach/coral identity with a speech-bubble-meets-waveform mark.
 
 ### Non-Goals (v1)
 - On-device / offline transcription.
 - Streaming / token-by-token paste (batch only).
+- LLM cleanup / post-processing pass.
+- Multiple STT providers (Deepgram only).
 - Mac App Store distribution (sandbox blocks required APIs).
 - Windows / Linux / iOS support.
 - Per-app correction scoping (corrections are global).
@@ -42,14 +43,14 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 2. Hold `⌃⌘X` (default).
 3. Speak. HUD near the cursor shows a live waveform; menu bar icon pulses.
 4. Release the keys. HUD shows a spinner, menu bar icon shows "transcribing" state.
-5. Cleaned transcript is pasted at the cursor. Subtle "pop" sound plays.
+5. Transcript is pasted at the cursor. Subtle "pop" sound plays.
 
 **Correction flow:**
 1. User notices the transcript spelled a name wrong.
 2. Opens menu bar → "History…" → finds the entry → clicks **Edit**.
 3. Corrects the spelling, clicks **Save**.
-4. Speakist diffs original vs. edited, extracts `{from: "Brevort", to: "Brevoort"}`, stores it, and promotes the replacement to the keyterm list + cleanup dictionary.
-5. Next time the user dictates that name, it comes out right.
+4. Speakist diffs original vs. edited, extracts `{from: "Brevort", to: "Brevoort"}`, stores it, and promotes the replacement to Deepgram's keyterm list.
+5. Next time the user dictates that name, Deepgram gets it right.
 
 **Fallback flow (no focused field / paste blocked):**
 - Transcript is left on the clipboard; a native notification appears: *"Copied — couldn't paste. Tap to view history."*
@@ -83,7 +84,6 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 - Two shortcut slots, both user-configurable in Settings:
   - `pushToTalk` — default `⌃⌘X`. Hold to record; release to transcribe.
   - `toggleRecord` — no default. Tap to start, tap to stop.
-- **Modifier at release time**: if Shift is held when `pushToTalk` is released, the cleanup pass is skipped (raw transcript is pasted).
 - Must work even when Speakist is not the frontmost app (it never is — `LSUIElement`).
 - Detect shortcut conflicts and warn in Settings ("This combo is used by another app — it may not fire reliably").
 
@@ -98,9 +98,9 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 
 ### 4.4 Transcription pipeline
 - **Batch only**: full audio clip uploaded on release.
-- Provider is a single active choice in Settings. Both keys may be stored, but only the selected provider is used.
+- Deepgram only.
 - Timeouts: 30 s request timeout; on failure, retry once with 500 ms backoff; on second failure, show error notification and preserve audio for manual re-send from History.
-- All requests include a `keyterm` / `keywords` / `prompt` field populated with the current proper-noun-corrections list (capped at provider's limit — Deepgram Nova-3 allows up to 100 keyterms per request).
+- Requests include a `keyterm[]` (Nova-3) or `keywords[]` (Nova-2) list populated with the current proper-noun-corrections, capped at 50 terms.
 
 #### 4.4.1 Deepgram adapter
 - Endpoint: `POST https://api.deepgram.com/v1/listen`
@@ -110,28 +110,7 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 - Auth header: `Authorization: Token {apiKey}`.
 - Audio: upload as `audio/wav`.
 
-#### 4.4.2 OpenAI adapter
-- Endpoint: `POST https://api.openai.com/v1/audio/transcriptions`
-- Model: `gpt-4o-mini-transcribe` default (cheap + fast); also expose `whisper-1` and `gpt-4o-transcribe`.
-- Params: `response_format=json`, `prompt=<seeded vocab>` (comma-separated proper-noun corrections, ≤ 224 tokens).
-- Auth header: `Authorization: Bearer {apiKey}`.
-
-### 4.5 Cleanup pass (optional)
-- Runs only when an OpenAI key is configured and **Enable cleanup** is on (default ON).
-- Model: `gpt-4o-mini` (chat completions).
-- Skipped when Shift is held at shortcut release.
-- Skipped silently (with a log entry) if the OpenAI key is missing or the call fails — raw transcript is used.
-- User prompt = raw transcript. System prompt = user-editable default (see §7.1).
-- Known corrections are appended to the system prompt as a dictionary block:
-  ```
-  Known name and term corrections (apply literally where unambiguous):
-  - "Brevort" → "Brevoort"
-  - "Miatra" → "Mytra"
-  ```
-- Temperature: 0.2 (low — we want minimal rewriting).
-- Max output tokens: `max(256, 2 * input_tokens)`.
-
-### 4.6 Paste-at-cursor
+### 4.5 Paste-at-cursor
 1. Capture current `NSPasteboard.general` contents (all types, not just string) into a snapshot.
 2. Write transcript as plain string (`.string` type only).
 3. Post a synthetic `Cmd+V` via `CGEvent` keyboard events to the current `kCGHIDEventTap`.
@@ -150,7 +129,7 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 
 #### UI
 - History window (SwiftUI, independent `WindowGroup`, not a sheet).
-- Left pane: list of entries (time, first 60 chars, status icons for *edited* / *not pasted* / *cleanup failed*).
+- Left pane: list of entries (time, first 60 chars, status icons for *edited* / *not pasted*).
 - Right pane: selected entry detail:
   - **Raw transcript** (monospaced, read-only).
   - **Final transcript** (multiline editor — edits live-save on blur).
@@ -166,15 +145,12 @@ Dictation on macOS is either heavyweight (full-featured suites like MacWhisper, 
 **Detection:**
 - On history-entry save, diff `raw_transcript` vs `final_transcript` using word-level [Myers diff](https://github.com/johnfairh/swift-diff) (or a lightweight hand-rolled LCS over tokens).
 - Extract replacement pairs where a run of 1–4 tokens maps to a different 1–4-token run.
-- Filter out grammar-only changes (punctuation, casing of common words) — we keep those as *cleanup prompt context* but don't promote them to the STT vocab.
+- Filter out grammar-only changes (punctuation, casing of common words) — they don't get promoted to the STT vocab.
 - For each pair, upsert into `corrections` table: increment `count`, update `last_seen`.
 
 **Promotion to STT vocab:**
 - Heuristic: a correction is "proper-noun-like" if the `to` side is capitalized OR contains a digit OR is not in `/usr/share/dict/words`.
-- On each transcription, take the top-N (default 50 for Deepgram, top 10 at ≤ 224 tokens for OpenAI) proper-noun-like corrections sorted by `count desc, last_seen desc`.
-
-**Application to cleanup prompt:**
-- ALL corrections (not just proper nouns) are included as the dictionary block up to the model's context budget, again sorted by `count desc, last_seen desc`.
+- On each transcription, take the top 50 proper-noun-like corrections sorted by `count desc, last_seen desc` and feed them to Deepgram's `keyterm[]` (Nova-3) or `keywords[]` (Nova-2).
 
 **Settings UI:**
 - **Settings → Vocabulary** tab: a table of all corrections (`from`, `to`, `count`, `last_seen`, auto-promoted checkbox).
@@ -201,31 +177,23 @@ Sections (tabs):
    - **Keep audio** toggle + "Keep last N" stepper
 
 4. **Transcription**
-   - Active provider (radio: Deepgram / OpenAI)
-   - Deepgram: API key (secure field, stored in Keychain), model dropdown
-   - OpenAI: API key (secure field, stored in Keychain), model dropdown
+   - Deepgram: API key (secure field, stored in Keychain), model dropdown (Nova-3 / Nova-2)
    - Language (default: English)
    - "Test recording" button (records 2 s, shows resulting transcript)
 
-5. **Cleanup**
-   - Enable cleanup toggle (default ON when OpenAI key present)
-   - Cleanup model dropdown (`gpt-4o-mini` default)
-   - System prompt multiline editor + **Restore default** button (see §7.1)
-   - "Include known corrections in prompt" toggle (default ON)
+5. **Vocabulary** — table of learned corrections (see §4.7)
 
-6. **Vocabulary** — table of learned corrections (see §4.8)
-
-7. **History**
+6. **History**
    - Retention days (default 90)
    - Max entries (default 1000)
    - **Clear all history** button (double-confirm)
    - **Reveal database in Finder**
 
-8. **Usage** — per-provider minutes + estimated cost (see §4.11)
+7. **Usage** — Deepgram minutes + estimated cost (see §4.10)
 
-9. **About** — version, check for updates (Sparkle), licenses, link to GitHub.
+8. **About** — version, check for updates (Sparkle), licenses, link to GitHub.
 
-All API keys stored in the **macOS Keychain** via Keychain Services (service = `com.brevoort-studio.speakist.apikeys`, account = `deepgram` | `openai`). Never written to disk in plaintext.
+The Deepgram API key is stored in the **macOS Keychain** via Keychain Services (service = `com.brevoort-studio.speakist.apikeys`, account = `deepgram`). Never written to disk in plaintext.
 
 ### 4.10 Onboarding
 
@@ -235,19 +203,16 @@ Four-pane onboarding on first launch (and re-openable from menu):
 2. **Permissions**:
    - Microphone — triggers `AVCaptureDevice.requestAccess(for: .audio)`.
    - Accessibility — polls `AXIsProcessTrusted()`; opens System Settings deep-link (`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`). UI updates live when granted.
-3. **Provider setup** — paste Deepgram or OpenAI key, pick active provider. "Test recording" button does a 2-sec round-trip so the user sees real output before leaving onboarding.
+3. **Deepgram setup** — paste Deepgram key. "Test recording" button does a 2-sec round-trip so the user sees real output before leaving onboarding.
 4. **Launch at login** — one-question prompt, default unchecked. Then "You're ready! Try ⌃⌘X anywhere."
 
-### 4.11 Usage tracking
-- On each transcription, record to `usage` table: provider, model, audio seconds, cleanup input tokens, cleanup output tokens.
+### 4.10 Usage tracking
+- On each transcription, record to `usage` table: provider, model, audio seconds.
 - Hard-coded rate table (user-editable in Settings → Usage → "Edit rates"):
   - Deepgram Nova-3: $0.0043/min, Nova-2: $0.0043/min (placeholder — editable)
-  - OpenAI `gpt-4o-mini-transcribe`: $0.003/min
-  - OpenAI `whisper-1`: $0.006/min
-  - `gpt-4o-mini` cleanup: $0.15 / $0.60 per 1M input/output tokens
 - Usage tab shows last 7 / 30 / all-time rollups.
 
-### 4.12 Error handling
+### 4.11 Error handling
 | Condition | Behavior |
 |---|---|
 | Missing API key | Notification + opens Settings |
@@ -255,8 +220,7 @@ Four-pane onboarding on first launch (and re-openable from menu):
 | Accessibility permission denied | Notification + opens System Settings deep-link |
 | STT HTTP error (5xx / timeout) | Retry once, then notification; audio preserved; history row marked `transcription_failed` |
 | STT HTTP error (4xx auth) | Notification "API key rejected — check Settings" |
-| Cleanup failure | Silent — fall back to raw transcript; log warning |
-| Paste fails (no text field) | See §4.6 fallback |
+| Paste fails (no text field) | See §4.5 fallback |
 | Mic in use / unavailable | Notification; ignore shortcut |
 | Shortcut pressed during active transcription | Ignore (debounce) |
 
@@ -293,8 +257,7 @@ Speakist.xcodeproj
 ├── Transcription/
 │   ├── TranscriptionService.swift      // orchestrator
 │   ├── DeepgramClient.swift
-│   ├── OpenAITranscribeClient.swift
-│   └── CleanupClient.swift             // gpt-4o-mini
+│   └── TranscriptionService.swift     // orchestrator
 ├── Paste/
 │   ├── CursorInserter.swift            // clipboard + Cmd+V dance
 │   └── FocusedFieldProbe.swift         // AX tree check
@@ -325,11 +288,8 @@ Speakist.xcodeproj
 ├── Logging/
 │   └── Logger.swift                    // os.Logger + file sink
 └── Resources/
-    ├── Assets.xcassets                 // icon, colors, sfx
-    ├── Sounds/
-    │   ├── start.caf
-    │   └── stop.caf
-    └── DefaultPrompt.txt
+    ├── Assets.xcassets                 // icon, colors
+    └── Brand.swift                     // color palette
 ```
 
 ### 5.3 Data model (SQLite / GRDB)
@@ -338,15 +298,15 @@ CREATE TABLE transcriptions (
     id TEXT PRIMARY KEY,                    -- UUID
     created_at INTEGER NOT NULL,            -- epoch ms
     duration_ms INTEGER NOT NULL,
-    provider TEXT NOT NULL,                 -- 'deepgram' | 'openai'
+    provider TEXT NOT NULL,                 -- 'deepgram'
     model TEXT NOT NULL,
     raw_transcript TEXT NOT NULL,
     final_transcript TEXT NOT NULL,         -- == raw until user edits
-    cleanup_applied INTEGER NOT NULL,       -- 0 | 1
+    cleanup_applied INTEGER NOT NULL,       -- always 0 (legacy column)
     audio_path TEXT,                        -- nullable if audio purged
     target_bundle_id TEXT,                  -- app user was focused in
     paste_status TEXT NOT NULL,             -- 'pasted' | 'clipboard_only' | 'failed'
-    transcription_status TEXT NOT NULL,     -- 'ok' | 'failed' | 'cleanup_failed'
+    transcription_status TEXT NOT NULL,     -- 'ok' | 'failed'
     error_message TEXT,
     edited_at INTEGER                        -- nullable
 );
@@ -375,8 +335,8 @@ CREATE TABLE usage (
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     audio_seconds REAL,
-    cleanup_input_tokens INTEGER,
-    cleanup_output_tokens INTEGER
+    cleanup_input_tokens INTEGER,           -- legacy; unused
+    cleanup_output_tokens INTEGER           -- legacy; unused
 );
 CREATE INDEX idx_usage_created ON usage(created_at DESC);
 ```
@@ -396,7 +356,7 @@ Deliberately avoided: Alamofire (URLSession suffices), any telemetry SDK.
 - API keys → Keychain only.
 - Audio files → Application Support, not sync-eligible (set `com.apple.MobileMeta.ExcludeFromBackup` xattr optional).
 - History DB unencrypted (macOS FileVault handles disk-level). Document this in About.
-- No network calls besides: STT provider, OpenAI (cleanup), Sparkle update feed.
+- No network calls besides: Deepgram (transcription), Sparkle update feed.
 - **Privacy manifest** (`PrivacyInfo.xcprivacy`) declaring: microphone use, user data types (audio, voice/sound recordings), domains contacted.
 
 ---
@@ -437,30 +397,13 @@ Deliberately avoided: Alamofire (URLSession suffices), any telemetry SDK.
 - Toolbar: search field, filter menu, "Export…" (CSV of transcripts).
 
 ### 6.6 Sounds
-- `start.caf` — soft ascending two-note "blip" (~80 ms).
-- `stop.caf` — soft descending single note (~60 ms).
-- Played via `NSSound` (respects system volume). Togglable.
+- Start/stop: system `Tink` / `Pop` played via `NSSound` (respects system volume). Togglable.
 
 ---
 
 ## 7. Default copy
 
-### 7.1 Default cleanup system prompt
-```
-You are an editor cleaning up a single dictated utterance for pasting into a document. Your goals, in order:
-
-1. Preserve the speaker's meaning, voice, and word choice. Do not rewrite for "style."
-2. Remove disfluencies: "um", "uh", "like" (as filler), "you know", stutters, and false starts where the speaker clearly restarted.
-3. Fix punctuation, capitalization, and obvious transcription errors (homophones, split/joined words).
-4. Keep contractions and casual phrasing if the speaker used them.
-5. Do NOT add content, greetings, sign-offs, or commentary. Do NOT ask questions.
-6. Return only the cleaned text. No quotes, no prefixes, no explanations.
-
-If the input is very short (a single phrase), return it with only minimal fixes.
-```
-(The prompt is appended at runtime with a "Known corrections" block when the vocabulary has entries — see §4.5.)
-
-### 7.2 Notification copy
+### 7.1 Notification copy
 | Event | Title | Body |
 |---|---|---|
 | Paste failed | "Copied to clipboard" | "Couldn't paste where your cursor is — paste manually with ⌘V." |
@@ -489,8 +432,7 @@ If the input is very short (a single phrase), return it with only minimal fixes.
   - `DiffEngine` → known transcript pairs produce expected correction tuples.
   - `VocabularyBuilder` → correct ranking, limits respected.
   - `CursorInserter` (with mocked pasteboard + CGEvent post) → clipboard restored on success, left intact on fallback.
-  - `DeepgramClient` / `OpenAIClient` → request building, error-path retries (using `URLProtocol` stub).
-  - `CleanupClient` → prompt assembly including corrections block.
+  - `DeepgramClient` → request building, error-path retries (using `URLProtocol` stub).
   - Correction promotion heuristic (proper-noun-ish) over a fixture of 50 edits.
   - History retention purge logic (time + count).
 - **UI tests** (XCUITest, `SpeakistUITests` target):
@@ -502,10 +444,8 @@ If the input is very short (a single phrase), return it with only minimal fixes.
 Run in this order on a clean macOS 14 VM:
 - [ ] Fresh launch → onboarding appears. Grant mic + accessibility.
 - [ ] Paste Deepgram key → Test recording → transcript appears.
-- [ ] Paste OpenAI key, switch active provider → Test recording → transcript appears.
-- [ ] Default shortcut `⌃⌘X`: in TextEdit, hold + speak + release → cleaned text pasted.
+- [ ] Default shortcut `⌃⌘X`: in TextEdit, hold + speak + release → transcribed text pasted.
 - [ ] Same shortcut in Chrome (gmail compose), VS Code, Slack, Terminal — paste works in each.
-- [ ] Hold Shift at release → cleanup skipped, raw transcript pasted.
 - [ ] Dictate into a web field with no focus → notification appears, transcript on clipboard.
 - [ ] Record a 300 ms blip → silently discarded, no history row.
 - [ ] Record past 5 min → auto-stops with notification; transcript saved.
@@ -520,7 +460,7 @@ Run in this order on a clean macOS 14 VM:
 - [ ] `spctl --assess --type execute Speakist.app` returns "accepted".
 
 ### 9.3 Performance targets
-- Time from shortcut release to paste (cleanup ON, 5-s clip, Deepgram Nova-3, GPT-4o-mini): **< 2.5 s p50**.
+- Time from shortcut release to paste (5-s clip, Deepgram Nova-3): **< 2.0 s p50**.
 - Idle RAM: **< 80 MB**.
 - Idle CPU: **< 0.5%** averaged over 1 min.
 - Binary size: **< 25 MB** (unsigned).
@@ -533,9 +473,9 @@ Run in this order on a clean macOS 14 VM:
 |---|---|---|
 | **M0 — Scaffold** | Xcode project, menu bar skeleton, app delegate, `LSUIElement`, brand assets | App launches, menu bar icon visible, no Dock icon |
 | **M1 — Record → paste (Deepgram)** | Shortcut, recorder, Deepgram client, clipboard paste, HUD | End-to-end dictation works in TextEdit with hard-coded key |
-| **M2 — Providers + Settings** | OpenAI adapter, full Settings UI, Keychain, shortcut recorder, onboarding | Can swap providers from Settings; keys persist; test-recording works |
+| **M2 — Settings + onboarding** | Full Settings UI, Keychain, shortcut recorder, onboarding | Key persists; test-recording works |
 | **M3 — History** | SQLite schema, history window, audio archive | Every transcription shows up; edits save |
-| **M4 — Cleanup + learning** | GPT-4o-mini cleanup client, diff engine, correction store, vocab promotion, Vocabulary tab | Edits in history demonstrably improve next transcription |
+| **M4 — Correction learning** | Diff engine, correction store, vocab promotion, Vocabulary tab | Edits in history demonstrably improve next Deepgram result |
 | **M5 — Polish** | Error paths, notifications, usage tab, sounds, HUD waveform, toggle shortcut, retention purge | Full manual checklist green on clean VM |
 | **M6 — Release 1.0** | Notarization, Sparkle feed, DMG, landing page, docs | Signed, notarized, auto-updatable build downloadable |
 
@@ -543,10 +483,11 @@ Run in this order on a clean macOS 14 VM:
 
 ## 11. Open items / future work (explicitly out of scope for v1)
 - Voice commands ("new paragraph", "comma", "scratch that").
-- Per-app profiles (different shortcut, different cleanup prompt, different language).
-- On-device Whisper fallback for offline dictation.
+- Per-app profiles (different shortcut, different language).
+- On-device transcription fallback for offline dictation.
 - iCloud sync of vocabulary and history.
-- "Dictate in X language but output in English" (LLM-translated flow).
 - Streaming partial paste while speaking.
+- Optional LLM cleanup pass (removed in favor of simplicity; Deepgram smart_format already handles punctuation/capitalization well).
+- Team accounts with managed Deepgram access and usage-based billing.
 - iOS companion.
 - Sharing / team vocabularies.

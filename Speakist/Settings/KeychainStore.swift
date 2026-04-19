@@ -4,7 +4,6 @@ import Combine
 
 enum KeychainAccount: String, CaseIterable {
     case deepgram
-    case openai
 }
 
 /// Keychain wrapper for storing API keys.

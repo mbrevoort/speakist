@@ -1,8 +1,39 @@
 import Foundation
 
+/// One find/replace pair for Deepgram's `replace=find:replacement` parameter.
+/// `find` is case-insensitive on Deepgram's side; `replacement` preserves case.
+struct ReplaceRule: Equatable, Hashable {
+    let find: String
+    let replacement: String
+}
+
 struct DeepgramClient: TranscriptionClient {
     let apiKey: String
     let model: DeepgramModel
+    let dictation: Bool
+    let fillerWords: Bool
+    let measurements: Bool
+    let profanityFilter: Bool
+    let detectLanguage: Bool
+    let replaceRules: [ReplaceRule]
+
+    init(apiKey: String,
+         model: DeepgramModel,
+         dictation: Bool = false,
+         fillerWords: Bool = false,
+         measurements: Bool = false,
+         profanityFilter: Bool = false,
+         detectLanguage: Bool = false,
+         replaceRules: [ReplaceRule] = []) {
+        self.apiKey = apiKey
+        self.model = model
+        self.dictation = dictation
+        self.fillerWords = fillerWords
+        self.measurements = measurements
+        self.profanityFilter = profanityFilter
+        self.detectLanguage = detectLanguage
+        self.replaceRules = replaceRules
+    }
 
     var providerLabel: String { "deepgram" }
     var modelLabel: String { model.rawValue }
@@ -14,12 +45,34 @@ struct DeepgramClient: TranscriptionClient {
             URLQueryItem(name: "smart_format", value: "true"),
             URLQueryItem(name: "punctuate", value: "true")
         ]
-        if let lang = language, !lang.isEmpty {
+        if dictation {
+            queryItems.append(URLQueryItem(name: "dictation", value: "true"))
+        }
+        if fillerWords {
+            queryItems.append(URLQueryItem(name: "filler_words", value: "true"))
+        }
+        if measurements {
+            queryItems.append(URLQueryItem(name: "measurements", value: "true"))
+        }
+        if profanityFilter {
+            queryItems.append(URLQueryItem(name: "profanity_filter", value: "true"))
+        }
+        // `language` and `detect_language` are mutually exclusive — Deepgram
+        // errors if both are set.
+        if detectLanguage {
+            queryItems.append(URLQueryItem(name: "detect_language", value: "true"))
+        } else if let lang = language, !lang.isEmpty {
             queryItems.append(URLQueryItem(name: "language", value: lang))
         }
         for term in keyterms where !term.isEmpty {
             let name = (model == .nova3) ? "keyterm" : "keywords"
             queryItems.append(URLQueryItem(name: name, value: term))
+        }
+        // `replace=find:replacement` — up to ~200 pairs; Deepgram skips any that
+        // can't be parsed. We defensively drop pairs containing a colon in the
+        // find or replacement since that would break the `:`-separator.
+        for rule in replaceRules.prefix(200) where rule.isValid {
+            queryItems.append(URLQueryItem(name: "replace", value: "\(rule.find):\(rule.replacement)"))
         }
         components.queryItems = queryItems
 
@@ -81,5 +134,18 @@ struct DeepgramClient: TranscriptionClient {
         struct Alternative: Decodable {
             let transcript: String
         }
+    }
+}
+
+private extension ReplaceRule {
+    /// Screens out pairs Deepgram can't parse (empty sides, colon in either
+    /// half which would be mis-split). Deepgram's `replace` find is case-
+    /// insensitive so we lowercase it up front.
+    var isValid: Bool {
+        let f = find.trimmingCharacters(in: .whitespacesAndNewlines)
+        let r = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !f.isEmpty, !r.isEmpty else { return false }
+        if f.contains(":") || r.contains(":") { return false }
+        return true
     }
 }

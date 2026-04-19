@@ -3,36 +3,9 @@ import Combine
 import ServiceManagement
 import AppKit
 
-enum TranscriptionProvider: String, CaseIterable, Identifiable, Codable {
-    case deepgram
-    case openai
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .deepgram: return "Deepgram"
-        case .openai: return "OpenAI"
-        }
-    }
-}
-
 enum DeepgramModel: String, CaseIterable, Identifiable, Codable {
     case nova3 = "nova-3"
     case nova2 = "nova-2"
-    var id: String { rawValue }
-    var displayName: String { rawValue }
-}
-
-enum OpenAITranscribeModel: String, CaseIterable, Identifiable, Codable {
-    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
-    case gpt4oTranscribe = "gpt-4o-transcribe"
-    case whisper1 = "whisper-1"
-    var id: String { rawValue }
-    var displayName: String { rawValue }
-}
-
-enum CleanupModel: String, CaseIterable, Identifiable, Codable {
-    case gpt4oMini = "gpt-4o-mini"
-    case gpt4o = "gpt-4o"
     var id: String { rawValue }
     var displayName: String { rawValue }
 }
@@ -41,28 +14,14 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable {
 final class Preferences: ObservableObject {
     private let defaults = UserDefaults.standard
 
-    static let defaultCleanupPrompt: String = """
-    You are an editor cleaning up a single dictated utterance for pasting into a document. Your goals, in order:
-
-    1. Preserve the speaker's meaning, voice, and word choice. Do not rewrite for "style."
-    2. Remove disfluencies: "um", "uh", "like" (as filler), "you know", stutters, and false starts where the speaker clearly restarted.
-    3. Fix punctuation, capitalization, and obvious transcription errors (homophones, split/joined words).
-    4. Keep contractions and casual phrasing if the speaker used them.
-    5. Do NOT add content, greetings, sign-offs, or commentary. Do NOT ask questions.
-    6. Return only the cleaned text. No quotes, no prefixes, no explanations.
-
-    If the input is very short (a single phrase), return it with only minimal fixes.
-    """
-
     // MARK: - Keys
     private enum K {
-        static let activeProvider = "activeProvider"
         static let deepgramModel = "deepgramModel"
-        static let openaiTranscribeModel = "openaiTranscribeModel"
-        static let cleanupEnabled = "cleanupEnabled"
-        static let cleanupModel = "cleanupModel"
-        static let cleanupSystemPrompt = "cleanupSystemPrompt"
-        static let includeCorrectionsInCleanup = "includeCorrectionsInCleanup"
+        static let dictationMode = "dictationMode"
+        static let includeFillerWords = "includeFillerWords"
+        static let convertMeasurements = "convertMeasurements"
+        static let maskProfanity = "maskProfanity"
+        static let autoDetectLanguage = "autoDetectLanguage"
         static let playSounds = "playSounds"
         static let showHUD = "showHUD"
         static let keepAudio = "keepAudio"
@@ -78,22 +37,16 @@ final class Preferences: ObservableObject {
         static let onboardingCompleted = "onboardingCompleted"
         static let rateDeepgramNova3 = "rate.deepgram.nova3"
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
-        static let rateOpenAIMiniTranscribe = "rate.openai.miniTranscribe"
-        static let rateOpenAITranscribe = "rate.openai.transcribe"
-        static let rateOpenAIWhisper = "rate.openai.whisper"
-        static let rateCleanupInputPer1M = "rate.cleanup.in"
-        static let rateCleanupOutputPer1M = "rate.cleanup.out"
     }
 
     init() {
         defaults.register(defaults: [
-            K.activeProvider: TranscriptionProvider.deepgram.rawValue,
             K.deepgramModel: DeepgramModel.nova3.rawValue,
-            K.openaiTranscribeModel: OpenAITranscribeModel.gpt4oMiniTranscribe.rawValue,
-            K.cleanupEnabled: true,
-            K.cleanupModel: CleanupModel.gpt4oMini.rawValue,
-            K.cleanupSystemPrompt: Self.defaultCleanupPrompt,
-            K.includeCorrectionsInCleanup: true,
+            K.dictationMode: true,
+            K.includeFillerWords: false,
+            K.convertMeasurements: false,
+            K.maskProfanity: false,
+            K.autoDetectLanguage: false,
             K.playSounds: true,
             K.showHUD: true,
             K.keepAudio: true,
@@ -107,43 +60,42 @@ final class Preferences: ObservableObject {
             K.shortcutPaused: false,
             K.onboardingCompleted: false,
             K.rateDeepgramNova3: 0.0043,
-            K.rateDeepgramNova2: 0.0043,
-            K.rateOpenAIMiniTranscribe: 0.003,
-            K.rateOpenAITranscribe: 0.006,
-            K.rateOpenAIWhisper: 0.006,
-            K.rateCleanupInputPer1M: 0.15,
-            K.rateCleanupOutputPer1M: 0.60
+            K.rateDeepgramNova2: 0.0043
         ])
     }
 
     // MARK: - Bindings
-    var activeProvider: TranscriptionProvider {
-        get { TranscriptionProvider(rawValue: defaults.string(forKey: K.activeProvider) ?? "") ?? .deepgram }
-        set { defaults.set(newValue.rawValue, forKey: K.activeProvider); objectWillChange.send() }
-    }
     var deepgramModel: DeepgramModel {
         get { DeepgramModel(rawValue: defaults.string(forKey: K.deepgramModel) ?? "") ?? .nova3 }
         set { defaults.set(newValue.rawValue, forKey: K.deepgramModel); objectWillChange.send() }
     }
-    var openaiTranscribeModel: OpenAITranscribeModel {
-        get { OpenAITranscribeModel(rawValue: defaults.string(forKey: K.openaiTranscribeModel) ?? "") ?? .gpt4oMiniTranscribe }
-        set { defaults.set(newValue.rawValue, forKey: K.openaiTranscribeModel); objectWillChange.send() }
+    /// Enables Deepgram's dictation mode — "period", "new line", "new paragraph"
+    /// and other spoken punctuation commands are converted to characters.
+    var dictationMode: Bool {
+        get { defaults.bool(forKey: K.dictationMode) }
+        set { defaults.set(newValue, forKey: K.dictationMode); objectWillChange.send() }
     }
-    var cleanupEnabled: Bool {
-        get { defaults.bool(forKey: K.cleanupEnabled) }
-        set { defaults.set(newValue, forKey: K.cleanupEnabled); objectWillChange.send() }
+    /// When on, Deepgram's `filler_words=true` leaves "um"/"uh" in the transcript.
+    /// Default off — the normal dictation experience strips fillers.
+    var includeFillerWords: Bool {
+        get { defaults.bool(forKey: K.includeFillerWords) }
+        set { defaults.set(newValue, forKey: K.includeFillerWords); objectWillChange.send() }
     }
-    var cleanupModel: CleanupModel {
-        get { CleanupModel(rawValue: defaults.string(forKey: K.cleanupModel) ?? "") ?? .gpt4oMini }
-        set { defaults.set(newValue.rawValue, forKey: K.cleanupModel); objectWillChange.send() }
+    /// `measurements=true` — "milligram" → "mg", "milliliter" → "ml", etc.
+    var convertMeasurements: Bool {
+        get { defaults.bool(forKey: K.convertMeasurements) }
+        set { defaults.set(newValue, forKey: K.convertMeasurements); objectWillChange.send() }
     }
-    var cleanupSystemPrompt: String {
-        get { defaults.string(forKey: K.cleanupSystemPrompt) ?? Self.defaultCleanupPrompt }
-        set { defaults.set(newValue, forKey: K.cleanupSystemPrompt); objectWillChange.send() }
+    /// `profanity_filter=true` — masks profanity with `****`.
+    var maskProfanity: Bool {
+        get { defaults.bool(forKey: K.maskProfanity) }
+        set { defaults.set(newValue, forKey: K.maskProfanity); objectWillChange.send() }
     }
-    var includeCorrectionsInCleanup: Bool {
-        get { defaults.bool(forKey: K.includeCorrectionsInCleanup) }
-        set { defaults.set(newValue, forKey: K.includeCorrectionsInCleanup); objectWillChange.send() }
+    /// `detect_language=true` — picks the dominant language and swaps the
+    /// model. Mutually exclusive with an explicit `language=` param.
+    var autoDetectLanguage: Bool {
+        get { defaults.bool(forKey: K.autoDetectLanguage) }
+        set { defaults.set(newValue, forKey: K.autoDetectLanguage); objectWillChange.send() }
     }
     var playSounds: Bool {
         get { defaults.bool(forKey: K.playSounds) }
@@ -214,26 +166,6 @@ final class Preferences: ObservableObject {
     var rateDeepgramNova2: Double {
         get { defaults.double(forKey: K.rateDeepgramNova2) }
         set { defaults.set(newValue, forKey: K.rateDeepgramNova2); objectWillChange.send() }
-    }
-    var rateOpenAIMiniTranscribe: Double {
-        get { defaults.double(forKey: K.rateOpenAIMiniTranscribe) }
-        set { defaults.set(newValue, forKey: K.rateOpenAIMiniTranscribe); objectWillChange.send() }
-    }
-    var rateOpenAITranscribe: Double {
-        get { defaults.double(forKey: K.rateOpenAITranscribe) }
-        set { defaults.set(newValue, forKey: K.rateOpenAITranscribe); objectWillChange.send() }
-    }
-    var rateOpenAIWhisper: Double {
-        get { defaults.double(forKey: K.rateOpenAIWhisper) }
-        set { defaults.set(newValue, forKey: K.rateOpenAIWhisper); objectWillChange.send() }
-    }
-    var rateCleanupInputPer1M: Double {
-        get { defaults.double(forKey: K.rateCleanupInputPer1M) }
-        set { defaults.set(newValue, forKey: K.rateCleanupInputPer1M); objectWillChange.send() }
-    }
-    var rateCleanupOutputPer1M: Double {
-        get { defaults.double(forKey: K.rateCleanupOutputPer1M) }
-        set { defaults.set(newValue, forKey: K.rateCleanupOutputPer1M); objectWillChange.send() }
     }
 
     // MARK: - Launch at login

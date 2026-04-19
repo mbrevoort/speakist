@@ -89,7 +89,7 @@ struct OnboardingView: View {
     private var canAdvance: Bool {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
-        case 2: return keychain.hasKey(.deepgram) || keychain.hasKey(.openai)
+        case 2: return keychain.hasKey(.deepgram)
         default: return true
         }
     }
@@ -181,34 +181,21 @@ private struct ProviderPane: View {
     @EnvironmentObject var env: AppEnvironment
 
     @State private var deepgramKey = ""
-    @State private var openaiKey = ""
     @State private var testing = false
     @State private var testResult = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Connect a transcription provider").font(.title2.weight(.semibold))
-            Text("Speakist uses cloud STT. Paste a Deepgram or OpenAI API key — Speakist stores it in your Keychain.")
+            Text("Connect Deepgram").font(.title2.weight(.semibold))
+            Text("Speakist uses Deepgram for transcription. Paste your Deepgram API key — it's stored locally in your Keychain, and audio is sent directly to Deepgram from your Mac.")
                 .foregroundColor(.secondary)
 
             Form {
-                Picker("Active provider", selection: Binding(
-                    get: { prefs.activeProvider },
-                    set: { prefs.activeProvider = $0 })) {
-                    ForEach(TranscriptionProvider.allCases) { p in
-                        Text(p.displayName).tag(p)
-                    }
-                }
-                .pickerStyle(.segmented)
-
                 SecureField("Deepgram API key", text: $deepgramKey)
                     .onSubmit { keychain.set(deepgramKey, for: .deepgram) }
-                SecureField("OpenAI API key (also used for cleanup)", text: $openaiKey)
-                    .onSubmit { keychain.set(openaiKey, for: .openai) }
                 HStack {
-                    Button("Save keys") {
+                    Button("Save key") {
                         keychain.set(deepgramKey, for: .deepgram)
-                        keychain.set(openaiKey, for: .openai)
                     }
                     Button(testing ? "Testing…" : "Test recording (2 s)") {
                         Task { await runTest() }
@@ -223,7 +210,6 @@ private struct ProviderPane: View {
         }
         .onAppear {
             deepgramKey = keychain.get(.deepgram) ?? ""
-            openaiKey = keychain.get(.openai) ?? ""
         }
     }
 
@@ -242,21 +228,11 @@ private struct ProviderPane: View {
             return
         }
         testResult = "Transcribing…"
-        let client: TranscriptionClient?
-        switch prefs.activeProvider {
-        case .deepgram:
-            if let k = keychain.get(.deepgram), !k.isEmpty {
-                client = DeepgramClient(apiKey: k, model: prefs.deepgramModel)
-            } else { client = nil }
-        case .openai:
-            if let k = keychain.get(.openai), !k.isEmpty {
-                client = OpenAITranscribeClient(apiKey: k, model: prefs.openaiTranscribeModel)
-            } else { client = nil }
-        }
-        guard let client else {
-            testResult = "No API key for \(prefs.activeProvider.displayName)."
+        guard let key = keychain.get(.deepgram), !key.isEmpty else {
+            testResult = "No Deepgram key configured."
             return
         }
+        let client = DeepgramClient(apiKey: key, model: prefs.deepgramModel)
         do {
             let r = try await client.transcribe(audioURL: rec.url, keyterms: [], language: "en")
             testResult = r.text.isEmpty ? "Empty transcript (try speaking next time)." : "✓ \(r.text)"

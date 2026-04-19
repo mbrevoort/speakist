@@ -252,9 +252,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func statusLine() -> String {
         if env.preferences.shortcutPaused { return "Paused" }
-        let provider = env.preferences.activeProvider
-        let model: String = (provider == .deepgram) ? env.preferences.deepgramModel.rawValue : env.preferences.openaiTranscribeModel.rawValue
-        return "Ready • \(provider.displayName) \(model)"
+        return "Ready • Deepgram \(env.preferences.deepgramModel.rawValue)"
     }
 }
 

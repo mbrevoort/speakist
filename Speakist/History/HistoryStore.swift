@@ -10,11 +10,10 @@ struct TranscriptionEntry: Identifiable, Hashable {
     var model: String
     var rawTranscript: String
     var finalTranscript: String
-    var cleanupApplied: Bool
     var audioPath: String?
     var targetBundleID: String?
     var pasteStatus: String          // "pasted" | "clipboard_only" | "failed"
-    var transcriptionStatus: String  // "ok" | "failed" | "cleanup_failed"
+    var transcriptionStatus: String  // "ok" | "failed"
     var errorMessage: String?
     var editedAt: Date?
 }
@@ -58,12 +57,11 @@ final class HistoryStore: ObservableObject {
                     VALUES
                       (\(entry.id), \(entry.createdAt.timeIntervalSince1970), \(entry.durationMs),
                        \(entry.provider), \(entry.model), \(entry.rawTranscript), \(entry.finalTranscript),
-                       \(entry.cleanupApplied ? 1 : 0), \(entry.audioPath), \(entry.targetBundleID),
+                       0, \(entry.audioPath), \(entry.targetBundleID),
                        \(entry.pasteStatus), \(entry.transcriptionStatus), \(entry.errorMessage),
                        \(entry.editedAt?.timeIntervalSince1970))
                     ON CONFLICT(id) DO UPDATE SET
                       final_transcript = excluded.final_transcript,
-                      cleanup_applied = excluded.cleanup_applied,
                       audio_path = excluded.audio_path,
                       paste_status = excluded.paste_status,
                       transcription_status = excluded.transcription_status,
@@ -204,7 +202,6 @@ final class HistoryStore: ObservableObject {
             model: row["model"] ?? "",
             rawTranscript: row["raw_transcript"] ?? "",
             finalTranscript: row["final_transcript"] ?? "",
-            cleanupApplied: (row["cleanup_applied"] as Int? ?? 0) == 1,
             audioPath: row["audio_path"],
             targetBundleID: row["target_bundle_id"],
             pasteStatus: row["paste_status"] ?? "failed",
