@@ -7,6 +7,15 @@ const inter = Inter({
   variable: "--font-inter",
 });
 
+// Force dynamic rendering for every route. Our app reads from D1 via
+// getCloudflareContext() almost everywhere (landing page's Pricing component,
+// auth check in middleware-ish layouts, every dashboard / admin page),
+// and the sync form of getCloudflareContext can't run at build-time
+// prerendering. Marking root-level `dynamic = "force-dynamic"` tells
+// Next.js to skip static generation entirely — which matches reality,
+// since nothing in this app has meaningful cacheable output across users.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Speakist — push-to-talk dictation for macOS",
   description:

@@ -105,12 +105,18 @@ export function buildAuthConfig(): NextAuthConfig {
       async session({ session, user }) {
         // Surface our custom fields on the session so server components can
         // render gated UI (super-admin badges, etc.) without another DB hit.
+        // The `as` casts widen Auth.js's default User/Session types to include
+        // our schema's extras (isSuperAdmin); a proper fix is a next-auth.d.ts
+        // module augmentation, but keeping this local avoids a typings rabbit
+        // hole and only touches two assignments.
         if (session.user) {
-          session.user.id = user.id;
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (session.user as any).isSuperAdmin =
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (user as any).isSuperAdmin ?? false;
+          const u = user as typeof user & { isSuperAdmin?: boolean };
+          const s = session.user as typeof session.user & {
+            id: string;
+            isSuperAdmin: boolean;
+          };
+          s.id = user.id;
+          s.isSuperAdmin = u.isSuperAdmin ?? false;
         }
         return session;
       },

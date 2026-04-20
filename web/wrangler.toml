@@ -17,9 +17,22 @@
 # After `wrangler d1 create speakist-{dev,prod}`, paste the returned
 # `database_id` values into the right blocks below.
 
+name = "speakist-web"
 compatibility_date = "2026-04-19"
 compatibility_flags = ["nodejs_compat"]
 main = ".open-next/worker.js"
+
+# Keep the .workers.dev URL enabled on dev as a fallback when the custom
+# domain is misconfigured or down. Prod overrides to false so nobody hits
+# speakist-web-prod.brevoortstudio.workers.dev instead of speakist.ai.
+workers_dev = true
+
+# Preview URLs generate per-version hostnames like
+# <version>.speakist-web-dev.brevoortstudio.workers.dev. Useful for
+# validating a build before promoting, but creates a sprawl of ephemeral
+# URLs we don't need yet. Turn off globally; re-enable later if we adopt
+# a preview workflow.
+preview_urls = false
 
 [assets]
 directory = ".open-next/assets"
@@ -55,6 +68,9 @@ migrations_dir = "drizzle/migrations"
 
 [env.production]
 name = "speakist-web-prod"
+# Production should only be reachable at speakist.ai, never via the
+# workers.dev fallback. Override the top-level default here.
+workers_dev = false
 
 [[env.production.d1_databases]]
 binding = "DB"
