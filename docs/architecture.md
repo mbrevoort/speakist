@@ -222,7 +222,7 @@ Two-pane split view: searchable/filterable list on the left, per-entry detail on
 
 ### 9.5 Onboarding ([`OnboardingWindow`](../Speakist/Onboarding/OnboardingWindow.swift))
 
-Four panes: Welcome → Permissions → Deepgram setup + test recording → Launch-at-login. Uses `canAdvance` gates so the Continue button only enables when each pane's requirements are met.
+Four panes: Welcome → Permissions → Sign in to Speakist (device-code flow) → Launch-at-login. Uses `canAdvance` gates so the Continue button only enables when each pane's requirements are met.
 
 ---
 
@@ -231,6 +231,48 @@ Four panes: Welcome → Permissions → Deepgram setup + test recording → Laun
 - Debug/local: ad-hoc signing disabled, Developer ID signing applied by default because `DEVELOPMENT_TEAM` is set in [`project.yml`](../project.yml).
 - Release: `make archive` → Xcode `Release` configuration → `notarytool submit --wait` → `stapler staple` → DMG.
 - Auto-update: Sparkle 2 appcast at `https://speakist.ai/appcast.xml` (EdDSA public key lives in Info.plist `SUPublicEDKey`).
+
+---
+
+## 10½. Speakist backend integration (Phase 6)
+
+The Mac app is no longer a standalone client — it authenticates against a
+companion Next.js backend that lives in [`web/`](../web/) and runs on
+Cloudflare (Workers + D1 via OpenNext). Billing lives server-side; the Mac
+just:
+
+1. **Signs in** via a device-code flow. `Speakist/Account/SpeakistAccountManager`
+   POSTs to `/api/device/start`, displays the returned user-code in Settings,
+   opens `/link?code=…` in the browser, polls `/api/device/poll` every ~3 s.
+   On "authorized" it stores a 48-hex refresh token in the Keychain
+   (`KeychainAccount.refreshToken`).
+2. **Mints a Deepgram key per transcription.** `TranscriptionService.buildClient()`
+   POSTs to `/api/deepgram/token` (Bearer auth) and receives a short-lived
+   scoped Deepgram key (TTL 10 minutes, `usage:write` only). The Mac uses
+   that key for one `/v1/listen` call; the server-side key auto-deletes
+   after TTL.
+3. **Reports usage** via `POST /api/usage` with `{transcriptionClientId,
+   wordCount, audioMs, model}`. Backend deduplicates on
+   `(orgId, transcriptionClientId)` so a Mac retry with the same UUID
+   debits at most once. Response includes `newBalanceMillicents` and
+   `autoTopupTriggered`.
+4. **(Planned)** Vocabulary sync via `GET/POST /api/vocabulary`. Server
+   endpoints exist; Mac-side wiring into `CorrectionStore` is a follow-up.
+
+### Privacy load-bearing claim
+
+The Mac talks to Deepgram **directly**. The backend only mints the
+authorization token. Your voice and transcripts never pass through
+Speakist's servers. This is not a marketing line — it's a constraint on
+every feature going forward.
+
+### Failure modes the Mac translates to UX
+
+| Backend signal | Mac behavior |
+|---|---|
+| `401 not signed in` | Notifier + "Session rejected — please sign in again" |
+| `402 insufficient_credit` | Notifier + "Top up at {URL}/dashboard/billing" |
+| Network error minting token | Retry once, then save failed history entry |
 
 ---
 
