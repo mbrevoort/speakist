@@ -30,6 +30,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             .environmentObject(env.usageTracker)
             .environmentObject(env.permissions)
             .environmentObject(env.deviceMonitor)
+            .environmentObject(env.accountManager)
             .environmentObject(env)
         window.contentView = NSHostingView(rootView: root)
     }

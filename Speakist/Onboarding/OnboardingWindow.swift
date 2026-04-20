@@ -23,6 +23,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             .environmentObject(env.preferences)
             .environmentObject(env.permissions)
             .environmentObject(env.keychain)
+            .environmentObject(env.accountManager)
             .environmentObject(env)
         window.contentView = NSHostingView(rootView: view)
     }
@@ -89,7 +90,7 @@ struct OnboardingView: View {
     private var canAdvance: Bool {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
-        case 2: return keychain.hasKey(.deepgram)
+        case 2: return keychain.hasKey(.refreshToken)
         default: return true
         }
     }
@@ -177,69 +178,69 @@ private struct PermissionsPane: View {
 
 private struct ProviderPane: View {
     @EnvironmentObject var prefs: Preferences
-    @EnvironmentObject var keychain: KeychainStore
     @EnvironmentObject var env: AppEnvironment
-
-    @State private var deepgramKey = ""
-    @State private var testing = false
-    @State private var testResult = ""
+    @EnvironmentObject var manager: SpeakistAccountManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Connect Deepgram").font(.title2.weight(.semibold))
-            Text("Speakist uses Deepgram for transcription. Paste your Deepgram API key — it's stored locally in your Keychain, and audio is sent directly to Deepgram from your Mac.")
+            Text("Sign in to Speakist").font(.title2.weight(.semibold))
+            Text("Your Speakist account handles transcription billing and syncs your vocabulary across Macs. New accounts start with $5 in free credit — no card required.")
                 .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            Form {
-                SecureField("Deepgram API key", text: $deepgramKey)
-                    .onSubmit { keychain.set(deepgramKey, for: .deepgram) }
-                HStack {
-                    Button("Save key") {
-                        keychain.set(deepgramKey, for: .deepgram)
+            switch manager.state {
+            case .signedOut:
+                VStack(alignment: .leading, spacing: 12) {
+                    Button {
+                        Task { await manager.startSignIn() }
+                    } label: {
+                        Label("Sign in with Speakist", systemImage: "person.crop.circle.badge.checkmark")
                     }
-                    Button(testing ? "Testing…" : "Test recording (2 s)") {
-                        Task { await runTest() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    if let err = manager.lastError {
+                        Text(err).font(.callout).foregroundColor(.red)
                     }
-                    .disabled(testing)
                 }
-                if !testResult.isEmpty {
-                    Text(testResult).font(.callout).foregroundColor(.secondary)
+
+            case .signingIn(let code, let url, _):
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Your browser should have opened. Enter this code on the web:")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    Text(code)
+                        .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                        .kerning(3)
+                    HStack {
+                        Button("Copy code") {
+                            let pb = NSPasteboard.general
+                            pb.clearContents()
+                            pb.setString(code, forType: .string)
+                        }
+                        Button("Open link again") { NSWorkspace.shared.open(url) }
+                    }
+                }
+
+            case .signedIn:
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2)
+                        .foregroundColor(.speakistSage)
+                    VStack(alignment: .leading) {
+                        Text("Signed in").font(.headline)
+                        Text("You can finish onboarding — transcriptions will bill against your Speakist credit.")
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
-            .formStyle(.grouped)
-        }
-        .onAppear {
-            deepgramKey = keychain.get(.deepgram) ?? ""
-        }
-    }
 
-    private func runTest() async {
-        testing = true; defer { testing = false }
-        testResult = "Recording for 2 seconds…"
-        do {
-            try env.audioRecorder.start()
-        } catch {
-            testResult = "Start failed: \(error.localizedDescription)"
-            return
+            Spacer(minLength: 0)
+
+            Text("Using API endpoint: \(prefs.apiBaseURL.absoluteString)")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        guard let rec = env.audioRecorder.stop() else {
-            testResult = "No audio captured."
-            return
-        }
-        testResult = "Transcribing…"
-        guard let key = keychain.get(.deepgram), !key.isEmpty else {
-            testResult = "No Deepgram key configured."
-            return
-        }
-        let client = DeepgramClient(apiKey: key, model: prefs.deepgramModel)
-        do {
-            let r = try await client.transcribe(audioURL: rec.url, keyterms: [], language: "en")
-            testResult = r.text.isEmpty ? "Empty transcript (try speaking next time)." : "✓ \(r.text)"
-        } catch {
-            testResult = "Error: \(error.localizedDescription)"
-        }
-        try? FileManager.default.removeItem(at: rec.url)
     }
 }
 

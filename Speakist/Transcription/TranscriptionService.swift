@@ -6,10 +6,23 @@ struct TranscriptionRequest {
     let maxDurationHit: Bool
 }
 
+/// Orchestrates a single transcription end-to-end:
+///   1. Mint a short-lived Deepgram key from the Speakist backend
+///   2. POST the audio to Deepgram directly (audio never touches our server)
+///   3. Paste the result at the user's cursor
+///   4. Persist a history entry
+///   5. Report usage to Speakist so the credit ledger debits
+///
+/// Failure modes that need different UX:
+///   * Not signed in → prompt user to sign in via Settings
+///   * Insufficient credit → toast + open billing page
+///   * Deepgram 4xx/5xx → retry once, then save failed history entry
+///   * Paste blocked (no editable field) → leave on clipboard + notify
 @MainActor
 final class TranscriptionService {
     private let preferences: Preferences
-    private let keychain: KeychainStore
+    private let accountManager: SpeakistAccountManager
+    private let apiClient: SpeakistAPIClient
     private let correctionStore: CorrectionStore
     private let historyStore: HistoryStore
     private let audioArchive: AudioArchive
@@ -20,7 +33,8 @@ final class TranscriptionService {
     private let usage: UsageTracker
 
     init(preferences: Preferences,
-         keychain: KeychainStore,
+         accountManager: SpeakistAccountManager,
+         apiClient: SpeakistAPIClient,
          correctionStore: CorrectionStore,
          historyStore: HistoryStore,
          audioArchive: AudioArchive,
@@ -30,7 +44,8 @@ final class TranscriptionService {
          notifier: Notifier,
          usage: UsageTracker) {
         self.preferences = preferences
-        self.keychain = keychain
+        self.accountManager = accountManager
+        self.apiClient = apiClient
         self.correctionStore = correctionStore
         self.historyStore = historyStore
         self.audioArchive = audioArchive
@@ -53,31 +68,48 @@ final class TranscriptionService {
             notifier.maxDurationHit(minutes: max(preferences.maxDurationSec / 60, 1))
         }
 
-        guard let client = buildClient() else {
-            notifier.missingApiKey(provider: "Deepgram")
+        // 1. Need a Speakist session before we can mint a Deepgram token.
+        guard accountManager.isSignedIn else {
+            notifier.missingApiKey(provider: "Speakist")
             hud.hide()
-            let archivedURL = audioArchive.archive(tempURL: request.recording.url, id: entryID)
-            historyStore.save(TranscriptionEntry(
-                id: entryID,
-                createdAt: createdAt,
-                durationMs: durationMs,
-                provider: "deepgram",
-                model: "",
-                rawTranscript: "",
-                finalTranscript: "",
-                audioPath: archivedURL?.path,
-                targetBundleID: focus.bundleID,
-                pasteStatus: "failed",
-                transcriptionStatus: "failed",
-                errorMessage: "API key missing",
-                editedAt: nil))
+            saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                            audioURL: request.recording.url, bundleID: focus.bundleID,
+                            errorMessage: "Not signed in")
+            return
+        }
+
+        // 2. Build the Deepgram client with a freshly-minted short-lived key.
+        let client: DeepgramClient
+        do {
+            client = try await buildClient()
+        } catch SpeakistAPIClient.Error.insufficientCredit {
+            notifier.transcriptionFailed("Out of credit. Top up at \(preferences.apiBaseURL.absoluteString)/dashboard/billing")
+            hud.hide()
+            saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                            audioURL: request.recording.url, bundleID: focus.bundleID,
+                            errorMessage: "Insufficient credit")
+            return
+        } catch SpeakistAPIClient.Error.notSignedIn {
+            notifier.apiKeyRejected(provider: "Speakist")
+            hud.hide()
+            saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                            audioURL: request.recording.url, bundleID: focus.bundleID,
+                            errorMessage: "Session rejected — please sign in again")
+            return
+        } catch {
+            Logger.shared.warn("Deepgram token mint failed: \(String(describing: error))")
+            notifier.transcriptionFailed("Couldn't start transcription.")
+            hud.hide()
+            saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                            audioURL: request.recording.url, bundleID: focus.bundleID,
+                            errorMessage: "Token mint failed")
             return
         }
 
         let keyterms = VocabularyBuilder.keyterms(from: correctionStore)
         let language = preferences.language.isEmpty ? nil : preferences.language
 
-        // Transcribe with 1 retry.
+        // 3. Transcribe (1 retry for transient failures).
         var rawText = ""
         var audioSeconds = request.recording.durationSeconds
         do {
@@ -110,7 +142,7 @@ final class TranscriptionService {
             return
         }
 
-        // Paste.
+        // 4. Paste.
         let outcome = await cursorInserter.insert(text: rawText, hasEditableFocus: focus.hasEditableFocus)
         let pasteStatus: String
         switch outcome {
@@ -123,7 +155,7 @@ final class TranscriptionService {
             notifier.pasteFailed()
         }
 
-        // Persist.
+        // 5. Persist local history.
         let archivedURL = audioArchive.archive(tempURL: request.recording.url, id: entryID)
         let entry = TranscriptionEntry(
             id: entryID,
@@ -144,6 +176,20 @@ final class TranscriptionService {
                      model: client.modelLabel,
                      audioSeconds: audioSeconds)
 
+        // 6. Report usage to Speakist so the ledger debits. Fire-and-forget
+        // from the user's perspective — we've already pasted + stored
+        // locally. The reporting call deduplicates on entryID, so a network
+        // blip leaves us safe for next run (Phase 7: retry queue).
+        Task.detached { [weak self, entryID, rawText, audioSeconds, modelLabel = client.modelLabel] in
+            guard let self else { return }
+            await self.reportUsage(
+                transcriptionClientId: entryID,
+                wordCount: Self.wordCount(rawText),
+                audioMs: Int(audioSeconds * 1000),
+                model: modelLabel
+            )
+        }
+
         playStopSound()
         hud.hide()
     }
@@ -161,6 +207,30 @@ final class TranscriptionService {
             maxDurationHit: false))
     }
 
+    // MARK: - Usage reporting
+
+    private func reportUsage(transcriptionClientId: String,
+                             wordCount: Int,
+                             audioMs: Int?,
+                             model: String) async {
+        do {
+            _ = try await apiClient.reportUsage(
+                transcriptionClientId: transcriptionClientId,
+                wordCount: wordCount,
+                audioMs: audioMs,
+                model: model
+            )
+        } catch {
+            Logger.shared.warn("reportUsage failed for \(transcriptionClientId): \(String(describing: error))")
+            // TODO(phase-7): queue for retry. For now, unreported events are
+            // essentially comped — user gets a transcription we didn't bill.
+        }
+    }
+
+    private static func wordCount(_ s: String) -> Int {
+        s.split(whereSeparator: { $0.isWhitespace }).count
+    }
+
     // MARK: - Failure path
 
     private func handleTranscribeFailure(error: Error,
@@ -169,36 +239,56 @@ final class TranscriptionService {
                                          durationMs: Int,
                                          audioURL: URL,
                                          bundleID: String?,
-                                         client: TranscriptionClient) {
+                                         client: DeepgramClient) {
         let message = error.localizedDescription
         if let te = error as? TranscriptionError, te.isAuthFailure {
-            notifier.apiKeyRejected(provider: client.providerLabel)
+            // A minted Deepgram token getting rejected means the key ladder
+            // is busted on the server side (our project key wrong, or the
+            // mint is returning stale keys). Surface as a Speakist-side
+            // problem, not a "your Deepgram account" problem.
+            notifier.apiKeyRejected(provider: "Speakist")
         } else {
             notifier.transcriptionFailed(message)
         }
-        let archivedURL = audioArchive.archive(tempURL: audioURL, id: entryID)
+        saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                        audioURL: audioURL, bundleID: bundleID,
+                        providerLabel: client.providerLabel, modelLabel: client.modelLabel,
+                        errorMessage: message)
+    }
+
+    private func saveFailedEntry(id: String,
+                                 createdAt: Date,
+                                 durationMs: Int,
+                                 audioURL: URL,
+                                 bundleID: String?,
+                                 providerLabel: String = "deepgram",
+                                 modelLabel: String = "",
+                                 errorMessage: String) {
+        let archivedURL = audioArchive.archive(tempURL: audioURL, id: id)
         historyStore.save(TranscriptionEntry(
-            id: entryID,
+            id: id,
             createdAt: createdAt,
             durationMs: durationMs,
-            provider: client.providerLabel,
-            model: client.modelLabel,
+            provider: providerLabel,
+            model: modelLabel,
             rawTranscript: "",
             finalTranscript: "",
             audioPath: archivedURL?.path,
             targetBundleID: bundleID,
             pasteStatus: "failed",
             transcriptionStatus: "failed",
-            errorMessage: message,
+            errorMessage: errorMessage,
             editedAt: nil))
     }
 
-    // MARK: - Helpers
+    // MARK: - Build Deepgram client
 
-    private func buildClient() -> TranscriptionClient? {
-        guard let key = keychain.get(.deepgram), !key.isEmpty else { return nil }
+    /// Fetches a short-lived Deepgram key and wraps it in a DeepgramClient
+    /// configured with the user's current preferences + correction rules.
+    private func buildClient() async throws -> DeepgramClient {
+        let token = try await apiClient.mintDeepgramToken()
         return DeepgramClient(
-            apiKey: key,
+            apiKey: token.key,
             model: preferences.deepgramModel,
             dictation: preferences.dictationMode,
             fillerWords: preferences.includeFillerWords,

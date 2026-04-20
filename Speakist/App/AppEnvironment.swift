@@ -19,12 +19,15 @@ final class AppEnvironment: ObservableObject {
     let hudController: HUDController
     let notifier: Notifier
     let updater: UpdaterController
+    let accountManager: SpeakistAccountManager
+    let apiClient: SpeakistAPIClient
 
     init() {
         Logger.shared.bootstrap()
         let prefs = Preferences()
         self.preferences = prefs
-        self.keychain = KeychainStore()
+        let keychain = KeychainStore()
+        self.keychain = keychain
         self.permissions = PermissionCoordinator()
         self.deviceMonitor = DeviceMonitor()
         self.audioArchive = AudioArchive(preferences: prefs)
@@ -37,9 +40,24 @@ final class AppEnvironment: ObservableObject {
         self.hudController = HUDController(preferences: prefs)
         self.notifier = Notifier()
         self.updater = UpdaterController()
+
+        // Speakist account manager + API client. AccountManager owns the
+        // bearer token; APIClient reads it back via a @MainActor closure so
+        // there's no construction-order deadlock (account manager is built
+        // without the client and has `bind(client:)` called after).
+        let accountManager = SpeakistAccountManager(keychain: keychain)
+        self.accountManager = accountManager
+        let apiClient = SpeakistAPIClient(
+            baseURL: prefs.apiBaseURL,
+            tokenProvider: { [weak accountManager] in accountManager?.bearerToken }
+        )
+        self.apiClient = apiClient
+        accountManager.bind(client: apiClient)
+
         self.transcriptionService = TranscriptionService(
             preferences: prefs,
-            keychain: keychain,
+            accountManager: accountManager,
+            apiClient: apiClient,
             correctionStore: correctionStore,
             historyStore: historyStore,
             audioArchive: audioArchive,

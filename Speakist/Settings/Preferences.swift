@@ -37,6 +37,7 @@ final class Preferences: ObservableObject {
         static let onboardingCompleted = "onboardingCompleted"
         static let rateDeepgramNova3 = "rate.deepgram.nova3"
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
+        static let apiBaseURL = "apiBaseURL"
     }
 
     init() {
@@ -68,7 +69,11 @@ final class Preferences: ObservableObject {
             K.shortcutPaused: false,
             K.onboardingCompleted: false,
             K.rateDeepgramNova3: 0.0043,
-            K.rateDeepgramNova2: 0.0043
+            K.rateDeepgramNova2: 0.0043,
+            // Speakist API endpoint. Default points at local dev; ship flips
+            // this to https://speakist.ai once domain is active. Override per-
+            // machine with: `defaults write com.brevoort-studio.speakist apiBaseURL "https://example.com"`
+            K.apiBaseURL: "http://localhost:3000"
         ])
     }
 
@@ -177,6 +182,12 @@ final class Preferences: ObservableObject {
     var rateDeepgramNova2: Double {
         get { defaults.double(forKey: K.rateDeepgramNova2) }
         set { defaults.set(newValue, forKey: K.rateDeepgramNova2); objectWillChange.send() }
+    }
+
+    // MARK: - API endpoint
+    var apiBaseURL: URL {
+        let raw = defaults.string(forKey: K.apiBaseURL) ?? "http://localhost:3000"
+        return URL(string: raw) ?? URL(string: "http://localhost:3000")!
     }
 
     // MARK: - Launch at login

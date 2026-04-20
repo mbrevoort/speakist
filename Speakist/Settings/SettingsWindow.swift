@@ -20,12 +20,13 @@ struct BrandHeader: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, shortcuts, audio, transcription, vocabulary, history, usage, about
+    case account, general, shortcuts, audio, transcription, vocabulary, history, usage, about
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .account: return "Account"
         case .general: return "General"
         case .shortcuts: return "Shortcuts"
         case .audio: return "Audio"
@@ -39,6 +40,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .account: return "person.crop.circle"
         case .general: return "gear"
         case .shortcuts: return "keyboard"
         case .audio: return "mic"
@@ -98,6 +100,7 @@ struct SettingsWindow: View {
     @ViewBuilder
     private var detailView: some View {
         switch selection {
+        case .account: AccountSettingsView()
         case .general: GeneralSettingsView()
         case .shortcuts: ShortcutsSettingsView()
         case .audio: AudioSettingsView()
@@ -107,6 +110,121 @@ struct SettingsWindow: View {
         case .usage: UsageSettingsView()
         case .about: AboutSettingsView()
         }
+    }
+}
+
+// MARK: - Account
+
+struct AccountSettingsView: View {
+    @EnvironmentObject var prefs: Preferences
+    @EnvironmentObject var manager: SpeakistAccountManager
+
+    var body: some View {
+        Form {
+            Section {
+                switch manager.state {
+                case .signedOut:
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("You're not signed in yet.")
+                            .font(.headline)
+                        Text("Sign in to your Speakist account to start transcribing. You'll get $5 in free credit to try it.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        Button("Sign in with Speakist") {
+                            Task { await manager.startSignIn() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+                    .padding(.vertical, 6)
+
+                case .signingIn(let code, let url, let expiresAt):
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Finish signing in")
+                            .font(.headline)
+                        Text("Your browser should have opened. If not, visit \(url.absoluteString) and enter this code:")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                        Text(code)
+                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.primary)
+                            .kerning(3)
+                            .padding(.vertical, 4)
+                        HStack {
+                            Button("Copy code") {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(code, forType: .string)
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Open link again") {
+                                NSWorkspace.shared.open(url)
+                            }
+                            .buttonStyle(.bordered)
+                            Spacer()
+                            Button("Cancel") {
+                                manager.signOut()
+                            }
+                        }
+                        Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 6)
+
+                case .signedIn(let email):
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 20))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Signed in")
+                                    .font(.headline)
+                                Text(email ?? "Manage billing + team at \(prefs.apiBaseURL.absoluteString)/dashboard")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        HStack {
+                            Button("Open dashboard") {
+                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard"))
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Top up credit") {
+                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard/billing"))
+                            }
+                            .buttonStyle(.bordered)
+                            Spacer()
+                            Button("Sign out", role: .destructive) {
+                                manager.signOut()
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+
+                if let err = manager.lastError {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundColor(.red)
+                }
+            } header: {
+                Text("Speakist account")
+            }
+
+            Section {
+                LabeledContent("API endpoint", value: prefs.apiBaseURL.absoluteString)
+                    .font(.system(.body, design: .monospaced))
+                Text("Change with: `defaults write com.brevoort-studio.speakist apiBaseURL \"https://speakist.ai\"` and restart the app.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Advanced")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
     }
 }
 
@@ -237,20 +355,14 @@ struct AudioSettingsView: View {
 
 struct TranscriptionSettingsView: View {
     @EnvironmentObject var prefs: Preferences
-    @EnvironmentObject var keychain: KeychainStore
     @EnvironmentObject var env: AppEnvironment
 
-    @State private var deepgramKey: String = ""
     @State private var testOutput: String = ""
     @State private var testing = false
 
     var body: some View {
         Form {
-            Section("Deepgram") {
-                SecureField("API key", text: $deepgramKey, onCommit: {
-                    keychain.set(deepgramKey, for: .deepgram)
-                })
-                Button("Save key") { keychain.set(deepgramKey, for: .deepgram) }
+            Section("Transcription") {
                 Picker("Model", selection: Binding(
                     get: { prefs.deepgramModel },
                     set: { prefs.deepgramModel = $0 })) {
@@ -264,13 +376,16 @@ struct TranscriptionSettingsView: View {
                     Text("English").tag("en")
                     Text("Auto-detect").tag("")
                 }
+                Text("Transcription is powered by Deepgram. Your Speakist account handles billing — no API key to manage here. Manage your plan in Account.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
 
             Section {
                 Toggle("Voice commands for punctuation", isOn: Binding(
                     get: { prefs.dictationMode },
                     set: { prefs.dictationMode = $0 }))
-                Text("When on, say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and they\u2019re converted to the matching characters. Trade-off: Deepgram stops inferring punctuation from pauses, so you need to say commands explicitly. Leave off for natural, automatically-punctuated speech.")
+                Text("When on, say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and they\u{2019}re converted to the matching characters. Trade-off: Deepgram stops inferring punctuation from pauses, so you need to say commands explicitly. Leave off for natural, automatically-punctuated speech.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
 
@@ -316,15 +431,19 @@ struct TranscriptionSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear {
-            deepgramKey = keychain.get(.deepgram) ?? ""
-        }
     }
 
     private func runTestRecording() async {
         testing = true
         testOutput = "Recording…"
         defer { testing = false }
+
+        // Gate on sign-in — test recording needs to mint a Deepgram token,
+        // which needs a Speakist session.
+        guard env.accountManager.isSignedIn else {
+            testOutput = "Sign in on the Account tab first, then try again."
+            return
+        }
 
         do {
             try env.audioRecorder.start()
@@ -337,25 +456,25 @@ struct TranscriptionSettingsView: View {
             testOutput = "No recording captured."
             return
         }
+
         testOutput = "Transcribing…"
-        guard let key = keychain.get(.deepgram), !key.isEmpty else {
-            testOutput = "No Deepgram key configured."
-            return
-        }
-        let client = DeepgramClient(
-            apiKey: key,
-            model: prefs.deepgramModel,
-            dictation: prefs.dictationMode,
-            fillerWords: prefs.includeFillerWords,
-            measurements: prefs.convertMeasurements,
-            profanityFilter: prefs.maskProfanity,
-            detectLanguage: prefs.autoDetectLanguage)
         do {
+            let token = try await env.apiClient.mintDeepgramToken()
+            let client = DeepgramClient(
+                apiKey: token.key,
+                model: prefs.deepgramModel,
+                dictation: prefs.dictationMode,
+                fillerWords: prefs.includeFillerWords,
+                measurements: prefs.convertMeasurements,
+                profanityFilter: prefs.maskProfanity,
+                detectLanguage: prefs.autoDetectLanguage)
             let result = try await client.transcribe(
                 audioURL: rec.url,
                 keyterms: [],
                 language: prefs.language.isEmpty ? nil : prefs.language)
             testOutput = result.text.isEmpty ? "(empty transcript)" : result.text
+        } catch SpeakistAPIClient.Error.insufficientCredit {
+            testOutput = "Out of credit. Top up in the Account tab."
         } catch {
             testOutput = "Error: \(error.localizedDescription)"
         }
@@ -596,7 +715,7 @@ struct AboutSettingsView: View {
                 env.updater.checkForUpdates()
             }
             Divider()
-            Text("Speakist keeps your data local. Audio and history live in Application Support. Your Deepgram key lives in the Keychain. Audio is only sent to Deepgram for transcription.")
+            Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to Deepgram (via a short-lived per-transcription key minted by our backend) for transcription only; neither the audio nor the transcript is stored on our servers.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)

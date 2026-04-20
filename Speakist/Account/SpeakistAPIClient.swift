@@ -1,0 +1,308 @@
+import Foundation
+
+/// HTTP client for the speakist.ai backend. One method per endpoint —
+/// intentionally low-level; higher layers compose them.
+///
+/// Auth: an optional bearer token is injected via `tokenProvider`, a closure
+/// invoked per request so token rotation (sign-in/out) is visible immediately
+/// without re-plumbing. Device-code endpoints (`requestDeviceCodes`,
+/// `pollDeviceAuth`) explicitly skip the bearer header since they're how we
+/// obtain one in the first place.
+///
+/// Errors: each call returns typed errors. Network failures map to
+/// `.network`; non-2xx responses surface as `.server(status, body)`;
+/// deliberate app states (not signed in, 402 insufficient credit) surface
+/// as their specific cases so callers can branch on them without parsing
+/// body text.
+@MainActor
+final class SpeakistAPIClient {
+    enum Error: Swift.Error, CustomStringConvertible {
+        case notSignedIn
+        case badResponse
+        case server(status: Int, body: String?)
+        case network(underlying: Swift.Error)
+        case insufficientCredit
+        case devicePending
+        case deviceExpired
+
+        var description: String {
+            switch self {
+            case .notSignedIn: return "Not signed in"
+            case .badResponse: return "Unexpected response"
+            case .server(let s, let b): return "Server error \(s): \(b ?? "")"
+            case .network(let e): return "Network error: \(e.localizedDescription)"
+            case .insufficientCredit: return "Out of credit — top up to continue"
+            case .devicePending: return "Waiting for web approval"
+            case .deviceExpired: return "Device code expired"
+            }
+        }
+    }
+
+    let baseURL: URL
+    private let tokenProvider: @MainActor () -> String?
+    private let session: URLSession
+
+    init(baseURL: URL,
+         tokenProvider: @escaping @MainActor () -> String?,
+         session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.tokenProvider = tokenProvider
+        self.session = session
+    }
+
+    // MARK: - Device-code sign-in
+
+    struct DeviceStartResponse: Decodable {
+        let userCode: String
+        let deviceCode: String
+        let verificationURL: String
+        let verificationURLWithCode: String
+        let interval: Int
+        let expiresIn: Int
+
+        enum CodingKeys: String, CodingKey {
+            case userCode = "user_code"
+            case deviceCode = "device_code"
+            case verificationURL = "verification_url"
+            case verificationURLWithCode = "verification_url_with_code"
+            case interval, expiresIn = "expires_in"
+        }
+    }
+
+    func requestDeviceCodes(deviceName: String?) async throws -> DeviceStartResponse {
+        var body: [String: Any] = [:]
+        if let name = deviceName, !name.isEmpty { body["deviceName"] = name }
+        return try await perform(
+            path: "/api/device/start",
+            method: "POST",
+            body: body.isEmpty ? nil : body,
+            auth: false
+        )
+    }
+
+    struct DevicePollResponse: Decodable {
+        let status: String
+        let accessToken: String?
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case accessToken = "access_token"
+        }
+    }
+
+    /// Polls the device endpoint. Returns `.accessToken` once approved, or
+    /// throws `.devicePending` / `.deviceExpired` for the respective cases.
+    func pollDeviceAuth(deviceCode: String) async throws -> String {
+        let (data, response) = try await rawRequest(
+            path: "/api/device/poll",
+            method: "POST",
+            body: ["device_code": deviceCode],
+            auth: false
+        )
+        let http = response as? HTTPURLResponse
+        guard let http else { throw Error.badResponse }
+
+        if http.statusCode == 410 { throw Error.deviceExpired }
+        if http.statusCode != 200 {
+            throw Error.server(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+
+        let decoded = try decode(DevicePollResponse.self, from: data)
+        switch decoded.status {
+        case "authorized":
+            guard let token = decoded.accessToken else { throw Error.badResponse }
+            return token
+        case "pending":
+            throw Error.devicePending
+        default:
+            throw Error.badResponse
+        }
+    }
+
+    // MARK: - Deepgram short-lived token
+
+    struct DeepgramTokenResponse: Decodable {
+        let key: String
+        let expiresAt: String
+        let source: String
+
+        enum CodingKeys: String, CodingKey {
+            case key
+            case expiresAt = "expires_at"
+            case source
+        }
+    }
+
+    /// Requests a short-lived Deepgram key scoped to this user's org.
+    /// Auto-translates HTTP 402 to `.insufficientCredit`.
+    func mintDeepgramToken() async throws -> DeepgramTokenResponse {
+        let (data, response) = try await rawRequest(
+            path: "/api/deepgram/token",
+            method: "POST",
+            body: [:] as [String: Any],
+            auth: true
+        )
+        guard let http = response as? HTTPURLResponse else { throw Error.badResponse }
+        switch http.statusCode {
+        case 200: return try decode(DeepgramTokenResponse.self, from: data)
+        case 401: throw Error.notSignedIn
+        case 402: throw Error.insufficientCredit
+        default: throw Error.server(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+    }
+
+    // MARK: - Usage reporting
+
+    struct UsageResponse: Decodable {
+        let ok: Bool
+        let duplicate: Bool?
+        let newBalanceMillicents: Int?
+        let autoTopupTriggered: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case ok, duplicate
+            case newBalanceMillicents = "newBalanceMillicents"
+            case autoTopupTriggered = "autoTopupTriggered"
+        }
+    }
+
+    /// Reports a completed transcription to the backend so the ledger debits.
+    /// Safe to retry with the same `transcriptionClientId` — the server
+    /// dedupes on that.
+    func reportUsage(transcriptionClientId: String,
+                     wordCount: Int,
+                     audioMs: Int?,
+                     model: String) async throws -> UsageResponse {
+        var body: [String: Any] = [
+            "transcriptionClientId": transcriptionClientId,
+            "wordCount": wordCount,
+            "model": model
+        ]
+        if let audioMs { body["audioMs"] = audioMs }
+        return try await perform(path: "/api/usage", method: "POST", body: body, auth: true)
+    }
+
+    // MARK: - Vocabulary sync
+
+    struct VocabEntryWire: Codable {
+        let from: String
+        let to: String
+        let count: Int?
+        let isProperNoun: Bool?
+        let lastSeen: String?
+        let updatedAt: String?
+        let deleted: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case from, to, count
+            case isProperNoun = "is_proper_noun"
+            case lastSeen = "last_seen"
+            case updatedAt = "updated_at"
+            case deleted
+        }
+    }
+
+    struct VocabListResponse: Decodable {
+        let entries: [VocabEntryWire]
+        let serverTime: String
+
+        enum CodingKeys: String, CodingKey {
+            case entries
+            case serverTime = "server_time"
+        }
+    }
+
+    func fetchVocabulary(since: Date? = nil) async throws -> VocabListResponse {
+        var path = "/api/vocabulary"
+        if let since {
+            let iso = ISO8601DateFormatter().string(from: since)
+            path += "?since=\(iso.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? iso)"
+        }
+        return try await perform(path: path, method: "GET", body: nil, auth: true)
+    }
+
+    struct VocabUpsertResponse: Decodable {
+        let ok: Bool
+        let processed: Int
+    }
+
+    func pushVocabulary(entries: [VocabEntryWire]) async throws -> VocabUpsertResponse {
+        try await perform(
+            path: "/api/vocabulary",
+            method: "POST",
+            body: ["entries": entries.map { $0.asDict() }],
+            auth: true
+        )
+    }
+
+    // MARK: - Internals
+
+    /// Decodes a JSON response into `T`. Throws `.badResponse` on non-2xx.
+    private func perform<T: Decodable>(
+        path: String,
+        method: String,
+        body: Any?,
+        auth: Bool
+    ) async throws -> T {
+        let (data, response) = try await rawRequest(path: path, method: method, body: body, auth: auth)
+        guard let http = response as? HTTPURLResponse else { throw Error.badResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 401 { throw Error.notSignedIn }
+            throw Error.server(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+        return try decode(T.self, from: data)
+    }
+
+    private func rawRequest(
+        path: String,
+        method: String,
+        body: Any?,
+        auth: Bool
+    ) async throws -> (Data, URLResponse) {
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw Error.badResponse
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        if auth {
+            guard let token = tokenProvider(), !token.isEmpty else {
+                throw Error.notSignedIn
+            }
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+
+        if let body {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        }
+
+        do {
+            return try await session.data(for: request)
+        } catch {
+            throw Error.network(underlying: error)
+        }
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            Logger.shared.warn("decode \(String(describing: T.self)) failed: \(error.localizedDescription)")
+            throw Error.badResponse
+        }
+    }
+}
+
+private extension SpeakistAPIClient.VocabEntryWire {
+    func asDict() -> [String: Any] {
+        var d: [String: Any] = ["from": from, "to": to]
+        if let count { d["count"] = count }
+        if let isProperNoun { d["is_proper_noun"] = isProperNoun }
+        if let lastSeen { d["last_seen"] = lastSeen }
+        if let deleted { d["deleted"] = deleted }
+        return d
+    }
+}

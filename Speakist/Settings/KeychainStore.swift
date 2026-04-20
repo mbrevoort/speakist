@@ -3,11 +3,17 @@ import Security
 import Combine
 
 enum KeychainAccount: String, CaseIterable {
-    case deepgram
+    /// Speakist account bearer token (long-lived refresh-token-style).
+    /// Used for /api/deepgram/token, /api/usage, /api/vocabulary auth.
+    /// Set at the end of device-code sign-in; cleared on sign-out.
+    case refreshToken
 }
 
-/// Keychain wrapper for storing API keys.
-/// Service: "com.brevoort-studio.speakist.apikeys"; account = provider rawValue.
+/// Keychain wrapper for Speakist credentials.
+/// Service: "com.brevoort-studio.speakist.apikeys"; account = slot rawValue.
+/// Prior versions stored a Deepgram API key here directly; that slot is
+/// gone now — Deepgram keys are minted short-lived by the server per
+/// transcription, never persisted on the Mac.
 @MainActor
 final class KeychainStore: ObservableObject {
     private let service = "com.brevoort-studio.speakist.apikeys"
