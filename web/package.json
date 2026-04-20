@@ -11,8 +11,8 @@
 
     "cf:build": "opennextjs-cloudflare build --env dev",
     "cf:preview": "opennextjs-cloudflare preview --env dev",
-    "deploy:dev": "opennextjs-cloudflare deploy --env dev",
-    "deploy:prod": "opennextjs-cloudflare deploy --env production",
+    "deploy:dev": "opennextjs-cloudflare build --env dev && opennextjs-cloudflare deploy --env dev",
+    "deploy:prod": "opennextjs-cloudflare build --env production && opennextjs-cloudflare deploy --env production",
 
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply speakist-dev --local --env dev",
