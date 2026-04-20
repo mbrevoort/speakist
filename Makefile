@@ -1,9 +1,10 @@
 SCHEME := Speakist
 CONFIG ?= Debug
 CHANNEL ?= stable
+NOTES ?=
 BUILD_DIR := build
 
-.PHONY: project clean build run test archive release release-publish
+.PHONY: project clean build run test archive release
 
 project:
 	xcodegen generate
@@ -40,24 +41,23 @@ archive: project
 		-archivePath $(BUILD_DIR)/Speakist.xcarchive \
 		archive
 
-# End-to-end release: archive → notarize → DMG → Sparkle-sign → print appcast.
-# Channels: dev, beta, stable (default). See docs/releasing.md.
+# End-to-end release: archive → notarize → DMG → Sparkle-sign → upload to
+# R2 → register in D1. Channels: dev, beta, stable (default). Release
+# notes are optional but recommended.
+#
 # Usage:
-#   make release VERSION=0.2.0                    # stable channel
-#   make release VERSION=0.2.0 CHANNEL=dev        # dev channel
-#   make release VERSION=0.2.0 CHANNEL=beta       # beta channel
+#   make release VERSION=0.2.0
+#   make release VERSION=0.2.0 CHANNEL=dev
+#   make release VERSION=0.2.0 CHANNEL=dev NOTES="First R2 dev release"
+#
+# See docs/releasing.md for one-time prerequisites.
 release:
 	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make release VERSION=x.y.z [CHANNEL=dev|beta|stable]"; \
+		echo 'Usage: make release VERSION=x.y.z [CHANNEL=dev|beta|stable] [NOTES="..."]'; \
 		exit 1; \
 	fi
-	scripts/release.sh $(VERSION) --channel $(CHANNEL)
-
-# Same as `release`, plus `gh release create` to upload the DMG to GitHub.
-# Usage: make release-publish VERSION=0.2.0 CHANNEL=dev
-release-publish:
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make release-publish VERSION=x.y.z [CHANNEL=dev|beta|stable]"; \
-		exit 1; \
+	@if [ -z "$(NOTES)" ]; then \
+		scripts/release.sh $(VERSION) --channel $(CHANNEL); \
+	else \
+		scripts/release.sh $(VERSION) --channel $(CHANNEL) --notes "$(NOTES)"; \
 	fi
-	scripts/release.sh $(VERSION) --channel $(CHANNEL) --publish
