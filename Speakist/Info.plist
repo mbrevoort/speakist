@@ -42,5 +42,9 @@
 	<string>https://speakist.ai/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string></string>
+	<key>SpeakistChannel</key>
+	<string>stable</string>
+	<key>SpeakistDefaultAPIBaseURL</key>
+	<string>https://speakist.ai</string>
 </dict>
 </plist>

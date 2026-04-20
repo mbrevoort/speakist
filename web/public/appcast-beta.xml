@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Speakist BETA channel. Used by builds produced with
+  `make release CHANNEL=beta` (SUFeedURL = speakist.ai/appcast-beta.xml).
+  Only beta-channel installs poll this feed — stable and dev users never
+  see these releases.
+
+  Each release appends an <item> block inside <channel>, newest first.
+  scripts/release.sh prints the exact fragment to paste after building.
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     version="2.0">
+  <channel>
+    <title>Speakist (beta)</title>
+    <link>https://speakist.ai/appcast-beta.xml</link>
+    <description>Speakist for macOS — beta channel update feed</description>
+    <language>en</language>
+
+    <!-- New <item> blocks go HERE (above any existing ones). -->
+
+  </channel>
+</rss>

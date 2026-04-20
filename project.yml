@@ -54,7 +54,18 @@ targets:
         NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor."
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
+        # Per-channel values. scripts/release.sh rewrites these before
+        # xcodegen generate so they end up in the built Info.plist with
+        # the right channel's URLs. The defaults below are what you get
+        # from an unflagged `make build` / `make archive`.
+        #
+        # Channel matrix:
+        #   stable → speakist.ai/appcast.xml     + apiBaseURL=speakist.ai
+        #   beta   → speakist.ai/appcast-beta.xml + apiBaseURL=speakist.ai
+        #   dev    → speakist-dev.../appcast-dev.xml + apiBaseURL=speakist-dev.*
         SUFeedURL: "https://speakist.ai/appcast.xml"
+        SpeakistDefaultAPIBaseURL: "https://speakist.ai"
+        SpeakistChannel: "stable"
         SUEnableAutomaticChecks: true
         SUPublicEDKey: ""
     entitlements:

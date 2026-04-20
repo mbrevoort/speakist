@@ -1,5 +1,6 @@
 SCHEME := Speakist
 CONFIG ?= Debug
+CHANNEL ?= stable
 BUILD_DIR := build
 
 .PHONY: project clean build run test archive release release-publish
@@ -40,20 +41,23 @@ archive: project
 		archive
 
 # End-to-end release: archive → notarize → DMG → Sparkle-sign → print appcast.
-# Usage: make release VERSION=0.2.0
-# See docs/releasing.md for one-time prerequisites.
+# Channels: dev, beta, stable (default). See docs/releasing.md.
+# Usage:
+#   make release VERSION=0.2.0                    # stable channel
+#   make release VERSION=0.2.0 CHANNEL=dev        # dev channel
+#   make release VERSION=0.2.0 CHANNEL=beta       # beta channel
 release:
 	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make release VERSION=x.y.z  (e.g. make release VERSION=0.2.0)"; \
+		echo "Usage: make release VERSION=x.y.z [CHANNEL=dev|beta|stable]"; \
 		exit 1; \
 	fi
-	scripts/release.sh $(VERSION)
+	scripts/release.sh $(VERSION) --channel $(CHANNEL)
 
 # Same as `release`, plus `gh release create` to upload the DMG to GitHub.
-# Usage: make release-publish VERSION=0.2.0
+# Usage: make release-publish VERSION=0.2.0 CHANNEL=dev
 release-publish:
 	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make release-publish VERSION=x.y.z"; \
+		echo "Usage: make release-publish VERSION=x.y.z [CHANNEL=dev|beta|stable]"; \
 		exit 1; \
 	fi
-	scripts/release.sh $(VERSION) --publish
+	scripts/release.sh $(VERSION) --channel $(CHANNEL) --publish

@@ -3,10 +3,66 @@
 End-to-end: build → sign → notarize → DMG → Sparkle-sign → host → users
 auto-update.
 
-This doc has two parts:
+This doc has three parts:
 
-1. **One-time setup** (do once per machine that will ever produce a release)
-2. **Per-release runbook** (every time you want to ship a new version)
+0. **Release channels** — dev / beta / stable (the model)
+1. **One-time setup** — once per machine that will ever produce a release
+2. **Per-release runbook** — every time you ship a new version
+
+---
+
+## 0. Release channels
+
+Three channels, each fully isolated:
+
+| Channel | `SUFeedURL` baked into the build | `apiBaseURL` default | DMG filename | Appcast file |
+|---|---|---|---|---|
+| `stable` | `speakist.ai/appcast.xml` | `speakist.ai` | `Speakist-0.2.0.dmg` | `web/public/appcast.xml` |
+| `beta` | `speakist.ai/appcast-beta.xml` | `speakist.ai` | `Speakist-0.2.0-beta.dmg` | `web/public/appcast-beta.xml` |
+| `dev` | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | `Speakist-0.2.0-dev.dmg` | `web/public/appcast-dev.xml` |
+
+How it works:
+
+- **Channel is baked in at build time.** `scripts/release.sh` rewrites
+  `project.yml` before `xcodegen generate`, so `SUFeedURL`,
+  `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel` land in the built
+  Info.plist with the channel's values. That survives into the codesigned
+  bundle — modifying Info.plist after signing invalidates the signature,
+  which is why we can't pick the channel at runtime.
+- **Users switch channels by installing a different DMG**, not by a
+  toggle. Sparkle only ever polls the URL baked into its current .app.
+- **The dev-channel appcast lives on the dev Worker** so you can ship
+  dev-channel updates without touching prod. Beta + stable appcasts
+  live on the prod Worker.
+- **Preferences.swift reads `SpeakistDefaultAPIBaseURL` from Info.plist**
+  as the default for the `apiBaseURL` UserDefaults key. Users can still
+  override per-install with `defaults write
+  com.brevoort-studio.speakist apiBaseURL "…"`.
+
+### When to use each channel
+
+- **dev** — your own daily testing + a small circle of trusted testers.
+  Ships frequently (sometimes multiple times per day). Points at the dev
+  backend. Breakage tolerated.
+- **beta** — pre-release candidates with production backend. Ship a
+  week or two before stable to catch regressions that only surface
+  against real data. Small volunteer audience.
+- **stable** — public-facing production. Ships weekly to monthly with
+  changelogs.
+
+### Why separate appcast URLs instead of one appcast + Sparkle's channel filter
+
+Sparkle supports `<sparkle:channel>` elements inside `<item>` blocks
+that would let a single appcast serve all three with Sparkle filtering
+client-side. We use separate URLs because:
+
+1. **Dev releases don't require a prod deploy.** With a single appcast
+   on `speakist.ai`, every dev release would need a `pnpm deploy:prod`
+   for stable users to pick up the new manifest. Bad ergonomics.
+2. **Clearer blast radius.** A malformed entry in `appcast-dev.xml`
+   can't break stable-channel auto-update.
+3. **Debuggability.** `curl https://speakist.ai/appcast.xml` tells you
+   exactly what stable users see, uncomplicated by filters.
 
 ---
 
@@ -113,21 +169,30 @@ One-time setup: `gh auth login`.
 From the repo root:
 
 ```bash
-make release VERSION=0.2.0
+make release VERSION=0.2.0                    # stable channel (default)
+make release VERSION=0.2.0 CHANNEL=dev        # dev channel
+make release VERSION=0.2.0 CHANNEL=beta       # beta channel
 ```
 
 This runs `scripts/release.sh`, which:
 
-1. Bumps `MARKETING_VERSION` in `project.yml` to `0.2.0`
-2. Increments `CURRENT_PROJECT_VERSION` (build number) by 1
-3. `xcodegen generate`
-4. `xcodebuild archive` (Release config, Developer ID signing)
-5. `xcodebuild -exportArchive` with `scripts/exportOptions.plist`
-6. Zips the `.app`, submits to Apple via `notarytool`, waits for "Accepted"
-7. `stapler staple` the notary ticket onto the `.app`
-8. `create-dmg` produces `build/Speakist-0.2.0.dmg`
-9. `sign_update` (from Sparkle) computes an EdDSA signature for the DMG
-10. Prints a ready-to-paste `<item>` XML block for `web/public/appcast.xml`
+1. Snapshots `project.yml` to `project.yml.release-bak`
+2. Rewrites `SUFeedURL`, `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel`
+   in `project.yml` for the chosen channel
+3. Bumps `MARKETING_VERSION` to `0.2.0`, increments `CURRENT_PROJECT_VERSION`
+4. `xcodegen generate`
+5. `xcodebuild archive` (Release config, Developer ID signing)
+6. `xcodebuild -exportArchive` with `scripts/exportOptions.plist`
+7. Sanity-checks the exported Info.plist matches the channel we asked for
+   (guards against stale build-cache returning a wrong-channel plist)
+8. Zips the `.app`, submits to Apple via `notarytool`, waits for "Accepted"
+9. `stapler staple` the notary ticket onto the `.app`
+10. `create-dmg` produces `build/Speakist-0.2.0{-dev|-beta}.dmg`
+11. `sign_update` (from Sparkle) computes an EdDSA signature for the DMG
+12. Restores `project.yml` — **keeping the version bump, discarding the
+    channel swap** — so you can commit the version change without polluting
+    stable's defaults with dev values
+13. Prints a ready-to-paste `<item>` XML block for the channel's appcast file
 
 Expect 5–10 minutes. The notarization step is the slowest; you're waiting
 on Apple's queue.
@@ -137,20 +202,33 @@ on Apple's queue.
 If you want the script to also upload:
 
 ```bash
-make release-publish VERSION=0.2.0
+make release-publish VERSION=0.2.0 CHANNEL=dev
 ```
+
+This also passes `--prerelease` to `gh release create` for non-stable
+channels so they don't show up as the "Latest" release on GitHub.
 
 Otherwise, do it manually:
 
 ```bash
-gh release create v0.2.0 build/Speakist-0.2.0.dmg \
-  --title "Speakist 0.2.0" \
-  --notes "..."
+gh release create v0.2.0-dev build/Speakist-0.2.0-dev.dmg \
+  --title "Speakist 0.2.0 (dev)" \
+  --notes "..." \
+  --prerelease
 ```
+
+Release tags are channel-suffixed — stable is `v0.2.0`, beta is
+`v0.2.0-beta`, dev is `v0.2.0-dev`. Keeping tags distinct avoids a
+beta release overwriting a stable one of the same version.
 
 ### 2.3 Update appcast + deploy web
 
-Paste the `<item>` block from the release script's output into
+Paste the `<item>` block from the release script's output into the
+channel-appropriate appcast file:
+
+- stable → `web/public/appcast.xml`
+- beta → `web/public/appcast-beta.xml`
+- dev → `web/public/appcast-dev.xml`
 `web/public/appcast.xml`, **above** any existing `<item>` blocks (Sparkle
 reads newest-first).
 
@@ -159,13 +237,21 @@ git add project.yml web/public/appcast.xml
 git commit -m "Release 0.2.0"
 ```
 
-Deploy whichever environments you want this release to hit:
+Deploy to the environment that serves this channel's appcast:
 
 ```bash
 cd web
-pnpm deploy:dev      # dev: Sparkle on dev builds polls speakist-dev.brevoortstudio.com/appcast.xml
-pnpm deploy:prod     # prod: speakist.ai/appcast.xml
+
+# Dev channel — appcast is hosted on the dev Worker:
+pnpm deploy:dev
+
+# Beta or stable channel — appcast is hosted on the prod Worker:
+pnpm deploy:prod
 ```
+
+You can also deploy both if you want the appcast file present on both
+envs; the released app only polls the URL baked into its Info.plist,
+but having the file at both URLs is harmless.
 
 Also push the git tag + commits:
 

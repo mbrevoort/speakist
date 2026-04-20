@@ -41,6 +41,12 @@ final class Preferences: ObservableObject {
     }
 
     init() {
+        // Channel-specific default, baked into Info.plist at release time by
+        // scripts/release.sh. Falls back to localhost for unflagged dev builds
+        // run straight from Xcode without any release pipeline.
+        let channelDefaultAPIBase = (Bundle.main.object(forInfoDictionaryKey: "SpeakistDefaultAPIBaseURL") as? String)
+            ?? "http://localhost:3000"
+
         defaults.register(defaults: [
             K.deepgramModel: DeepgramModel.nova3.rawValue,
             // Dictation mode is opt-in. When ON, Deepgram converts spoken
@@ -70,10 +76,13 @@ final class Preferences: ObservableObject {
             K.onboardingCompleted: false,
             K.rateDeepgramNova3: 0.0043,
             K.rateDeepgramNova2: 0.0043,
-            // Speakist API endpoint. Default points at local dev; ship flips
-            // this to https://speakist.ai once domain is active. Override per-
-            // machine with: `defaults write com.brevoort-studio.speakist apiBaseURL "https://example.com"`
-            K.apiBaseURL: "http://localhost:3000"
+            // Speakist API endpoint. Defaults to the channel's URL baked
+            // into Info.plist at release time (stable→speakist.ai,
+            // dev→speakist-dev.brevoortstudio.com, etc.). Unflagged Xcode
+            // builds fall back to localhost. Users can still override per
+            // machine with:
+            //   defaults write com.brevoort-studio.speakist apiBaseURL "https://example.com"
+            K.apiBaseURL: channelDefaultAPIBase
         ])
     }
 
