@@ -6,10 +6,9 @@
 // transcript itself goes Mac → Deepgram → Mac, never touching us, which is
 // the privacy guarantee on the landing page.
 //
-// Auth: Authorization: Bearer <user-session-token>. For web clients a
-// normal Auth.js session cookie works too (requireUser reads both). For
-// Phase 4 we just lean on requireUser; the Mac app gets its own short-lived
-// bearer tokens in Phase 6.
+// Auth: Authorization: Bearer <mac-session-token> for the Mac app, or
+// Auth.js session cookie for web callers (testing). Both routes converge
+// on the same AuthedUser via requireUserFromRequest — see src/lib/authz.ts.
 //
 // Body (JSON):
 //   {
@@ -29,7 +28,7 @@
 // client_id) on usage_events.
 
 import { z } from "zod";
-import { requireUser } from "@/lib/authz";
+import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { debitForUsage } from "@/lib/credits";
 
@@ -43,9 +42,10 @@ const bodySchema = z.object({
 export async function POST(req: Request): Promise<Response> {
   let user;
   try {
-    user = await requireUser();
-  } catch {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    user = await requireUserFromRequest(req);
+  } catch (err) {
+    const status = err instanceof AuthzError ? err.status : 401;
+    return Response.json({ error: "unauthorized" }, { status });
   }
 
   const json = await req.json().catch(() => null);

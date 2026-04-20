@@ -3,19 +3,22 @@
 // MUST go through one of these helpers.** If you find yourself calling
 // getDb() directly in a route, stop — add a helper here instead.
 //
-// Mental model:
-//   * `requireUser()` throws 401 if not signed in, returns the user.
-//   * `requireSuperAdmin()` adds 403 if the user isn't a super admin.
-//   * `requireOrgMember(orgId)` adds 403 if the user isn't a member of that
-//     org (super admins bypass).
-//   * `requireOrgAdmin(orgId)` requires owner|admin role (super admins bypass).
+// Two auth surfaces:
+//   * Web (Auth.js session cookie) — requireUser() and friends. Used by
+//     dashboard RSC pages + server actions.
+//   * Mac app (Bearer <token>) — requireUserFromRequest(req). Used by API
+//     routes the Mac app calls. The bearer is a plaintext token; we hash
+//     it and look up in mac_sessions for user_id. Every successful lookup
+//     bumps mac_sessions.last_used_at so idle sessions surface in the
+//     "revoke session" UI.
 //
-// The thrown errors are typed `AuthzError` with a `status` field; wrap your
-// handler with `handleAuthz()` to turn them into the right HTTP response.
+// API routes that need to accept *either* shape (like /api/usage, called by
+// the Mac normally but usable from a web session for testing) use
+// requireUserFromRequest — it tries bearer first, falls back to cookie.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { orgMembers, users, type OrgRole } from "@/lib/db/schema";
+import { macSessions, orgMembers, users, type OrgRole } from "@/lib/db/schema";
 import { getAuth } from "@/lib/auth";
 
 export class AuthzError extends Error {
@@ -35,7 +38,58 @@ export interface AuthedUser {
   isSuperAdmin: boolean;
 }
 
-/** Throws 401 if not signed in. */
+// --- bearer token support --------------------------------------------------
+
+/** SHA-256 hex of the input; matches what Mac sessions store. */
+export async function hashToken(token: string): Promise<string> {
+  const buf = new TextEncoder().encode(token);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Resolve a Mac-app bearer token to a user. Updates last_used_at on success.
+ * Returns null if the token isn't recognized or the session is revoked.
+ */
+async function userFromBearer(bearerToken: string): Promise<AuthedUser | null> {
+  if (bearerToken.length < 16) return null;
+  const hash = await hashToken(bearerToken);
+  const db = getDb();
+  const rows = await db
+    .select({
+      sessionId: macSessions.id,
+      userId: users.id,
+      email: users.email,
+      displayName: users.displayName,
+      isSuperAdmin: users.isSuperAdmin,
+    })
+    .from(macSessions)
+    .innerJoin(users, eq(users.id, macSessions.userId))
+    .where(and(eq(macSessions.refreshTokenHash, hash), isNull(macSessions.revokedAt)))
+    .limit(1);
+  const r = rows[0];
+  if (!r) return null;
+
+  // Bump last_used_at. Fire-and-forget — if it fails we still authorize this
+  // request; the user just won't see a fresh timestamp in their sessions UI.
+  db.update(macSessions)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(macSessions.id, r.sessionId))
+    .catch((err) => console.error("[authz] failed to bump last_used_at:", err));
+
+  return {
+    id: r.userId,
+    email: r.email,
+    displayName: r.displayName,
+    isSuperAdmin: r.isSuperAdmin,
+  };
+}
+
+// --- cookie-based helpers (web) -------------------------------------------
+
+/** Throws 401 if not signed in (via Auth.js cookie). */
 export async function requireUser(): Promise<AuthedUser> {
   const { auth } = await getAuth();
   const session = await auth();
@@ -43,15 +97,12 @@ export async function requireUser(): Promise<AuthedUser> {
     throw new AuthzError(401, "Not signed in");
   }
 
-  // Session only carries email/name/image from Auth.js core. We hydrate the
-  // rest from `users`. This is one D1 read per request and worth the
-  // consistency — a user could be promoted to super admin and their existing
-  // session should reflect that on next navigation.
+  // Hydrate from DB so `isSuperAdmin` reflects current state even on a
+  // long-lived session issued before promotion.
   const db = getDb();
   const rows = await db.select().from(users).where(eq(users.id, session.user.id)).limit(1);
   const user = rows[0];
   if (!user) {
-    // Session references a user that no longer exists — treat as signed out.
     throw new AuthzError(401, "User no longer exists");
   }
 
@@ -63,7 +114,27 @@ export async function requireUser(): Promise<AuthedUser> {
   };
 }
 
-/** 401 if not signed in; 403 if not super admin. */
+// --- request-aware helper (API routes) ------------------------------------
+
+/**
+ * API-route authentication. Tries Bearer (Mac sessions) first, falls back to
+ * Auth.js session cookie (web). Throws 401 if neither succeeds.
+ */
+export async function requireUserFromRequest(req: Request): Promise<AuthedUser> {
+  const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
+  if (authHeader && /^Bearer\s+/i.test(authHeader)) {
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const user = await userFromBearer(token);
+    if (user) return user;
+    // Explicit 401 — don't silently fall through to cookie auth for a
+    // malformed Bearer; that would mask Mac-app misconfig.
+    throw new AuthzError(401, "Invalid bearer token");
+  }
+  return requireUser();
+}
+
+// --- role/membership helpers (shared; both auth paths converge on AuthedUser)
+
 export async function requireSuperAdmin(): Promise<AuthedUser> {
   const user = await requireUser();
   if (!user.isSuperAdmin) {
@@ -72,14 +143,13 @@ export async function requireSuperAdmin(): Promise<AuthedUser> {
   return user;
 }
 
-/** 401 if not signed in; 403 if not a member of `orgId` (super admins pass). */
 export async function requireOrgMember(orgId: string): Promise<{
   user: AuthedUser;
   role: OrgRole;
 }> {
   const user = await requireUser();
   if (user.isSuperAdmin) {
-    return { user, role: "owner" };  // super admins act as owners
+    return { user, role: "owner" };
   }
 
   const db = getDb();
@@ -95,7 +165,6 @@ export async function requireOrgMember(orgId: string): Promise<{
   return { user, role: m.role };
 }
 
-/** 401; 403 if not an owner/admin of `orgId` (super admins pass). */
 export async function requireOrgAdmin(orgId: string): Promise<{
   user: AuthedUser;
   role: OrgRole;
@@ -107,16 +176,6 @@ export async function requireOrgAdmin(orgId: string): Promise<{
   return { user, role };
 }
 
-/**
- * Wrap a route handler to translate `AuthzError` into a proper HTTP response.
- * Other thrown errors are re-thrown so Next.js renders the error boundary.
- *
- *     export const POST = handleAuthz(async (req) => {
- *       const user = await requireSuperAdmin();
- *       // ...
- *       return Response.json({ ok: true });
- *     });
- */
 export function handleAuthz<Args extends unknown[]>(
   fn: (...args: Args) => Promise<Response>
 ): (...args: Args) => Promise<Response> {
