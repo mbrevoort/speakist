@@ -79,6 +79,13 @@ These are the production-style secrets for the **dev** Worker. They're
 encrypted at rest on Cloudflare and only visible to the Worker at runtime.
 Every `wrangler secret put X` prompts for the value — paste, hit enter.
 
+**On the very first `secret put`**, wrangler will notice the Worker doesn't
+exist yet and ask: *"There doesn't seem to be a Worker called 'speakist-web-
+dev'. Do you want to create a new Worker with that name and add secrets to
+it?"* → **Answer yes**. Wrangler creates an empty placeholder Worker; your
+first `pnpm deploy:dev` (step 4) replaces the code while keeping the secrets.
+Subsequent `secret put` calls don't ask again.
+
 ```bash
 # Auth.js secret — generate once per environment
 pnpm exec wrangler secret put AUTH_SECRET --env dev
