@@ -81,17 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOnboarding()
         case .revealLogs:
             Logger.shared.revealInFinder()
-        case .toggleShortcutPaused:
-            env.preferences.shortcutPaused.toggle()
         case .startToggleRecording:
             shortcutManager.toggleRecording()
         case .quit:
             NSApp.terminate(nil)
-        case .copyRecent(let id):
-            if let entry = try? env.historyStore.get(id: id) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(entry.finalTranscript, forType: .string)
-            }
         }
     }
 

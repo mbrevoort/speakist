@@ -9,10 +9,8 @@ enum MenuBarAction {
     case openHistory
     case openOnboarding
     case revealLogs
-    case toggleShortcutPaused
     case startToggleRecording
     case quit
-    case copyRecent(String)
 }
 
 @MainActor
@@ -98,19 +96,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         history.target = self
         menu.addItem(history)
 
-        menu.addItem(buildRecentMenu())
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(handleOpenSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
-
-        let pause = NSMenuItem(
-            title: env.preferences.shortcutPaused ? "Resume Shortcut" : "Pause Shortcut",
-            action: #selector(handleTogglePause),
-            keyEquivalent: "")
-        pause.target = self
-        menu.addItem(pause)
 
         menu.addItem(.separator())
 
@@ -124,41 +114,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let about = NSMenuItem(title: "About Speakist", action: #selector(handleAbout), keyEquivalent: "")
-        about.target = self
-        menu.addItem(about)
-
         let quit = NSMenuItem(title: "Quit Speakist", action: #selector(handleQuit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-    }
-
-    private func buildRecentMenu() -> NSMenuItem {
-        let recentMenuItem = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        let recents = Array(env.historyStore.entries.prefix(5))
-        if recents.isEmpty {
-            let empty = NSMenuItem(title: "No recent transcriptions", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            submenu.addItem(empty)
-        } else {
-            for entry in recents {
-                let title = Self.previewTitle(for: entry)
-                let item = NSMenuItem(title: title, action: #selector(handleCopyRecent(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = entry.id
-                submenu.addItem(item)
-            }
-        }
-        recentMenuItem.submenu = submenu
-        return recentMenuItem
-    }
-
-    private static func previewTitle(for entry: TranscriptionEntry) -> String {
-        let text = entry.finalTranscript.isEmpty ? entry.rawTranscript : entry.finalTranscript
-        let oneLine = text.replacingOccurrences(of: "\n", with: " ")
-        let trimmed = oneLine.count > 60 ? String(oneLine.prefix(60)) + "…" : oneLine
-        return trimmed.isEmpty ? "— empty —" : trimmed
     }
 
     // MARK: - Menu handlers
@@ -167,17 +125,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func handleOpenHistory() { dispatch(.openHistory) }
     @objc private func handleOpenOnboarding() { dispatch(.openOnboarding) }
     @objc private func handleRevealLogs() { dispatch(.revealLogs) }
-    @objc private func handleTogglePause() { dispatch(.toggleShortcutPaused) }
     @objc private func handleStartToggle() { dispatch(.startToggleRecording) }
     @objc private func handleQuit() { dispatch(.quit) }
-    @objc private func handleAbout() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
-    }
-    @objc private func handleCopyRecent(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        dispatch(.copyRecent(id))
-    }
 
     // MARK: - Icon state
 
@@ -252,7 +201,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func statusLine() -> String {
         if env.preferences.shortcutPaused { return "Paused" }
-        return "Ready • Deepgram \(env.preferences.deepgramModel.rawValue)"
+        return "Ready"
     }
 }
 

@@ -20,7 +20,7 @@ struct BrandHeader: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case account, general, shortcuts, audio, transcription, vocabulary, history, usage, about
+    case account, general, shortcuts, audio, transcription, vocabulary, history, about
 
     var id: String { rawValue }
 
@@ -33,7 +33,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .transcription: return "Transcription"
         case .vocabulary: return "Vocabulary"
         case .history: return "History"
-        case .usage: return "Usage"
         case .about: return "About"
         }
     }
@@ -47,14 +46,13 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .transcription: return "waveform"
         case .vocabulary: return "character.book.closed"
         case .history: return "clock.arrow.circlepath"
-        case .usage: return "chart.bar"
         case .about: return "info.circle"
         }
     }
 }
 
 struct SettingsWindow: View {
-    @State private var selection: SettingsSection = .general
+    @State private var selection: SettingsSection = .account
 
     var body: some View {
         NavigationSplitView {
@@ -107,7 +105,6 @@ struct SettingsWindow: View {
         case .transcription: TranscriptionSettingsView()
         case .vocabulary: VocabularySettingsView()
         case .history: HistorySettingsView()
-        case .usage: UsageSettingsView()
         case .about: AboutSettingsView()
         }
     }
@@ -250,6 +247,10 @@ struct AccountSettingsView: View {
                                 NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard/billing"))
                             }
                             .buttonStyle(.bordered)
+                            Button("Usage") {
+                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard/usage"))
+                            }
+                            .buttonStyle(.bordered)
                             Spacer()
                             Button("Sign out", role: .destructive) {
                                 manager.signOut()
@@ -298,12 +299,9 @@ struct GeneralSettingsView: View {
                 Toggle("Play start/stop sounds", isOn: Binding(
                     get: { prefs.playSounds },
                     set: { prefs.playSounds = $0 }))
-                Toggle("Show HUD overlay while recording", isOn: Binding(
+                Toggle("Show overlay UI while recording", isOn: Binding(
                     get: { prefs.showHUD },
                     set: { prefs.showHUD = $0 }))
-                Toggle("Pause dictation shortcut", isOn: Binding(
-                    get: { prefs.shortcutPaused },
-                    set: { prefs.shortcutPaused = $0 }))
             }
         }
         .formStyle(.grouped)
@@ -314,6 +312,8 @@ struct GeneralSettingsView: View {
 // MARK: - Shortcuts
 
 struct ShortcutsSettingsView: View {
+    @EnvironmentObject var prefs: Preferences
+
     var body: some View {
         Form {
             Section("Dictation") {
@@ -333,6 +333,14 @@ struct ShortcutsSettingsView: View {
                     KeyboardShortcuts.Recorder(for: .toggleRecord)
                 }
                 Text("Optional alternative for longer dictations where holding is uncomfortable.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            }
+            Section {
+                Toggle("Pause dictation shortcut", isOn: Binding(
+                    get: { prefs.shortcutPaused },
+                    set: { prefs.shortcutPaused = $0 }))
+                Text("Temporarily mute the global shortcut without clearing it. Useful during video calls or screen recordings.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
@@ -418,23 +426,13 @@ struct TranscriptionSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Transcription") {
-                Picker("Model", selection: Binding(
-                    get: { prefs.deepgramModel },
-                    set: { prefs.deepgramModel = $0 })) {
-                    ForEach(DeepgramModel.allCases) { m in
-                        Text(m.displayName).tag(m)
-                    }
-                }
+            Section("Language") {
                 Picker("Language", selection: Binding(
                     get: { prefs.language },
                     set: { prefs.language = $0 })) {
                     Text("English").tag("en")
                     Text("Auto-detect").tag("")
                 }
-                Text("Transcription is powered by Deepgram. Your Speakist account handles billing — no API key to manage here. Manage your plan in Account.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
             }
 
             Section {
@@ -474,7 +472,7 @@ struct TranscriptionSettingsView: View {
             }
 
             Section("Diagnostics") {
-                Button(testing ? "Recording…" : "Test recording (2 s)") {
+                Button(testing ? "Recording…" : "Test recording (2 seconds)") {
                     Task { await runTestRecording() }
                 }
                 .disabled(testing || env.permissions.mic != .granted)
@@ -671,112 +669,90 @@ struct HistorySettingsView: View {
     }
 }
 
-// MARK: - Usage
-
-struct UsageSettingsView: View {
-    @EnvironmentObject var prefs: Preferences
-    @EnvironmentObject var usage: UsageTracker
-    @State private var window: UsageWindow = .last30Days
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Usage & estimated cost").font(.title3.weight(.semibold))
-                Spacer()
-                Picker("", selection: $window) {
-                    ForEach(UsageWindow.allCases) { w in
-                        Text(w.title).tag(w)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
-
-            row(label: "Deepgram Nova-3", model: DeepgramModel.nova3.rawValue)
-            row(label: "Deepgram Nova-2", model: DeepgramModel.nova2.rawValue)
-
-            Divider()
-            Text("Rates (USD/min) are editable. Published Deepgram rates change — adjust these to match your account.")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-
-            Form {
-                Section("Rates (USD)") {
-                    rateField(title: "Deepgram Nova-3 / min", value: Binding(
-                        get: { prefs.rateDeepgramNova3 },
-                        set: { prefs.rateDeepgramNova3 = $0 }))
-                    rateField(title: "Deepgram Nova-2 / min", value: Binding(
-                        get: { prefs.rateDeepgramNova2 },
-                        set: { prefs.rateDeepgramNova2 = $0 }))
-                }
-            }
-            .formStyle(.grouped)
-        }
-        .padding()
-    }
-
-    @ViewBuilder
-    private func row(label: String, model: String) -> some View {
-        let rollup = usage.rollup(provider: "deepgram", window: window)
-        let cost = usage.cost(for: rollup, model: model, preferences: prefs)
-        let minutes = rollup.totalAudioSeconds / 60.0
-        HStack {
-            Text(label).frame(width: 220, alignment: .leading)
-            Text("\(rollup.transcriptionCount) transcriptions")
-                .foregroundColor(.secondary)
-                .frame(width: 160, alignment: .leading)
-            Text(String(format: "%.1f min", minutes))
-                .foregroundColor(.secondary)
-                .frame(width: 80, alignment: .trailing)
-            Spacer()
-            Text(String(format: "$%.3f", cost))
-                .font(.system(.body, design: .monospaced))
-        }
-    }
-
-    @ViewBuilder
-    private func rateField(title: String, value: Binding<Double>) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            TextField("", value: value, formatter: Self.rateFormatter)
-                .frame(width: 90)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    private static let rateFormatter: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .decimal
-        f.maximumFractionDigits = 6
-        return f
-    }()
-}
-
 // MARK: - About
 
 struct AboutSettingsView: View {
     @EnvironmentObject var env: AppEnvironment
 
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    }
+
+    private var build: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(nsImage: MenuBarIcon.make(fill: NSColor.speakistPeach))
-                .resizable().aspectRatio(contentMode: .fit)
-                .frame(width: 96, height: 96)
-            Text("Speakist").font(.title.weight(.semibold))
-            if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-                Text("Version \(version)").foregroundColor(.secondary)
+        ScrollView {
+            VStack(spacing: 20) {
+                // App identity
+                VStack(spacing: 10) {
+                    Image(nsImage: MenuBarIcon.make(fill: NSColor.speakistPeach))
+                        .resizable().aspectRatio(contentMode: .fit)
+                        .frame(width: 96, height: 96)
+                    Text("Speakist").font(.title.weight(.semibold))
+                    Text("Version \(version) (build \(build))")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    Button("Check for updates…") {
+                        env.updater.checkForUpdates()
+                    }
+                    .padding(.top, 2)
+                }
+
+                Divider()
+
+                // Privacy copy
+                Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to Deepgram (via a short-lived per-transcription key minted by our backend) for transcription only; neither the audio nor the transcript is stored on our servers.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                // Company
+                VStack(spacing: 6) {
+                    Text("Brevoort Studio LLC")
+                        .font(.headline)
+                    Text("Colorado, USA")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 12) {
+                        Button("Website") {
+                            if let url = URL(string: "https://brevoortstudio.com") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.link)
+                        Button("Contact") {
+                            if let url = URL(string: "mailto:hello@brevoortstudio.com") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.link)
+                        Button("Privacy") {
+                            if let url = URL(string: "https://brevoortstudio.com/privacy") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.link)
+                        Button("Terms") {
+                            if let url = URL(string: "https://brevoortstudio.com/terms") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.link)
+                    }
+                    Text("© \(Calendar.current.component(.year, from: Date())) Brevoort Studio LLC. All rights reserved.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 2)
+                }
             }
-            Button("Check for updates…") {
-                env.updater.checkForUpdates()
-            }
-            Divider()
-            Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to Deepgram (via a short-lived per-transcription key minted by our backend) for transcription only; neither the audio nor the transcript is stored on our servers.")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+            .padding(.vertical, 24)
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity)
         }
-        .padding()
-        .frame(maxWidth: .infinity)
     }
 }
