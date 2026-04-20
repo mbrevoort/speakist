@@ -70,7 +70,7 @@ the remote DB. `next dev` reads this.
 Sanity check:
 
 ```bash
-pnpm exec wrangler d1 execute speakist-dev --local --command="select name from sqlite_master where type='table'"
+pnpm exec wrangler d1 execute speakist-dev --local --env dev --command="select name from sqlite_master where type='table'"
 ```
 
 Should print ~13 tables.
@@ -142,12 +142,15 @@ pnpm db:seed:dev
 pnpm db:migrate:prod
 ```
 
-Set production secrets (prompts for value, encrypted at rest):
+Set Worker secrets (prompts for value, encrypted at rest). Every command
+needs `--env dev` or `--env production` since our `wrangler.toml` declares
+both environments explicitly — wrangler won't guess.
 
 ```bash
-pnpm exec wrangler secret put AUTH_SECRET
-pnpm exec wrangler secret put AUTH_URL
-pnpm exec wrangler secret put RESEND_API_KEY
+# For the dev Worker:
+pnpm exec wrangler secret put AUTH_SECRET --env dev
+pnpm exec wrangler secret put AUTH_URL --env dev
+pnpm exec wrangler secret put RESEND_API_KEY --env dev
 # ... etc for every secret in .env.example
 
 # For prod:
@@ -155,8 +158,8 @@ pnpm exec wrangler secret put AUTH_SECRET --env production
 # ... etc
 ```
 
-Attach a custom domain (optional) in the Cloudflare dashboard:
-Workers → speakist-web-prod → Settings → Triggers → Custom Domains.
+For the full dev deploy walkthrough (custom domain, Stripe webhook, invite-
+only toggle, etc.), see [DEPLOYING.md](./DEPLOYING.md).
 
 ## Services you'll need (free tiers fine)
 

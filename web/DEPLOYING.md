@@ -45,12 +45,12 @@ actual Cloudflare-hosted D1, use `--remote`:
 pnpm db:migrate:dev
 ```
 
-This is `wrangler d1 migrations apply speakist-dev --remote`. You'll see
-it apply everything from `drizzle/migrations/*.sql` in order.
+This is `wrangler d1 migrations apply speakist-dev --remote --env dev`.
+You'll see it apply everything from `drizzle/migrations/*.sql` in order.
 
 Sanity check:
 ```bash
-pnpm exec wrangler d1 execute speakist-dev --remote \
+pnpm exec wrangler d1 execute speakist-dev --remote --env dev \
   --command="SELECT name FROM sqlite_master WHERE type='table'"
 ```
 Should print ~13 tables.
@@ -81,45 +81,45 @@ Every `wrangler secret put X` prompts for the value — paste, hit enter.
 
 ```bash
 # Auth.js secret — generate once per environment
-pnpm exec wrangler secret put AUTH_SECRET
+pnpm exec wrangler secret put AUTH_SECRET --env dev
 # value: openssl rand -base64 33
 
 # Auth.js needs the public URL to generate correct callback links
-pnpm exec wrangler secret put AUTH_URL
+pnpm exec wrangler secret put AUTH_URL --env dev
 # value: https://speakist-dev.brevoortstudios.com
 
 # AES-256 key for encrypting Deepgram keys at rest
-pnpm exec wrangler secret put APP_ENCRYPTION_KEY
+pnpm exec wrangler secret put APP_ENCRYPTION_KEY --env dev
 # value: openssl rand -base64 32
 
 # Public site URL (read by metadataBase, used in emails, OG tags)
-pnpm exec wrangler secret put NEXT_PUBLIC_SITE_URL
+pnpm exec wrangler secret put NEXT_PUBLIC_SITE_URL --env dev
 # value: https://speakist-dev.brevoortstudios.com
 
 # Resend email
-pnpm exec wrangler secret put RESEND_API_KEY
+pnpm exec wrangler secret put RESEND_API_KEY --env dev
 # value: re_... from https://resend.com/api-keys
-pnpm exec wrangler secret put RESEND_FROM_EMAIL
+pnpm exec wrangler secret put RESEND_FROM_EMAIL --env dev
 # value: noreply@speakist-dev.brevoortstudios.com  (domain must be verified in Resend)
 
 # Stripe (test mode — safe to share with dev env)
-pnpm exec wrangler secret put STRIPE_SECRET_KEY
+pnpm exec wrangler secret put STRIPE_SECRET_KEY --env dev
 # value: sk_test_... from https://dashboard.stripe.com/test/apikeys
 # STRIPE_PUBLISHABLE_KEY is optional for our current code (no Stripe.js on client)
 # STRIPE_WEBHOOK_SECRET — set AFTER step 6 when you create the dev webhook endpoint
 
 # Deepgram (the *project ID* only — the master key goes into /admin/system)
-pnpm exec wrangler secret put DEEPGRAM_PROJECT_ID
+pnpm exec wrangler secret put DEEPGRAM_PROJECT_ID --env dev
 # value: the UUID from Deepgram → Project Settings
 
 # Super admin email (defaults to mike@brevoort.com if unset)
-pnpm exec wrangler secret put SUPER_ADMIN_EMAIL
+pnpm exec wrangler secret put SUPER_ADMIN_EMAIL --env dev
 # value: mike@brevoort.com
 ```
 
 List what's set (without values) to sanity check:
 ```bash
-pnpm exec wrangler secret list
+pnpm exec wrangler secret list --env dev
 ```
 
 ---
@@ -195,7 +195,7 @@ Click the endpoint → **Signing secret** → Reveal → copy the `whsec_...` va
 Then back in terminal:
 
 ```bash
-pnpm exec wrangler secret put STRIPE_WEBHOOK_SECRET
+pnpm exec wrangler secret put STRIPE_WEBHOOK_SECRET --env dev
 # paste the whsec_...
 ```
 

@@ -9,18 +9,19 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
 
-    "cf:build": "opennextjs-cloudflare build",
-    "cf:preview": "opennextjs-cloudflare preview",
-    "deploy:dev": "opennextjs-cloudflare deploy",
+    "cf:build": "opennextjs-cloudflare build --env dev",
+    "cf:preview": "opennextjs-cloudflare preview --env dev",
+    "deploy:dev": "opennextjs-cloudflare deploy --env dev",
     "deploy:prod": "opennextjs-cloudflare deploy --env production",
 
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply speakist-dev --local",
-    "db:migrate:dev": "wrangler d1 migrations apply speakist-dev --remote",
-    "db:migrate:prod": "wrangler d1 migrations apply speakist-prod --remote",
+    "db:migrate:local": "wrangler d1 migrations apply speakist-dev --local --env dev",
+    "db:migrate:dev": "wrangler d1 migrations apply speakist-dev --remote --env dev",
+    "db:migrate:prod": "wrangler d1 migrations apply speakist-prod --remote --env production",
     "db:studio": "drizzle-kit studio",
-    "db:seed:local": "wrangler d1 execute speakist-dev --local --file=scripts/seed.sql",
-    "db:seed:dev": "wrangler d1 execute speakist-dev --remote --file=scripts/seed.sql"
+    "db:seed:local": "wrangler d1 execute speakist-dev --local --env dev --file=scripts/seed.sql",
+    "db:seed:dev": "wrangler d1 execute speakist-dev --remote --env dev --file=scripts/seed.sql",
+    "db:seed:prod": "wrangler d1 execute speakist-prod --remote --env production --file=scripts/seed.sql"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.2",

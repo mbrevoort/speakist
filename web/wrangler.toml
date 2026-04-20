@@ -1,23 +1,25 @@
 # Cloudflare Worker configuration for Speakist.
 #
-# OpenNext emits a single Worker at .open-next/worker.js that serves the
-# entire Next.js app (SSR + API routes), with static assets under
-# .open-next/assets/ served via the ASSETS binding.
+# Two environments, both explicitly named so wrangler 4 never needs to guess:
+#   * [env.dev]         → speakist-web-dev Worker + speakist-dev D1
+#   * [env.production]  → speakist-web-prod Worker + speakist-prod D1
 #
-# Dev vs prod are separate Workers (different `name`, different D1 dbs)
-# managed via wrangler environments. `pnpm deploy:dev` uses the default
-# block below; `pnpm deploy:prod` uses [env.production].
+# Everything at the top level (compatibility_date, assets, observability) is
+# shared by both envs. Each env adds its own Worker name + D1 binding.
 #
-# After running `wrangler d1 create speakist-dev` and ...-prod, paste the
-# returned `database_id` values into the right blocks below.
+# Commands always pass --env:
+#   Local dev:     pnpm dev                 (next.config.ts passes environment: "dev")
+#   Deploy dev:    pnpm deploy:dev          (--env dev)
+#   Deploy prod:   pnpm deploy:prod         (--env production)
+#   Set secrets:   pnpm exec wrangler secret put X --env dev | --env production
+#   Migrate:       pnpm db:migrate:dev | :prod | :local
+#
+# After `wrangler d1 create speakist-{dev,prod}`, paste the returned
+# `database_id` values into the right blocks below.
 
-name = "speakist-web-dev"
-main = ".open-next/worker.js"
 compatibility_date = "2026-04-19"
-# nodejs_compat activates the Workers Node.js v2 compat layer (auto at
-# compatibility_date >= 2024-09-23). Required so Auth.js + Drizzle + Stripe
-# SDK run unmodified.
 compatibility_flags = ["nodejs_compat"]
+main = ".open-next/worker.js"
 
 [assets]
 directory = ".open-next/assets"
@@ -26,34 +28,30 @@ binding = "ASSETS"
 [observability]
 enabled = true
 
-# -----------------------------------------------------------------------------
-# Default (dev) bindings — used by `wrangler dev`, `opennextjs-cloudflare
-# preview`, and `opennextjs-cloudflare deploy` (which becomes the
-# `speakist-web-dev` Worker).
-# -----------------------------------------------------------------------------
+# ─── dev ────────────────────────────────────────────────────────────────────
 
-[[d1_databases]]
+[env.dev]
+name = "speakist-web-dev"
+
+[[env.dev.d1_databases]]
 binding = "DB"
 database_name = "speakist-dev"
 database_id = "bb47a53f-9aa2-4a9e-b98a-68350cd90cb2"
 migrations_dir = "drizzle/migrations"
 
-# [[kv_namespaces]]
+# [[env.dev.kv_namespaces]]
 # binding = "CACHE"
 # id = "__FILL_ME_IN__"
 
-# [[r2_buckets]]
+# [[env.dev.r2_buckets]]
 # binding = "AUDIO"
 # bucket_name = "speakist-audio-dev"
 
-# [[queues.producers]]
+# [[env.dev.queues.producers]]
 # queue = "speakist-tasks-dev"
 # binding = "QUEUE"
 
-# -----------------------------------------------------------------------------
-# Production — invoked via `opennextjs-cloudflare deploy --env production`.
-# A fully separate Worker name + D1 database. No shared state with dev.
-# -----------------------------------------------------------------------------
+# ─── production ─────────────────────────────────────────────────────────────
 
 [env.production]
 name = "speakist-web-prod"
