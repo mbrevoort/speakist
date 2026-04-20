@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- "developer-id" produces a signed .app suitable for direct
+         distribution outside the Mac App Store. Notarization is done
+         separately in the release script via notarytool. -->
+    <key>method</key>
+    <string>developer-id</string>
+
+    <!-- Matches DEVELOPMENT_TEAM in project.yml -->
+    <key>teamID</key>
+    <string>Q5T8FJNX57</string>
+
+    <!-- Let Xcode pick the right Developer ID cert + provisioning profile
+         from the keychain automatically. -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- Strip Swift concurrency symbols etc. from release build. -->
+    <key>stripSwiftSymbols</key>
+    <true/>
+
+    <!-- Upload symbols to Apple so Apple-provided crash reports are
+         symbolicated. Set false if you don't want Apple storing your
+         symbol tables. -->
+    <key>uploadSymbols</key>
+    <false/>
+</dict>
+</plist>

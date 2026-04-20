@@ -109,11 +109,12 @@ export default async function DashboardHome() {
               hold <kbd className="font-mono rounded border border-border bg-muted px-1.5 py-0.5 text-xs">⌃⌘X</kbd> anywhere to dictate.
             </p>
             <div className="mt-4 flex items-center gap-3">
-              <Button disabled title="Available in Phase 6">
-                Download · Coming soon
+              <Button asChild>
+                <a href="/api/download/mac">Download for Mac</a>
               </Button>
               <span className="text-xs text-muted-foreground">
-                v1 download lands with Mac sign-in support (Phase 6).
+                Requires macOS 14 (Sonoma) or newer. Free to install — you
+                only pay per word transcribed.
               </span>
             </div>
           </div>
