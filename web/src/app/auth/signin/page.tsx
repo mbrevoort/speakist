@@ -5,9 +5,16 @@
 // "resend"; we call it "Email" in the UI because the user shouldn't need to
 // know what Resend is.
 //
-// The action uses `getAuth()` (not a static `signIn` import) because our
-// Auth.js config builds lazily with the D1 binding — see src/lib/auth.ts.
+// Two pieces of query-param plumbing:
+//   1. If the visitor is *already* signed in (cookie valid), skip the form
+//      entirely and send them where they meant to go — Auth.js's magic-link
+//      callback lands back here when callbackUrl=/auth/signin, which would
+//      otherwise look like "you're signed out" even though you aren't.
+//   2. `?callbackUrl=<path>` is echoed into the form as a hidden input so
+//      Auth.js redirects the magic-link click back to the original
+//      destination (e.g. /link?code=XXXX for the Mac device flow).
 
+import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { getAuth } from "@/lib/auth";
 
@@ -15,7 +22,22 @@ export const metadata = {
   title: "Sign in — Speakist",
 };
 
-export default function SignInPage() {
+export default async function SignInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ callbackUrl?: string }>;
+}) {
+  const { callbackUrl } = await searchParams;
+  const { auth } = await getAuth();
+  const session = await auth();
+
+  // Already signed in → go where they were trying to go.
+  if (session?.user) {
+    redirect(sanitizeCallback(callbackUrl) ?? "/dashboard");
+  }
+
+  const cb = sanitizeCallback(callbackUrl) ?? "/dashboard";
+
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-center">
@@ -29,6 +51,9 @@ export default function SignInPage() {
         action={async (formData) => {
           "use server";
           const { signIn } = await getAuth();
+          // Auth.js reads `callbackUrl` directly off the FormData and uses it
+          // as the redirect destination after the magic-link callback
+          // verifies. The hidden input below populates it.
           await signIn("resend", formData);
         }}
         className="mt-8 space-y-4"
@@ -52,6 +77,9 @@ export default function SignInPage() {
           />
         </div>
 
+        <input type="hidden" name="callbackUrl" value={cb} />
+        <input type="hidden" name="redirectTo" value={cb} />
+
         <Button type="submit" size="lg" className="w-full">
           Send sign-in link
         </Button>
@@ -63,4 +91,16 @@ export default function SignInPage() {
       </p>
     </div>
   );
+}
+
+/**
+ * Only allow same-origin relative paths as callbackUrl. An attacker could
+ * otherwise hand us `?callbackUrl=https://evil.com` and we'd redirect after
+ * signin. Relative "/..." paths are safe; anything else we reject.
+ */
+function sanitizeCallback(raw: string | undefined): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//")) return null; // protocol-relative
+  return raw;
 }

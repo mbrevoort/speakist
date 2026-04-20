@@ -32,12 +32,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
+        // Dynamic activation policy: when a user-facing window (Settings,
+        // History, Onboarding) is visible, become a regular app so we show
+        // up in Cmd+Tab and the Dock. When no such window is open, revert
+        // to .accessory (menu-bar-only). See updateActivationPolicy().
+        let center = NotificationCenter.default
+        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.updateActivationPolicy() }
+        }
+        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                // Poll after the window actually goes away — willClose fires
+                // just before isVisible flips.
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                self?.updateActivationPolicy()
+            }
+        }
+
         if !env.preferences.onboardingCompleted {
             showOnboarding()
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Switch between `.regular` (Dock icon + Cmd+Tab presence) when any
+    /// user-facing window is on screen, and `.accessory` (menu-bar-only) when
+    /// none are. We filter to `canBecomeKey` + `.normal` level so the HUD
+    /// panel and status-bar items don't accidentally keep us in .regular.
+    private func updateActivationPolicy() {
+        let hasUserWindow = NSApp.windows.contains { w in
+            w.isVisible && w.canBecomeKey && w.level == .normal
+        }
+        let target: NSApplication.ActivationPolicy = hasUserWindow ? .regular : .accessory
+        guard NSApp.activationPolicy() != target else { return }
+        NSApp.setActivationPolicy(target)
+    }
 
     // MARK: - Menu actions
 

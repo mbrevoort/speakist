@@ -151,6 +151,43 @@ final class SpeakistAPIClient {
         }
     }
 
+    // MARK: - Identity
+
+    struct MeResponse: Decodable {
+        let id: String
+        let email: String
+        let displayName: String?
+        let isSuperAdmin: Bool
+        let org: OrgInfo?
+
+        struct OrgInfo: Decodable {
+            let id: String
+            let name: String
+            let slug: String
+            let role: String
+            let isComped: Bool
+            let balanceMillicents: Int
+
+            enum CodingKeys: String, CodingKey {
+                case id, name, slug, role
+                case isComped = "is_comped"
+                case balanceMillicents = "balance_millicents"
+            }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, email, org
+            case displayName = "display_name"
+            case isSuperAdmin = "is_super_admin"
+        }
+    }
+
+    /// Who am I? Called after sign-in (for the Settings "Signed in as …"
+    /// line) and on launch-with-existing-token (to rehydrate state).
+    func fetchMe() async throws -> MeResponse {
+        try await perform(path: "/api/me", method: "GET", body: nil, auth: true)
+    }
+
     // MARK: - Usage reporting
 
     struct UsageResponse: Decodable {

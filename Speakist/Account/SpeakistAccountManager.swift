@@ -21,10 +21,22 @@ import AppKit
 /// upward, AccountManager owns state + workflow.
 @MainActor
 final class SpeakistAccountManager: ObservableObject {
+    /// Identity shown in the Settings Account tab. Populated by /api/me
+    /// after sign-in and on rehydration; `nil` while a fetch is still in
+    /// flight or if the server is unreachable — the UI falls back to a
+    /// generic "Signed in" in that case.
+    struct Identity: Equatable {
+        var email: String
+        var displayName: String?
+        var orgName: String?
+        var orgRole: String?
+        var balanceMillicents: Int?
+    }
+
     enum SignInState: Equatable {
         case signedOut
         case signingIn(userCode: String, verificationURL: URL, expiresAt: Date)
-        case signedIn(email: String?)  // email may be nil until we fetch /api/me (Phase 7)
+        case signedIn(identity: Identity?)  // nil identity = we know you're signed in but /api/me hasn't responded yet
     }
 
     @Published private(set) var state: SignInState = .signedOut
@@ -38,10 +50,10 @@ final class SpeakistAccountManager: ObservableObject {
         self.keychain = keychain
 
         // Rehydrate: if we already have a saved token, assume signed-in.
-        // email remains nil until a future /api/me probe; UI can display
-        // "Signed in" without the email for now. Phase 7 polish.
+        // Identity is nil until refreshIdentity() completes; UI falls back
+        // to "Signed in" while that's in flight.
         if let token = keychain.get(.refreshToken), !token.isEmpty {
-            self.state = .signedIn(email: nil)
+            self.state = .signedIn(identity: nil)
         }
     }
 
@@ -49,6 +61,10 @@ final class SpeakistAccountManager: ObservableObject {
     /// deadlock with APIClient needing a token provider back to us).
     func bind(client: SpeakistAPIClient) {
         self.client = client
+        // Kick off an identity fetch if we rehydrated as signed-in.
+        if case .signedIn = state {
+            Task { await refreshIdentity() }
+        }
     }
 
     /// Current bearer token, if any. Callable from any task via the @MainActor
@@ -140,13 +156,42 @@ final class SpeakistAccountManager: ObservableObject {
 
     private func completeSignIn(token: String) {
         keychain.set(token, for: .refreshToken)
-        state = .signedIn(email: nil)
+        state = .signedIn(identity: nil)
         lastError = nil
         pollTask = nil
         Logger.shared.info("signed in; token stored in keychain")
 
-        // Phase 6 follow-up (chunk 3): fetch /api/vocabulary once here so the
-        // correction store is hydrated before the first transcription.
+        // Fetch identity so the Settings view can show email + org right
+        // away instead of a bare "Signed in" placeholder.
+        Task { await refreshIdentity() }
+
+        // Future (v1.1): fetch /api/vocabulary here so CorrectionStore is
+        // hydrated before the first transcription.
+    }
+
+    /// Populate (or refresh) the identity shown in the Settings Account tab.
+    /// Non-fatal if it fails — we stay `.signedIn(identity: nil)` and the
+    /// UI renders a generic signed-in state.
+    func refreshIdentity() async {
+        guard let client else { return }
+        guard case .signedIn = state else { return }
+        do {
+            let me = try await client.fetchMe()
+            let identity = Identity(
+                email: me.email,
+                displayName: me.displayName,
+                orgName: me.org?.name,
+                orgRole: me.org?.role,
+                balanceMillicents: me.org?.balanceMillicents
+            )
+            state = .signedIn(identity: identity)
+        } catch SpeakistAPIClient.Error.notSignedIn {
+            // Server says our token is no good. Treat as signed out.
+            signOut()
+        } catch {
+            Logger.shared.warn("refreshIdentity failed: \(String(describing: error))")
+            // leave state as .signedIn(identity: nil)
+        }
     }
 
     private func handleSignInFailure(_ err: SpeakistAPIClient.Error) {

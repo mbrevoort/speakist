@@ -115,6 +115,24 @@ struct SettingsWindow: View {
 
 // MARK: - Account
 
+/// BIGINT millicents → "$N.NN" for the Settings display. Mirrors the web's
+/// formatDollars() helper. Kept inline here because it's only one consumer.
+private func formatDollars(balanceMillicents: Int) -> String {
+    let dollars = Double(balanceMillicents) / 100_000.0
+    return NumberFormatter.usd.string(from: NSNumber(value: dollars)) ?? "$\(dollars)"
+}
+
+private extension NumberFormatter {
+    static let usd: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.currencyCode = "USD"
+        f.minimumFractionDigits = 2
+        f.maximumFractionDigits = 2
+        return f
+    }()
+}
+
 struct AccountSettingsView: View {
     @EnvironmentObject var prefs: Preferences
     @EnvironmentObject var manager: SpeakistAccountManager
@@ -172,20 +190,57 @@ struct AccountSettingsView: View {
                     }
                     .padding(.vertical, 6)
 
-                case .signedIn(let email):
-                    VStack(alignment: .leading, spacing: 10) {
+                case .signedIn(let identity):
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 10) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
                                 .font(.system(size: 20))
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text("Signed in")
-                                    .font(.headline)
-                                Text(email ?? "Manage billing + team at \(prefs.apiBaseURL.absoluteString)/dashboard")
-                                    .font(.footnote)
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let id = identity {
+                                    Text(id.displayName ?? id.email)
+                                        .font(.headline)
+                                    Text(id.email)
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Signed in")
+                                        .font(.headline)
+                                    Text("Loading your account details…")
+                                        .font(.footnote)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                        }
+
+                        if let id = identity, let org = id.orgName {
+                            Divider()
+                            HStack(spacing: 8) {
+                                Image(systemName: "building.2")
                                     .foregroundColor(.secondary)
+                                    .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(org).font(.callout.weight(.medium))
+                                    HStack(spacing: 6) {
+                                        if let role = id.orgRole {
+                                            Text(role.capitalized)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let bal = id.balanceMillicents {
+                                            Text("·")
+                                                .foregroundColor(.secondary.opacity(0.5))
+                                            Text(formatDollars(balanceMillicents: bal))
+                                                .font(.caption.monospacedDigit())
+                                                .foregroundColor(bal < 0 ? .red : .secondary)
+                                        }
+                                    }
+                                }
+                                Spacer()
                             }
                         }
+
                         HStack {
                             Button("Open dashboard") {
                                 NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard"))
@@ -202,6 +257,7 @@ struct AccountSettingsView: View {
                         }
                     }
                     .padding(.vertical, 6)
+                    .task { await manager.refreshIdentity() }
                 }
 
                 if let err = manager.lastError {
