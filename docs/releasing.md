@@ -79,12 +79,12 @@ install.
 ### 1.2 Command-line tools
 
 ```bash
-brew install xcodegen create-dmg gh
+brew install xcodegen create-dmg jq
 ```
 
 - `xcodegen` — regenerates `Speakist.xcodeproj` from `project.yml`
 - `create-dmg` — builds the drag-to-Applications DMG
-- `gh` — GitHub CLI, for `make release-publish`
+- `jq` — used by the release script to build the publish-API JSON payload safely
 
 ### 1.3 Sparkle tools + keypair
 
@@ -143,22 +143,60 @@ similar.
 `SPEAKIST_NOTARY` is the profile name the release script reads (via the
 `NOTARY_PROFILE` env var — defaults to `SPEAKIST_NOTARY`).
 
-### 1.5 GitHub repo for releases
+### 1.5 R2 buckets for DMG hosting
 
-The release script uploads DMGs as GitHub Release assets and generates
-download URLs against that repo. Edit `scripts/release.sh`'s `GITHUB_REPO`
-value (or set `GITHUB_REPO=owner/repo` in your shell) to point at your
-repo. Then on the web side, set the matching Worker secret so the
-`/api/download/mac` redirect knows where to look:
+DMGs live on Cloudflare R2 behind a custom domain per env:
+
+| Env | Bucket | Custom domain |
+|---|---|---|
+| dev | `speakist-releases-dev` | `downloads-dev.brevoortstudio.com` |
+| prod | `speakist-releases-prod` | `downloads.speakist.ai` |
+
+One-time setup — do both envs:
 
 ```bash
 cd web
-pnpm exec wrangler secret put GITHUB_REPO --env dev
-# value: brevoortstudio/speakist (or whatever you pick)
-# repeat for --env production when you ship
+pnpm exec wrangler r2 bucket create speakist-releases-dev
+pnpm exec wrangler r2 bucket create speakist-releases-prod
 ```
 
-One-time setup: `gh auth login`.
+Then attach the custom domains via the Cloudflare dashboard (can't be done
+via wrangler CLI at the moment):
+
+1. Dashboard → R2 → `speakist-releases-dev` → **Settings** → **Custom Domains** → **Connect Domain**
+2. Enter `downloads-dev.brevoortstudio.com`
+3. Cloudflare provisions TLS + inserts a CNAME; propagation is ~1 minute
+4. Same for `speakist-releases-prod` → `downloads.speakist.ai` once that
+   zone is on Cloudflare (prod domain can be attached later — dev is
+   enough to start shipping)
+
+### 1.6 Publish-token secret
+
+The release script POSTs to `/api/admin/releases/publish` on the Worker
+to register each new release in D1. Protected by a shared-secret token:
+
+```bash
+# Generate once
+openssl rand -base64 32
+
+# Set it on each env that accepts releases:
+cd web
+pnpm exec wrangler secret put RELEASE_PUBLISH_TOKEN --env dev
+pnpm exec wrangler secret put RELEASE_PUBLISH_TOKEN --env production
+# paste the same value for both, or different ones — they're independent
+```
+
+Then export the matching value in your shell so `scripts/release.sh`
+can send it:
+
+```bash
+# ~/.zshrc (or similar)
+export SPEAKIST_PUBLISH_TOKEN_DEV="..."
+export SPEAKIST_PUBLISH_TOKEN_PROD="..."
+```
+
+Dev-channel releases use the DEV token against the dev Worker; beta +
+stable releases use the PROD token against the prod Worker.
 
 ---
 
@@ -189,61 +227,46 @@ This runs `scripts/release.sh`, which:
 9. `stapler staple` the notary ticket onto the `.app`
 10. `create-dmg` produces `build/Speakist-0.2.0{-dev|-beta}.dmg`
 11. `sign_update` (from Sparkle) computes an EdDSA signature for the DMG
-12. Restores `project.yml` — **keeping the version bump, discarding the
-    channel swap** — so you can commit the version change without polluting
-    stable's defaults with dev values
-13. Prints a ready-to-paste `<item>` XML block for the channel's appcast file
+12. **Uploads the DMG to the channel's R2 bucket** via
+    `wrangler r2 object put --remote`
+13. **POSTs to `/api/admin/releases/publish`** with the signature + DMG URL;
+    the Worker inserts a row into the `releases` D1 table
+14. Restores `project.yml` — **keeping the version bump, discarding the
+    channel swap**
 
 Expect 5–10 minutes. The notarization step is the slowest; you're waiting
 on Apple's queue.
 
-### 2.2 Upload to GitHub Releases
+**The release is live the moment the publish API call returns 200.** The
+dynamic `/appcast*.xml` endpoints on the Worker immediately reflect the
+new version — no `pnpm deploy:*` needed. No manual appcast edits, no
+git-commit-to-ship.
 
-If you want the script to also upload:
+### 2.2 Commit the version bump
+
+The only thing left is persisting the version bump in git:
 
 ```bash
-make release-publish VERSION=0.2.0 CHANNEL=dev
+git add project.yml
+git commit -m "Release 0.2.0 ($CHANNEL)"
+git push
 ```
 
-This also passes `--prerelease` to `gh release create` for non-stable
-channels so they don't show up as the "Latest" release on GitHub.
+There's no appcast file to edit (dynamic now), no release artifacts in
+the repo, no GitHub Release to create.
 
-Otherwise, do it manually:
+### 2.3 (Legacy) Where stuff used to live
 
-```bash
-gh release create v0.2.0-dev build/Speakist-0.2.0-dev.dmg \
-  --title "Speakist 0.2.0 (dev)" \
-  --notes "..." \
-  --prerelease
-```
+Previous versions of this pipeline used GitHub Releases + static
+`web/public/appcast*.xml` files. That's gone — DMGs are on R2, appcasts
+are dynamic. Nothing to deploy to the Worker per-release; only when
+the Worker **code** changes do you `pnpm deploy:*`.
 
-Release tags are channel-suffixed — stable is `v0.2.0`, beta is
-`v0.2.0-beta`, dev is `v0.2.0-dev`. Keeping tags distinct avoids a
-beta release overwriting a stable one of the same version.
-
-### 2.3 Update appcast + deploy web
-
-Paste the `<item>` block from the release script's output into the
-channel-appropriate appcast file:
-
-- stable → `web/public/appcast.xml`
-- beta → `web/public/appcast-beta.xml`
-- dev → `web/public/appcast-dev.xml`
-`web/public/appcast.xml`, **above** any existing `<item>` blocks (Sparkle
-reads newest-first).
+### Old "deploy web" step — no longer needed
 
 ```bash
-git add project.yml web/public/appcast.xml
-git commit -m "Release 0.2.0"
-```
-
-Deploy to the environment that serves this channel's appcast:
-
-```bash
-cd web
-
-# Dev channel — appcast is hosted on the dev Worker:
-pnpm deploy:dev
+# cd web
+# pnpm deploy:dev / :prod   ← only when YOUR CODE changes, not per-release
 
 # Beta or stable channel — appcast is hosted on the prod Worker:
 pnpm deploy:prod
@@ -271,33 +294,51 @@ git push --tags   # if using release-publish, the tag is already there
 
 **Download path (new users):**
 
-1. Visit `https://speakist.ai/dashboard` (must be signed in)
-2. Click **Download for Mac**
-3. Browser downloads the DMG
+1. Visit landing page → click **Download for Mac** (or go straight to
+   `https://speakist.ai/api/download/mac`)
+2. Browser 302s to `https://downloads.speakist.ai/Speakist-0.2.0.dmg`
+3. DMG downloads from R2
 4. Mount, drag to Applications, launch → Gatekeeper accepts the notarized build
 
-If either step fails, the most common culprits:
-- Appcast XML malformed — validate with `xmllint web/public/appcast.xml`
+`/api/download/mac` also supports `?channel=beta` and `?channel=dev` for
+beta/dev testers — same 302 flow, different R2 object.
+
+If any step fails:
+- Appcast XML malformed or empty — hit the URL directly in a browser to
+  inspect; if the feed is empty the publish API call didn't insert a row
 - EdDSA signature mismatch — DMG was modified after `sign_update`; rebuild
-- DMG URL 404 — the `enclosure url=` in the appcast doesn't match the
-  actual GitHub Release asset URL; typo or tag mismatch
+- DMG 404 on R2 — the upload step silently failed; re-run `scripts/release.sh`
+  (uploads are idempotent)
+- Publish endpoint 401 — `RELEASE_PUBLISH_TOKEN` (Worker secret) doesn't
+  match `SPEAKIST_PUBLISH_TOKEN_{DEV,PROD}` in your shell
 
 ---
 
 ## 3. Emergency rollback
 
-If a release is bad:
+Releases live in D1, not in static files. Two ways:
 
-1. Delete or unpublish the GitHub Release:
-   ```bash
-   gh release delete v0.2.0 --yes
-   ```
-2. Remove the `<item>` block for 0.2.0 from `web/public/appcast.xml`
-3. `pnpm deploy:prod`
+**A) Yank the release (recommended)** — keeps the row for audit, just
+hides it from the appcast + download redirect. Run a SQL update via
+wrangler (or build a super-admin UI later):
 
-Sparkle will stop seeing 0.2.0 as a valid update on its next poll (by default,
-one hour after the app launches + every 24 hours while running). Users who
-already installed 0.2.0 are stuck on it until you ship 0.2.1.
+```bash
+cd web
+pnpm exec wrangler d1 execute speakist-prod --remote --env production \
+  --command "UPDATE releases SET yanked_at = unixepoch() * 1000, yanked_reason = 'breaks on macOS 14.1' WHERE channel = 'stable' AND version = '0.2.0'"
+```
+
+Next Sparkle poll (hourly by default) will no longer see 0.2.0 as a
+valid update. The DMG stays on R2 — you can delete it manually if you want:
+
+```bash
+pnpm exec wrangler r2 object delete speakist-releases-prod/Speakist-0.2.0.dmg --remote
+```
+
+**B) Hard delete** — remove the row entirely. Use A unless you specifically
+don't want an audit trail.
+
+Users who already installed 0.2.0 are stuck on it until you ship 0.2.1.
 
 ---
 
@@ -306,11 +347,13 @@ already installed 0.2.0 are stuck on it until you ship 0.2.1.
 What's here today is a Mac-only workflow — you run `make release` from your
 own laptop. When you want to move it off your laptop:
 
-- GitHub Actions runner with a `macos-14` image
+- GitHub Actions runner with a `macos-14` image (even with a private source
+  repo, Actions runners + secrets work normally)
 - Store the notarytool app-specific password + the Sparkle private key as
   repo secrets (base64-encode the private key)
-- On tag push (`v*`), the action runs `scripts/release.sh` and `gh release
-  create`
+- On tag push (`v*`), the action runs `scripts/release.sh`
+- Publish-token secrets stay the same — the workflow sets them as env vars
+  before invoking `scripts/release.sh`
 
 This is a meaningful scope of work (credential handling, runner cost,
 pipeline safety), so it's deliberately deferred until the manual flow

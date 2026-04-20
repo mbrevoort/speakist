@@ -46,6 +46,13 @@ enabled = true
 [env.dev]
 name = "speakist-web-dev"
 
+# Public vars (non-secret). scripts/release.sh reads these via the web API
+# to know where to upload DMGs and what URL to register in the releases
+# table. Secrets (RELEASE_PUBLISH_TOKEN, etc.) go via `wrangler secret put`.
+[env.dev.vars]
+RELEASE_DOWNLOAD_BASE_URL = "https://downloads-dev.brevoortstudio.com"
+RELEASE_R2_BUCKET = "speakist-releases-dev"
+
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "speakist-dev"
@@ -71,6 +78,10 @@ name = "speakist-web-prod"
 # Production should only be reachable at speakist.ai, never via the
 # workers.dev fallback. Override the top-level default here.
 workers_dev = false
+
+[env.production.vars]
+RELEASE_DOWNLOAD_BASE_URL = "https://downloads.speakist.ai"
+RELEASE_R2_BUCKET = "speakist-releases-prod"
 
 [[env.production.d1_databases]]
 binding = "DB"

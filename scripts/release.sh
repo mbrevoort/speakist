@@ -1,30 +1,50 @@
 #!/usr/bin/env bash
 #
-# Speakist Mac release pipeline — multi-channel (dev / beta / stable).
+# Speakist Mac release pipeline — multi-channel, distributed from Cloudflare R2.
 #
 # Usage:
 #   scripts/release.sh 0.2.0                           # stable channel
 #   scripts/release.sh 0.2.0 --channel dev             # dev channel
 #   scripts/release.sh 0.2.0 --channel beta            # beta channel
-#   scripts/release.sh 0.2.0 --channel dev --publish   # also upload to GitHub
+#   scripts/release.sh 0.2.0 --notes "..."             # release notes
 #
-# Channel matrix (URLs overrideable via env vars):
+# What this does, end to end:
+#   1. Rewrite project.yml with channel-specific SUFeedURL + API URL
+#   2. Bump version in project.yml
+#   3. xcodegen + xcodebuild archive → export → notarize → staple
+#   4. create-dmg produces the DMG
+#   5. Sparkle sign_update computes the EdDSA signature
+#   6. Upload DMG to the channel's R2 bucket via `wrangler r2 object put`
+#   7. POST to the Worker's /api/admin/releases/publish endpoint so the D1
+#      `releases` table records the new version — dynamic appcast + download
+#      endpoints pick it up immediately
+#   8. Restore project.yml (keep version bump, drop channel injection)
 #
-#   Channel  SUFeedURL                                                API default
-#   -------  -------------------------------------------------------  ------------------------------------
-#   stable   https://speakist.ai/appcast.xml                          https://speakist.ai
-#   beta     https://speakist.ai/appcast-beta.xml                     https://speakist.ai
-#   dev      https://speakist-dev.brevoortstudio.com/appcast-dev.xml  https://speakist-dev.brevoortstudio.com
+# No git push, no manual appcast edits, no `gh release create` — the single
+# source of truth is D1, populated via the publish API.
+#
+# Channel matrix (URLs are overrideable via env vars):
+#
+#   Channel  SUFeedURL                                                API default                               R2 bucket                Download base
+#   -------  -------------------------------------------------------  ---------------------------------------  -----------------------  ----------------------------------------
+#   stable   https://speakist.ai/appcast.xml                          https://speakist.ai                      speakist-releases-prod   https://downloads.speakist.ai
+#   beta     https://speakist.ai/appcast-beta.xml                     https://speakist.ai                      speakist-releases-prod   https://downloads.speakist.ai
+#   dev      https://speakist-dev.brevoortstudio.com/appcast-dev.xml  https://speakist-dev.brevoortstudio.com  speakist-releases-dev    https://downloads-dev.brevoortstudio.com
 #
 # Prerequisites (one-time per machine):
 #   * Xcode + Developer ID Application cert in Keychain for team Q5T8FJNX57
-#   * brew install xcodegen create-dmg gh
+#   * brew install xcodegen create-dmg jq
 #   * Sparkle tools: https://github.com/sparkle-project/Sparkle/releases
-#     copy bin/ to ~/Library/Developer/Sparkle/bin or set SPARKLE_TOOLS
-#   * EdDSA keypair: `$SPARKLE_TOOLS/generate_keys`, paste public key into
-#     project.yml → SUPublicEDKey. BACK UP THE PRIVATE KEY FROM KEYCHAIN.
+#     copy bin/ to ~/Library/Developer/Sparkle/bin (or set SPARKLE_TOOLS)
+#   * EdDSA keypair: $SPARKLE_TOOLS/generate_keys → paste the public key
+#     into project.yml → SUPublicEDKey. BACK UP THE PRIVATE KEY FROM KEYCHAIN.
 #   * notarytool profile: xcrun notarytool store-credentials SPEAKIST_NOTARY …
-#   * gh auth login
+#   * wrangler: (cd web && pnpm exec wrangler login) one-time
+#   * R2 buckets created + custom domains attached (see docs/releasing.md)
+#
+# Per-channel env vars you must export in your shell:
+#   SPEAKIST_PUBLISH_TOKEN_DEV   — matches RELEASE_PUBLISH_TOKEN on dev Worker
+#   SPEAKIST_PUBLISH_TOKEN_PROD  — matches it on prod Worker
 
 set -euo pipefail
 
@@ -32,15 +52,15 @@ set -euo pipefail
 
 VERSION=""
 CHANNEL="stable"
-PUBLISH="no"
+RELEASE_NOTES=""
 
 show_usage() {
   cat <<USAGE
-Usage: $0 <version> [--channel dev|beta|stable] [--publish]
+Usage: $0 <version> [--channel dev|beta|stable] [--notes "..."]
 
   <version>         MARKETING_VERSION to ship (e.g. 0.2.0)
   --channel <name>  Update channel; defaults to 'stable'
-  --publish         Also 'gh release create' the DMG to GITHUB_REPO
+  --notes <text>    Release notes (plain text or HTML). Optional.
 USAGE
 }
 
@@ -48,7 +68,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --channel) CHANNEL="$2"; shift 2 ;;
     --channel=*) CHANNEL="${1#*=}"; shift ;;
-    --publish) PUBLISH="yes"; shift ;;
+    --notes) RELEASE_NOTES="$2"; shift 2 ;;
+    --notes=*) RELEASE_NOTES="${1#*=}"; shift ;;
     -h|--help) show_usage; exit 0 ;;
     -*) echo "Unknown flag: $1"; show_usage; exit 1 ;;
     *)
@@ -66,19 +87,45 @@ case "$CHANNEL" in
   *) echo "Unknown channel: $CHANNEL (must be dev, beta, or stable)"; exit 1 ;;
 esac
 
-# ---- channel → URLs -----------------------------------------------------
+# ---- channel → URLs + R2 + publish endpoint -----------------------------
 
 STABLE_FEED_URL="${STABLE_FEED_URL:-https://speakist.ai/appcast.xml}"
 STABLE_API_URL="${STABLE_API_URL:-https://speakist.ai}"
+STABLE_R2_BUCKET="${STABLE_R2_BUCKET:-speakist-releases-prod}"
+STABLE_DOWNLOAD_BASE="${STABLE_DOWNLOAD_BASE:-https://downloads.speakist.ai}"
+
 BETA_FEED_URL="${BETA_FEED_URL:-https://speakist.ai/appcast-beta.xml}"
 BETA_API_URL="${BETA_API_URL:-https://speakist.ai}"
+BETA_R2_BUCKET="${BETA_R2_BUCKET:-speakist-releases-prod}"
+BETA_DOWNLOAD_BASE="${BETA_DOWNLOAD_BASE:-https://downloads.speakist.ai}"
+
 DEV_FEED_URL="${DEV_FEED_URL:-https://speakist-dev.brevoortstudio.com/appcast-dev.xml}"
 DEV_API_URL="${DEV_API_URL:-https://speakist-dev.brevoortstudio.com}"
+DEV_R2_BUCKET="${DEV_R2_BUCKET:-speakist-releases-dev}"
+DEV_DOWNLOAD_BASE="${DEV_DOWNLOAD_BASE:-https://downloads-dev.brevoortstudio.com}"
+
+PROD_PUBLISH_URL="${PROD_PUBLISH_URL:-https://speakist.ai/api/admin/releases/publish}"
+DEV_PUBLISH_URL="${DEV_PUBLISH_URL:-https://speakist-dev.brevoortstudio.com/api/admin/releases/publish}"
 
 case "$CHANNEL" in
-  stable) FEED_URL="$STABLE_FEED_URL"; API_URL="$STABLE_API_URL"; APPCAST_FILE="web/public/appcast.xml";     DMG_SUFFIX="" ;;
-  beta)   FEED_URL="$BETA_FEED_URL";   API_URL="$BETA_API_URL";   APPCAST_FILE="web/public/appcast-beta.xml"; DMG_SUFFIX="-beta" ;;
-  dev)    FEED_URL="$DEV_FEED_URL";    API_URL="$DEV_API_URL";    APPCAST_FILE="web/public/appcast-dev.xml";  DMG_SUFFIX="-dev" ;;
+  stable)
+    FEED_URL="$STABLE_FEED_URL"; API_URL="$STABLE_API_URL"
+    R2_BUCKET="$STABLE_R2_BUCKET"; DOWNLOAD_BASE="$STABLE_DOWNLOAD_BASE"
+    PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
+    WRANGLER_ENV="production"; DMG_SUFFIX=""
+    ;;
+  beta)
+    FEED_URL="$BETA_FEED_URL"; API_URL="$BETA_API_URL"
+    R2_BUCKET="$BETA_R2_BUCKET"; DOWNLOAD_BASE="$BETA_DOWNLOAD_BASE"
+    PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
+    WRANGLER_ENV="production"; DMG_SUFFIX="-beta"
+    ;;
+  dev)
+    FEED_URL="$DEV_FEED_URL"; API_URL="$DEV_API_URL"
+    R2_BUCKET="$DEV_R2_BUCKET"; DOWNLOAD_BASE="$DEV_DOWNLOAD_BASE"
+    PUBLISH_URL="$DEV_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_DEV:-}"
+    WRANGLER_ENV="dev"; DMG_SUFFIX="-dev"
+    ;;
 esac
 
 # ---- config -------------------------------------------------------------
@@ -87,42 +134,35 @@ APP_NAME="Speakist"
 TEAM_ID="Q5T8FJNX57"
 NOTARY_PROFILE="${NOTARY_PROFILE:-SPEAKIST_NOTARY}"
 SPARKLE_TOOLS="${SPARKLE_TOOLS:-$HOME/Library/Developer/Sparkle/bin}"
-GITHUB_REPO="${GITHUB_REPO:-brevoortstudio/speakist}"
 BUILD_DIR="build"
 EXPORT_DIR="${BUILD_DIR}/export"
 ARCHIVE_PATH="${BUILD_DIR}/${APP_NAME}.xcarchive"
 APP_PATH="${EXPORT_DIR}/${APP_NAME}.app"
-DMG_PATH="${BUILD_DIR}/${APP_NAME}-${VERSION}${DMG_SUFFIX}.dmg"
+DMG_FILENAME="${APP_NAME}-${VERSION}${DMG_SUFFIX}.dmg"
+DMG_PATH="${BUILD_DIR}/${DMG_FILENAME}"
 
 # ---- preflight ----------------------------------------------------------
 
 echo "==> Preflight (channel=$CHANNEL, version=$VERSION)"
 command -v xcodebuild >/dev/null || { echo "xcodebuild not found"; exit 1; }
-command -v xcodegen   >/dev/null || { echo "xcodegen not found. brew install xcodegen"; exit 1; }
-command -v create-dmg >/dev/null || { echo "create-dmg not found. brew install create-dmg"; exit 1; }
-[ -x "${SPARKLE_TOOLS}/sign_update" ] || {
-  echo "Sparkle sign_update not found at ${SPARKLE_TOOLS}/sign_update"; exit 1
-}
+command -v xcodegen   >/dev/null || { echo "brew install xcodegen"; exit 1; }
+command -v create-dmg >/dev/null || { echo "brew install create-dmg"; exit 1; }
+command -v jq         >/dev/null || { echo "brew install jq"; exit 1; }
+command -v curl       >/dev/null || { echo "curl not found"; exit 1; }
+[ -x "${SPARKLE_TOOLS}/sign_update" ] || { echo "Sparkle sign_update missing at ${SPARKLE_TOOLS}/sign_update"; exit 1; }
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || {
   echo "notarytool keychain profile '${NOTARY_PROFILE}' not configured."; exit 1
 }
+(cd web && pnpm exec wrangler whoami >/dev/null 2>&1) || {
+  echo "wrangler not logged in. cd web && pnpm exec wrangler login"; exit 1
+}
+if [ -z "$PUBLISH_TOKEN" ]; then
+  VAR_NAME=$([ "$CHANNEL" = "dev" ] && echo "SPEAKIST_PUBLISH_TOKEN_DEV" || echo "SPEAKIST_PUBLISH_TOKEN_PROD")
+  echo "$VAR_NAME env var is not set (must match the Worker's RELEASE_PUBLISH_TOKEN secret)"
+  exit 1
+fi
 
 # ---- project.yml channel injection --------------------------------------
-#
-# Channel-specific SUFeedURL and SpeakistDefaultAPIBaseURL must be in
-# project.yml BEFORE `xcodegen generate` so they're baked into Info.plist
-# and survive into the codesigned bundle. Modifying Info.plist after
-# codesign would invalidate the signature, so pre-generate is the only
-# correct time.
-#
-# Workflow:
-#   1. Back up project.yml to project.yml.release-bak (channel-free state)
-#   2. sed the channel values in
-#   3. xcodegen + xcodebuild run against the channel-specific project.yml
-#   4. On exit (success or failure), restore the backup. Version bumps are
-#      re-applied below so they do persist in the committed file.
-#
-# Trap guarantees restoration even if the build fails halfway.
 
 cp project.yml project.yml.release-bak
 trap 'mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
@@ -133,10 +173,6 @@ sed -i '' -E "s|(SpeakistDefaultAPIBaseURL:)[[:space:]]*\"[^\"]*\"|\1 \"${API_UR
 sed -i '' -E "s|(SpeakistChannel:)[[:space:]]*\"[^\"]*\"|\1 \"${CHANNEL}\"|" project.yml
 
 # ---- version bump -------------------------------------------------------
-#
-# Version bumps SHOULD persist after the release; they're committed.
-# Channel injection should NOT (it'd poison subsequent non-release builds).
-# We apply the bump to the backup too so it survives the EXIT trap.
 
 echo "==> Bumping MARKETING_VERSION → $VERSION"
 sed -i '' -E "s/(MARKETING_VERSION: +\")[^\"]+(\")/\1${VERSION}\2/" project.yml
@@ -162,8 +198,6 @@ xcodebuild -project "${APP_NAME}.xcodeproj" \
     -destination 'generic/platform=macOS' \
     archive
 
-# ---- export -------------------------------------------------------------
-
 echo "==> xcodebuild -exportArchive"
 rm -rf "$EXPORT_DIR"
 xcodebuild -exportArchive \
@@ -173,16 +207,14 @@ xcodebuild -exportArchive \
 
 [ -d "$APP_PATH" ] || { echo "Export didn't produce $APP_PATH"; exit 1; }
 
-# Channel sanity check: the exported Info.plist must reflect what we asked
-# for. If a build cache handed us a cross-channel plist, abort before
-# shipping the wrong thing.
+# Channel sanity check — abort if build cache served a wrong-channel plist.
 BUILT_FEED=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$APP_PATH/Contents/Info.plist")
 BUILT_CHANNEL=$(/usr/libexec/PlistBuddy -c "Print :SpeakistChannel" "$APP_PATH/Contents/Info.plist")
 if [ "$BUILT_FEED" != "$FEED_URL" ] || [ "$BUILT_CHANNEL" != "$CHANNEL" ]; then
   echo "Channel mismatch in built Info.plist!"
   echo "  Expected: channel=$CHANNEL feed=$FEED_URL"
   echo "  Got:      channel=$BUILT_CHANNEL feed=$BUILT_FEED"
-  echo "Run: rm -rf build/ Speakist.xcodeproj  and try again."
+  echo "Try: rm -rf build/ Speakist.xcodeproj && re-run"
   exit 1
 fi
 
@@ -194,11 +226,9 @@ rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
 echo "==> notarytool submit (this can take a few minutes)"
-xcrun notarytool submit "$ZIP_PATH" \
-    --keychain-profile "$NOTARY_PROFILE" \
-    --wait
+xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 
-echo "==> stapling ticket to .app"
+echo "==> stapling ticket"
 xcrun stapler staple "$APP_PATH"
 xcrun stapler validate "$APP_PATH"
 
@@ -221,83 +251,83 @@ create-dmg \
 
 echo "==> Sparkle sign_update"
 SPARKLE_SIG=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
-
-# ---- appcast <item> fragment --------------------------------------------
-
-DMG_FILENAME=$(basename "$DMG_PATH")
 DMG_SIZE=$(stat -f%z "$DMG_PATH")
-PUB_DATE=$(date -Ru)
-TAG="v${VERSION}${DMG_SUFFIX}"
 
-APPCAST_ITEM="    <item>
-      <title>Version ${VERSION}</title>
-      <pubDate>${PUB_DATE}</pubDate>
-      <sparkle:version>${NEW_BUILD}</sparkle:version>
-      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure
-        url=\"https://github.com/${GITHUB_REPO}/releases/download/${TAG}/${DMG_FILENAME}\"
-        length=\"${DMG_SIZE}\"
-        type=\"application/octet-stream\"
-        ${SPARKLE_SIG} />
-    </item>"
+# ---- R2 upload ----------------------------------------------------------
 
-cat <<BANNER
+echo "==> Uploading DMG to R2 bucket '${R2_BUCKET}' (env ${WRANGLER_ENV})"
+# `--remote` uploads to the real R2 bucket (not the local .wrangler cache).
+# `--content-type` is set so the browser + Sparkle treat it as a binary
+# download instead of trying to interpret it.
+(cd web && pnpm exec wrangler r2 object put \
+    "${R2_BUCKET}/${DMG_FILENAME}" \
+    --file "../${DMG_PATH}" \
+    --remote \
+    --content-type "application/octet-stream" \
+    --env "$WRANGLER_ENV")
 
-════════════════════════════════════════════════════════════════════════
-Release ${VERSION} (${CHANNEL}) built successfully.
-════════════════════════════════════════════════════════════════════════
+DMG_PUBLIC_URL="${DOWNLOAD_BASE}/${DMG_FILENAME}"
 
-DMG:         ${DMG_PATH}  ($(du -h "$DMG_PATH" | cut -f1))
-Channel:     ${CHANNEL}
-Build:       ${NEW_BUILD}
-Feed URL:    ${FEED_URL}
-API URL:     ${API_URL}
-Notarized:   yes (stapled)
-Sparkle sig: ${SPARKLE_SIG}
+# ---- publish to D1 via API ----------------------------------------------
 
-Add this to ${APPCAST_FILE} *inside* the <channel> tag, above any
-existing <item> blocks (newest first):
+echo "==> Registering release via ${PUBLISH_URL}"
+# jq -n --arg / --argjson handle string escaping cleanly (release notes can
+# contain quotes, backticks, newlines). This avoids hand-rolling JSON escaping.
+PAYLOAD=$(jq -n \
+  --arg channel "$CHANNEL" \
+  --arg version "$VERSION" \
+  --argjson buildNumber "$NEW_BUILD" \
+  --arg dmgUrl "$DMG_PUBLIC_URL" \
+  --argjson dmgSizeBytes "$DMG_SIZE" \
+  --arg sparkleSignature "$SPARKLE_SIG" \
+  --arg releaseNotes "$RELEASE_NOTES" \
+  '{channel: $channel, version: $version, buildNumber: $buildNumber,
+    dmgUrl: $dmgUrl, dmgSizeBytes: $dmgSizeBytes,
+    sparkleSignature: $sparkleSignature}
+   + (if $releaseNotes == "" then {} else {releaseNotes: $releaseNotes} end)')
 
-${APPCAST_ITEM}
+HTTP_STATUS=$(curl -sS -o /tmp/release-publish-resp.json -w "%{http_code}" \
+  -X POST "$PUBLISH_URL" \
+  -H "Authorization: Bearer ${PUBLISH_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD") || { echo "curl failed"; exit 1; }
 
-BANNER
-
-# ---- optional: publish --------------------------------------------------
-
-if [ "$PUBLISH" = "yes" ]; then
-  command -v gh >/dev/null || { echo "gh not found. brew install gh"; exit 1; }
-
-  echo "==> Publishing to GitHub: ${GITHUB_REPO}  ${TAG}"
-  PRERELEASE_FLAG=""
-  [ "$CHANNEL" != "stable" ] && PRERELEASE_FLAG="--prerelease"
-
-  gh release create "${TAG}" \
-    --repo "${GITHUB_REPO}" \
-    --title "${APP_NAME} ${VERSION} (${CHANNEL})" \
-    --notes "Speakist ${VERSION} — channel: ${CHANNEL}." \
-    $PRERELEASE_FLAG \
-    "$DMG_PATH"
-  echo "==> Release URL:"
-  gh release view "${TAG}" --repo "${GITHUB_REPO}" --json url -q .url
-else
-  echo "(skipped gh release create — pass --publish to upload)"
+if [ "$HTTP_STATUS" != "200" ]; then
+  echo "Publish API returned HTTP $HTTP_STATUS:"
+  cat /tmp/release-publish-resp.json
+  echo
+  echo "DMG was uploaded to R2 but D1 was NOT updated. Fix + re-run."
+  echo "Upload is idempotent; next run overwrites the same R2 object."
+  exit 1
 fi
 
-# ---- finalize: keep version bump, drop channel injection ----------------
+# ---- finalize -----------------------------------------------------------
 
 mv project.yml.release-bak project.yml
 trap - EXIT
 
-echo ""
-echo "Next steps:"
-echo "  1. Edit ${APPCAST_FILE}, paste the <item> block above at the top of <channel>"
-echo "  2. git add project.yml ${APPCAST_FILE}"
-if [ "$CHANNEL" = "dev" ]; then
-  echo "  3. cd web && pnpm deploy:dev   # dev-channel appcast lives on the dev env"
-else
-  echo "  3. cd web && pnpm deploy:prod  # beta + stable appcasts live on prod"
-fi
-echo ""
-echo "  Installs on the '${CHANNEL}' channel will auto-update on next poll"
-echo "  (or via Settings → About → Check for updates…)."
+cat <<BANNER
+
+════════════════════════════════════════════════════════════════════════
+Release ${VERSION} (${CHANNEL}) shipped.
+════════════════════════════════════════════════════════════════════════
+
+DMG:         ${DMG_PATH}  ($(du -h "$DMG_PATH" | cut -f1))
+Public URL:  ${DMG_PUBLIC_URL}
+Channel:     ${CHANNEL}
+Build:       ${NEW_BUILD}
+Feed URL:    ${FEED_URL}
+Sparkle sig: ${SPARKLE_SIG}
+
+The Worker's D1 releases table has been updated. The dynamic appcast at
+${FEED_URL} already reflects this release — Sparkle clients on the
+'${CHANNEL}' channel will pick it up on their next poll (hourly by default,
+or immediately via Settings → About → Check for updates…).
+
+Only git housekeeping left:
+
+  git add project.yml
+  git commit -m "Release ${VERSION} (${CHANNEL})"
+  git push
+
+BANNER

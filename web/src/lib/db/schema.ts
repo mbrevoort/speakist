@@ -348,6 +348,38 @@ export const macSessions = sqliteTable(
   })
 );
 
+// ---- Releases (Mac-app update registry) -----------------------------------
+// One row per published DMG. Serves both:
+//   1. /appcast.xml (+ -beta, -dev) which Sparkle polls
+//   2. /api/download/mac — the "latest" pointer for fresh installs
+// Release script inserts rows via POST /api/admin/releases/publish.
+
+export type ReleaseChannel = "stable" | "beta" | "dev";
+
+export const releases = sqliteTable(
+  "releases",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    channel: text("channel").$type<ReleaseChannel>().notNull(),
+    version: text("version").notNull(),
+    buildNumber: integer("build_number").notNull(),
+    dmgUrl: text("dmg_url").notNull(),
+    dmgSizeBytes: integer("dmg_size_bytes").notNull(),
+    sparkleSignature: text("sparkle_signature").notNull(),
+    minimumSystemVersion: text("minimum_system_version").notNull().default("14.0"),
+    releaseNotes: text("release_notes"),
+    publishedAt: timestampMs("published_at").notNull().$defaultFn(() => new Date()),
+    publishedBy: text("published_by").references(() => users.id),
+    yankedAt: timestampMs("yanked_at"),
+    yankedReason: text("yanked_reason"),
+  },
+  (t) => ({
+    channelIdx: index("releases_channel_published_idx").on(t.channel, t.publishedAt),
+    channelVersionBuildUnique: uniqueIndex("releases_channel_version_build_unique")
+      .on(t.channel, t.version, t.buildNumber),
+  })
+);
+
 // ---- Type exports for the rest of the app ---------------------------------
 
 export type User = typeof users.$inferSelect;
@@ -362,3 +394,5 @@ export type PricingConfig = typeof pricingConfig.$inferSelect;
 export type AppSettings = typeof appSettings.$inferSelect;
 export type DeviceAuthCode = typeof deviceAuthCodes.$inferSelect;
 export type MacSession = typeof macSessions.$inferSelect;
+export type Release = typeof releases.$inferSelect;
+export type NewRelease = typeof releases.$inferInsert;

@@ -46,12 +46,15 @@ export function Hero() {
                 <Link href="/auth/signin">Start with $5 free</Link>
               </Button>
               <Button asChild size="xl" variant="outline">
-                <Link href="#how">See how it works</Link>
+                {/* /api/download/mac 302s to the latest stable DMG on R2.
+                    Direct link — no signin required for installing; the
+                    account flow happens on first launch. */}
+                <a href="/api/download/mac" download>Download for Mac</a>
               </Button>
             </div>
 
             <p className="mt-6 text-sm text-muted-foreground">
-              No credit card. Pay only for what you transcribe.
+              No credit card. Pay only for what you transcribe. Requires macOS 14+.
             </p>
           </div>
 

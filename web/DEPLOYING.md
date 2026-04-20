@@ -21,6 +21,11 @@ You need:
 - A Deepgram admin API key (same one you use locally)
 - A Stripe account with test mode available
 
+If you'll also ship Mac builds from this environment, you'll additionally
+need R2 buckets + `RELEASE_PUBLISH_TOKEN` — see
+[`docs/releasing.md`](../docs/releasing.md) sections 1.5 and 1.6. Not
+required for the web backend alone.
+
 **Check your current state:**
 ```bash
 cd web
