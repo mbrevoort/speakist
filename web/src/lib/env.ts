@@ -32,7 +32,7 @@ const serverSchema = publicSchema.extend({
   // Resend — required for magic-link emails. Optional in dev (falls back to
   // logging the link to console — see src/lib/auth.ts).
   RESEND_API_KEY: z.string().min(1).optional(),
-  RESEND_FROM_EMAIL: z.string().email().default("noreply@speakist.brevoort.com"),
+  RESEND_FROM_EMAIL: z.string().email().default("noreply@speakist-dev.brevoortstudio.com"),
 
   // Stripe (Phase 4).
   STRIPE_SECRET_KEY: z.string().min(1).optional(),

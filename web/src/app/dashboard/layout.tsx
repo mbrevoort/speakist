@@ -54,7 +54,7 @@ export default async function DashboardLayout({
             You&apos;re signed in as <span className="font-mono text-foreground">{user.email}</span>,
             but you&apos;re not part of a Speakist organization yet. Ask whoever
             invited you to send a fresh invitation link, or contact
-            <a href="mailto:hello@speakist.brevoort.com" className="text-peach-deep hover:underline"> hello@speakist.brevoort.com</a>.
+            <a href="mailto:hello@brevoortstudio.com" className="text-peach-deep hover:underline"> hello@brevoortstudio.com</a>.
           </p>
           <form action={async () => {
             "use server";

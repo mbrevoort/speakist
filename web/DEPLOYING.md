@@ -5,7 +5,7 @@ Three environments by design:
 | Environment | Worker | D1 DB | Domain | Stripe | Mac points at |
 |---|---|---|---|---|---|
 | **local** | `wrangler dev` / `next dev` | `speakist-dev` (local mirror under `.wrangler/`) | `http://localhost:3000` | test mode + `stripe listen` | `http://localhost:3000` (default) |
-| **dev/staging** | `speakist-web-dev` | `speakist-dev` (remote) | `speakist-dev.brevoortstudios.com` | test mode | `https://speakist-dev.brevoortstudios.com` |
+| **dev/staging** | `speakist-web-dev` | `speakist-dev` (remote) | `speakist-dev.brevoortstudio.com` | test mode | `https://speakist-dev.brevoortstudio.com` |
 | **production** | `speakist-web-prod` | `speakist-prod` (remote) | `speakist.ai` | **live mode** | `https://speakist.ai` |
 
 This doc covers the **dev/staging** deploy end-to-end. Production follows the same pattern with `--env production` on every wrangler invocation and live-mode Stripe keys.
@@ -86,7 +86,7 @@ pnpm exec wrangler secret put AUTH_SECRET --env dev
 
 # Auth.js needs the public URL to generate correct callback links
 pnpm exec wrangler secret put AUTH_URL --env dev
-# value: https://speakist-dev.brevoortstudios.com
+# value: https://speakist-dev.brevoortstudio.com
 
 # AES-256 key for encrypting Deepgram keys at rest
 pnpm exec wrangler secret put APP_ENCRYPTION_KEY --env dev
@@ -94,13 +94,13 @@ pnpm exec wrangler secret put APP_ENCRYPTION_KEY --env dev
 
 # Public site URL (read by metadataBase, used in emails, OG tags)
 pnpm exec wrangler secret put NEXT_PUBLIC_SITE_URL --env dev
-# value: https://speakist-dev.brevoortstudios.com
+# value: https://speakist-dev.brevoortstudio.com
 
 # Resend email
 pnpm exec wrangler secret put RESEND_API_KEY --env dev
 # value: re_... from https://resend.com/api-keys
 pnpm exec wrangler secret put RESEND_FROM_EMAIL --env dev
-# value: noreply@speakist-dev.brevoortstudios.com  (domain must be verified in Resend)
+# value: noreply@speakist-dev.brevoortstudio.com  (domain must be verified in Resend)
 
 # Stripe (test mode — safe to share with dev env)
 pnpm exec wrangler secret put STRIPE_SECRET_KEY --env dev
@@ -145,21 +145,21 @@ domain we haven't attached. Fix that in the next step.
 
 ## 5. Attach the custom domain
 
-Two paths, depending on where `brevoortstudios.com` lives:
+Two paths, depending on where `brevoortstudio.com` lives:
 
-### 5a. If brevoortstudios.com is already on Cloudflare (using their nameservers)
+### 5a. If brevoortstudio.com is already on Cloudflare (using their nameservers)
 
 1. Cloudflare dashboard → Workers & Pages → **speakist-web-dev**
 2. Settings → Triggers → **Custom Domains** → **Add Custom Domain**
-3. Enter `speakist-dev.brevoortstudios.com`
+3. Enter `speakist-dev.brevoortstudio.com`
 4. Cloudflare provisions the cert and sets up routing automatically.
    Ready in under a minute.
 
-### 5b. If brevoortstudios.com uses different nameservers (Route53, etc.)
+### 5b. If brevoortstudio.com uses different nameservers (Route53, etc.)
 
 You have two options:
 
-- **Easiest**: Add `brevoortstudios.com` to Cloudflare as a new zone (free
+- **Easiest**: Add `brevoortstudio.com` to Cloudflare as a new zone (free
   plan works). Follow Cloudflare's DNS-migration wizard, update your
   registrar's nameservers. Then follow 5a.
 
@@ -171,7 +171,7 @@ You have two options:
   Then in wrangler.toml:
   ```toml
   [[routes]]
-  pattern = "speakist-dev.brevoortstudios.com/*"
+  pattern = "speakist-dev.brevoortstudio.com/*"
   custom_domain = true
   ```
   Redeploy. Requires the domain to be on Cloudflare as a zone either
@@ -184,7 +184,7 @@ You have two options:
 In Stripe dashboard → make sure "Viewing test data" is ON (top-right toggle)
 → Developers → **Webhooks** → **Add endpoint**:
 
-- **Endpoint URL**: `https://speakist-dev.brevoortstudios.com/api/stripe/webhook`
+- **Endpoint URL**: `https://speakist-dev.brevoortstudio.com/api/stripe/webhook`
 - **Events to send**: at minimum these three —
   - `checkout.session.completed`
   - `payment_intent.succeeded`
@@ -233,7 +233,7 @@ The Deepgram admin API key (the one with `keys:write`) is stored in the
 database encrypted by `APP_ENCRYPTION_KEY`, not in env vars. Configure
 through the UI:
 
-1. Visit `https://speakist-dev.brevoortstudios.com/auth/signin`
+1. Visit `https://speakist-dev.brevoortstudio.com/auth/signin`
 2. Sign in as `mike@brevoort.com` — the magic link will land in your
    Resend inbox (or your email, if you've verified the domain)
 3. After signin, go to `/admin/system`
@@ -261,7 +261,7 @@ from `/dashboard/members` still work; auto-join-domain (set in
 
 ## 10. Smoke test end-to-end
 
-On the dev URL (`https://speakist-dev.brevoortstudios.com`):
+On the dev URL (`https://speakist-dev.brevoortstudio.com`):
 
 - [ ] Landing page renders; pricing block shows the correct per-1000-word rate
 - [ ] Sign out. Try signing up with a fresh email (not mike@brevoort.com).
@@ -275,7 +275,7 @@ On the dev URL (`https://speakist-dev.brevoortstudios.com`):
       a `+$10.00` Stripe top-up row within ~10 seconds.
 - [ ] Point your Mac app at the dev URL:
       ```bash
-      defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist-dev.brevoortstudios.com"
+      defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist-dev.brevoortstudio.com"
       ```
       Restart Speakist. Sign in (device code flow works over HTTPS the same
       as local). Hold ⌃⌘X, dictate. Confirm `/dashboard/usage` shows the
@@ -295,7 +295,7 @@ The Mac only talks to one backend at a time. To switch:
 defaults write com.brevoort-studio.speakist apiBaseURL "http://localhost:3000"
 
 # Point at deployed dev
-defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist-dev.brevoortstudios.com"
+defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist-dev.brevoortstudio.com"
 
 # Point at production (when it exists)
 defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist.ai"

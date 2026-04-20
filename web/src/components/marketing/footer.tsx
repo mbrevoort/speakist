@@ -15,7 +15,7 @@ export function Footer() {
             <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
               Push-to-talk dictation for macOS. Made in Colorado by{" "}
               <a
-                href="https://brevoort.com"
+                href="https://brevoortstudio.com"
                 className="underline underline-offset-4 hover:text-foreground"
               >
                 Brevoort Studio

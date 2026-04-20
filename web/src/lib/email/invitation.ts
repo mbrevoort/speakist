@@ -27,7 +27,7 @@ export async function sendInvitationEmail(params: InvitationEmailParams): Promis
     return;
   }
 
-  const from = process.env.RESEND_FROM_EMAIL ?? "noreply@speakist.brevoort.com";
+  const from = process.env.RESEND_FROM_EMAIL ?? "noreply@speakist-dev.brevoortstudio.com";
 
   const html = `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:520px;margin:0 auto;padding:40px 24px;color:#1B1322">

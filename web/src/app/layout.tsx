@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   title: "Speakist — push-to-talk dictation for macOS",
   description:
     "Hold a key, speak, release. Clean text appears at your cursor in any app. Usage-based pricing. Your voice never leaves your device except to be transcribed.",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://speakist.brevoort.com"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://speakist-dev.brevoortstudio.com"),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
