@@ -9,6 +9,18 @@ import {
   type ActionResult,
 } from "./actions";
 
+// Both widgets below follow the same visual pattern:
+//   ┌─────────────────────────────────────┐
+//   │ Status line (sage / mustard color)  │
+//   │ Description paragraph               │
+//   │                                     │
+//   │ [Action button(s)]  [result text]   │
+//   └─────────────────────────────────────┘
+//
+// Keeping description and action on separate rows avoids the ugly
+// three-way flex squeeze we had before where the description column
+// collapsed into a one-word-wide column when the result message showed up.
+
 export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
@@ -16,7 +28,7 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
 
   if (mode === "view") {
     return (
-      <div className="flex items-center justify-between gap-4">
+      <div className="space-y-4">
         <div>
           <p
             className={cn(
@@ -26,15 +38,16 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
           >
             {hasKey ? "System key is set" : "No system key configured"}
           </p>
-          <p className="mt-1 text-xs text-muted-foreground max-w-xl">
+          <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
             {hasKey
-              ? "Stored encrypted. We can't show it back; to rotate, paste a fresh one below. Orgs without their own override use this key."
+              ? "Stored encrypted. We can't show it back; to rotate, paste a fresh one. Orgs without their own override use this key."
               : "Without a system key, orgs without overrides can't transcribe. Set one before inviting production users."}
           </p>
         </div>
-        <div className="flex gap-2 shrink-0">
+
+        <div className="flex flex-wrap items-center gap-3">
           <Button variant="outline" size="sm" onClick={() => setMode("edit")}>
-            {hasKey ? "Rotate" : "Set key"}
+            {hasKey ? "Rotate key" : "Set key"}
           </Button>
           {hasKey && (
             <form
@@ -51,17 +64,8 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
               </Button>
             </form>
           )}
+          {result && <InlineResult result={result} />}
         </div>
-        {result && (
-          <p
-            className={cn(
-              "basis-full text-sm",
-              result.ok ? "text-sage" : "text-destructive"
-            )}
-          >
-            {result.ok ? result.message : result.error}
-          </p>
-        )}
       </div>
     );
   }
@@ -76,7 +80,7 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
           if (r.ok) setMode("view");
         });
       }}
-      className="flex flex-col sm:flex-row gap-3 items-start"
+      className="space-y-4"
     >
       <input
         type="password"
@@ -84,9 +88,12 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
         autoComplete="off"
         required
         placeholder="Deepgram API key"
-        className="flex-1 w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
+        className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
       />
-      <div className="flex gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="submit" disabled={pending}>
+          {pending ? "Saving…" : "Save"}
+        </Button>
         <Button
           type="button"
           variant="outline"
@@ -95,20 +102,8 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : "Save"}
-        </Button>
+        {result && <InlineResult result={result} />}
       </div>
-      {result && (
-        <p
-          className={cn(
-            "basis-full text-sm",
-            result.ok ? "text-sage" : "text-destructive"
-          )}
-        >
-          {result.ok ? result.message : result.error}
-        </p>
-      )}
     </form>
   );
 }
@@ -132,42 +127,50 @@ export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: b
           if (r.ok) setEnabled(next);
         });
       }}
-      className="flex items-center justify-between gap-4"
+      className="space-y-4"
     >
-      <div className="flex-1">
+      <div>
         <p
           className={cn(
             "text-sm font-semibold",
             enabled ? "text-sage" : "text-mustard"
           )}
         >
-          {enabled
-            ? "Public signup is ON"
-            : "Public signup is OFF — invite-only"}
+          {enabled ? "Public signup is ON" : "Public signup is OFF — invite-only"}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground max-w-xl">
+        <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
           {enabled
             ? "Anyone who signs in gets a workspace auto-created and $5 in signup credit. This is the production default."
-            : "New signups without an invitation or matching auto-join domain won't get a workspace; they land on an \u201Cawaiting invitation\u201D screen. Existing orgs can still invite members and auto-join by email domain."}
+            : "New signups without an invitation or matching auto-join domain won\u2019t get a workspace; they land on an \u201Cawaiting invitation\u201D screen. Existing orgs can still invite members and auto-join by email domain."}
         </p>
       </div>
-      <Button
-        type="submit"
-        variant={enabled ? "outline" : "default"}
-        disabled={pending}
-      >
-        {pending ? "Saving…" : enabled ? "Turn OFF" : "Turn ON"}
-      </Button>
-      {result && (
-        <p
-          className={cn(
-            "basis-full text-sm",
-            result.ok ? "text-sage" : "text-destructive"
-          )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="submit"
+          variant={enabled ? "outline" : "default"}
+          disabled={pending}
         >
-          {result.ok ? result.message : result.error}
-        </p>
-      )}
+          {pending ? "Saving…" : enabled ? "Turn OFF" : "Turn ON"}
+        </Button>
+        {result && <InlineResult result={result} />}
+      </div>
     </form>
+  );
+}
+
+// --- shared success/error line --------------------------------------------
+
+function InlineResult({ result }: { result: ActionResult }) {
+  return (
+    <p
+      className={cn(
+        "text-sm",
+        result.ok ? "text-sage" : "text-destructive"
+      )}
+      role="status"
+    >
+      {result.ok ? result.message : result.error}
+    </p>
   );
 }
