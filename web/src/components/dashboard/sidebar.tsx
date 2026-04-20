@@ -6,7 +6,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, CreditCard, Home, Settings, Users } from "lucide-react";
+import { BarChart3, CreditCard, Home, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/brand/logo";
 
@@ -20,11 +20,10 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { label: "Overview", href: "/dashboard", icon: Home },
+  { label: "Usage", href: "/dashboard/usage", icon: BarChart3 },
+  { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
   { label: "Members", href: "/dashboard/members", icon: Users },
   { label: "Settings", href: "/dashboard/settings", icon: Settings },
-  // Phase 4 — render but disabled so the UX is discoverable.
-  { label: "Billing", href: "/dashboard/billing", icon: CreditCard, disabled: true, disabledReason: "Coming in Phase 4" },
-  { label: "Usage", href: "/dashboard/usage", icon: Building2, disabled: true, disabledReason: "Coming in Phase 4" },
 ];
 
 export function Sidebar({ orgName }: { orgName: string }) {

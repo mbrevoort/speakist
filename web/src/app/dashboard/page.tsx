@@ -3,7 +3,7 @@
 // chart. Phase 3's home is deliberately a "welcome + where to go next" page.
 
 import Link from "next/link";
-import { ArrowRight, Apple, Users as UsersIcon, ReceiptText } from "lucide-react";
+import { ArrowRight, Apple, BarChart3, CreditCard, Users as UsersIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
@@ -61,22 +61,32 @@ export default async function DashboardHome() {
         <StatCard label="Quick links">
           <div className="space-y-1.5 text-sm">
             <Link
+              href="/dashboard/billing"
+              className="flex items-center justify-between hover:text-foreground text-muted-foreground"
+            >
+              <span className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4" />
+                Top up credit
+              </span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+            <Link
+              href="/dashboard/usage"
+              className="flex items-center justify-between hover:text-foreground text-muted-foreground"
+            >
+              <span className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                See usage
+              </span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+            <Link
               href="/dashboard/members"
               className="flex items-center justify-between hover:text-foreground text-muted-foreground"
             >
               <span className="flex items-center gap-2">
                 <UsersIcon className="h-4 w-4" />
                 Invite your team
-              </span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-            <Link
-              href="/dashboard/settings"
-              className="flex items-center justify-between hover:text-foreground text-muted-foreground"
-            >
-              <span className="flex items-center gap-2">
-                <ReceiptText className="h-4 w-4" />
-                Org settings
               </span>
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>
