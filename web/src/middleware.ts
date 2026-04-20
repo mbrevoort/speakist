@@ -21,7 +21,10 @@ function hasSessionCookie(req: NextRequest): boolean {
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (pathname.startsWith("/dashboard") && !hasSessionCookie(req)) {
+  if (
+    (pathname.startsWith("/dashboard") || pathname.startsWith("/admin")) &&
+    !hasSessionCookie(req)
+  ) {
     const signIn = new URL("/auth/signin", req.url);
     signIn.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(signIn);
