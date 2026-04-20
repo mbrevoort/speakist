@@ -28,7 +28,8 @@ usage and stays cheap at scale.
 
 ## Getting started
 
-See [`SETUP.md`](./SETUP.md) — one page, fresh-clone to running dev env.
+- Local dev: [`SETUP.md`](./SETUP.md) — fresh-clone to running dev env
+- Deploying to Cloudflare (dev/staging/prod): [`DEPLOYING.md`](./DEPLOYING.md)
 
 ## Design principles
 

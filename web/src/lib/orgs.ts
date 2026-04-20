@@ -10,6 +10,7 @@
 import { and, eq, isNull, sql, sum } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
+  appSettings,
   creditLedger,
   invitations,
   organizations,
@@ -76,6 +77,7 @@ export function domainFromEmail(email: string): string | null {
 export type ProvisionResult =
   | { kind: "auto-joined"; orgId: string }
   | { kind: "created-org"; orgId: string }
+  | { kind: "awaiting-invitation" }
   | { kind: "skipped"; reason: string };
 
 /**
@@ -138,7 +140,21 @@ export async function provisionNewUser(userId: string): Promise<ProvisionResult>
     }
   }
 
-  // 2. Create fresh org + membership + bonus.
+  // 2. Check the platform-wide "allow public org creation" toggle. When off
+  // (typical in dev/staging) and the user didn't match an auto-join domain,
+  // we stop here — the user exists but has no org. They land on the dashboard
+  // and see an "awaiting invitation" state until a super admin invites them
+  // or an existing org starts auto-joining their domain.
+  const [settings] = await db
+    .select({ allow: appSettings.allowPublicOrgCreation })
+    .from(appSettings)
+    .where(eq(appSettings.id, 1))
+    .limit(1);
+  if (settings && !settings.allow) {
+    return { kind: "awaiting-invitation" };
+  }
+
+  // 3. Create fresh org + membership + bonus.
   const baseName = user.displayName?.trim() || user.name?.trim() || user.email.split("@")[0];
   const orgName = `${baseName}'s Workspace`;
   const slug = await uniqueOrgSlug(baseName);

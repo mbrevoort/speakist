@@ -32,17 +32,39 @@ export default async function DashboardLayout({
 
   const org = await getCurrentOrgForUser(user.id);
   if (!org) {
-    // Either provisioning is still in flight (unlikely — the createUser hook
-    // is synchronous before the session is minted) or it failed. Ask the
-    // user to sign out and back in so the hook runs again.
+    // User has no membership. Two scenarios:
+    //   1. Platform has allow_public_org_creation = false (dev/staging's
+    //      invite-only mode) and they signed up without an invitation or
+    //      matching auto-join domain → show "awaiting invitation".
+    //   2. Provisioning failed for some reason (rare) — same screen is an
+    //      OK fallback since both paths resolve by "someone invites you".
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
         <div className="max-w-md rounded-2xl border border-border bg-background p-8 text-center">
-          <h1 className="text-xl font-semibold">We couldn&apos;t set up your workspace</h1>
+          <div className="mx-auto inline-flex items-center justify-center h-14 w-14 rounded-2xl bg-peach/15 text-peach-deep mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+              <polyline points="22,6 12,13 2,6"/>
+            </svg>
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight">
+            Waiting for an invitation
+          </h1>
           <p className="mt-3 text-sm text-muted-foreground">
-            This is rare. Sign out and back in to retry; if it still doesn&apos;t
-            work, email us at hello@speakist.brevoort.com.
+            You&apos;re signed in as <span className="font-mono text-foreground">{user.email}</span>,
+            but you&apos;re not part of a Speakist organization yet. Ask whoever
+            invited you to send a fresh invitation link, or contact
+            <a href="mailto:hello@speakist.brevoort.com" className="text-peach-deep hover:underline"> hello@speakist.brevoort.com</a>.
           </p>
+          <form action={async () => {
+            "use server";
+            const { signOut } = await getAuth();
+            await signOut({ redirectTo: "/" });
+          }} className="mt-6">
+            <button type="submit" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+              Sign out
+            </button>
+          </form>
         </div>
       </div>
     );

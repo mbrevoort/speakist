@@ -3,7 +3,11 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { setSystemDeepgramKey, type ActionResult } from "./actions";
+import {
+  setAllowPublicOrgCreation,
+  setSystemDeepgramKey,
+  type ActionResult,
+} from "./actions";
 
 export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
   const [result, setResult] = useState<ActionResult | null>(null);
@@ -95,6 +99,65 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
           {pending ? "Saving…" : "Save"}
         </Button>
       </div>
+      {result && (
+        <p
+          className={cn(
+            "basis-full text-sm",
+            result.ok ? "text-sage" : "text-destructive"
+          )}
+        >
+          {result.ok ? result.message : result.error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+// --- allow_public_org_creation toggle --------------------------------------
+
+export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: boolean }) {
+  const [enabled, setEnabled] = useState(initiallyEnabled);
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  return (
+    <form
+      action={(fd) => {
+        const next = !enabled;
+        fd.set("enabled", next ? "on" : "off");
+        setResult(null);
+        startTransition(async () => {
+          const r = await setAllowPublicOrgCreation(fd);
+          setResult(r);
+          if (r.ok) setEnabled(next);
+        });
+      }}
+      className="flex items-center justify-between gap-4"
+    >
+      <div className="flex-1">
+        <p
+          className={cn(
+            "text-sm font-semibold",
+            enabled ? "text-sage" : "text-mustard"
+          )}
+        >
+          {enabled
+            ? "Public signup is ON"
+            : "Public signup is OFF — invite-only"}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground max-w-xl">
+          {enabled
+            ? "Anyone who signs in gets a workspace auto-created and $5 in signup credit. This is the production default."
+            : "New signups without an invitation or matching auto-join domain won't get a workspace; they land on an \u201Cawaiting invitation\u201D screen. Existing orgs can still invite members and auto-join by email domain."}
+        </p>
+      </div>
+      <Button
+        type="submit"
+        variant={enabled ? "outline" : "default"}
+        disabled={pending}
+      >
+        {pending ? "Saving…" : enabled ? "Turn OFF" : "Turn ON"}
+      </Button>
       {result && (
         <p
           className={cn(

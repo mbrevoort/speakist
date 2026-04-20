@@ -299,6 +299,11 @@ export const pricingConfig = sqliteTable("pricing_config", {
 export const appSettings = sqliteTable("app_settings", {
   id: integer("id").primaryKey().default(1),
   systemDeepgramKeyEncrypted: text("system_deepgram_key_encrypted"),
+  // When false, provisionNewUser stops auto-creating a workspace for
+  // brand-new signups that don't match an existing org's auto_join_domain.
+  // Used to lock down dev/staging to invite-only access. Production stays
+  // at true (the default) — random signups are the business model.
+  allowPublicOrgCreation: bool("allow_public_org_creation").notNull().default(true),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
 

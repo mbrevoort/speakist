@@ -14,6 +14,8 @@ import { encryptSecret } from "@/lib/crypto";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
+// --- Deepgram system key --------------------------------------------------
+
 const schema = z.object({ key: z.string().trim() });
 
 export async function setSystemDeepgramKey(formData: FormData): Promise<ActionResult> {
@@ -53,6 +55,38 @@ export async function setSystemDeepgramKey(formData: FormData): Promise<ActionRe
         error: "APP_ENCRYPTION_KEY not configured. Set it in .env.local first.",
       };
     }
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
+// --- allow_public_org_creation toggle -------------------------------------
+
+const toggleSchema = z.object({ enabled: z.enum(["on", "off"]) });
+
+export async function setAllowPublicOrgCreation(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    await requireSuperAdmin();
+    const parsed = toggleSchema.safeParse({ enabled: formData.get("enabled") ?? "off" });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    await db
+      .update(appSettings)
+      .set({ allowPublicOrgCreation: parsed.data.enabled === "on" })
+      .where(eq(appSettings.id, 1));
+
+    revalidatePath("/admin/system");
+    return {
+      ok: true,
+      message:
+        parsed.data.enabled === "on"
+          ? "Public signup re-enabled — new users get a workspace auto-created."
+          : "Public signup disabled — new users without an invitation land on the waiting screen.",
+    };
+  } catch (err) {
+    console.error("setAllowPublicOrgCreation failed:", err);
     return { ok: false, error: "Couldn't save." };
   }
 }
