@@ -99,10 +99,13 @@ export async function yankRelease(id: string, reason: string): Promise<void> {
  * Build a Sparkle appcast XML document for `channel`. Renders every non-
  * yanked row, newest first.
  *
- * The input from the release script already contains the full
- * `sparkle:edSignature="..." length="..."` pair as a single string, so we
- * paste it verbatim into the <enclosure>. This keeps the D1 schema
- * immune to Sparkle's output-format changes.
+ * The `sparkleSignature` column may contain either the bare EdDSA base64
+ * value or the full `sparkle:edSignature="..." length="..."` fragment as
+ * emitted by `sign_update` — we normalize to the bare signature so the
+ * enclosure tag's `length=` attribute is always sourced from D1's
+ * `dmgSizeBytes` column. That avoids duplicate-attribute XML (which
+ * Sparkle rejects with "An error occurred while parsing the update feed")
+ * regardless of what the release script stored.
  */
 export async function buildAppcastXml(channel: ReleaseChannel, feedUrl: string, feedTitle: string): Promise<string> {
   const rows = await listReleases(channel);
@@ -113,8 +116,7 @@ export async function buildAppcastXml(channel: ReleaseChannel, feedUrl: string, 
     const notes = r.releaseNotes
       ? `      <description><![CDATA[${r.releaseNotes}]]></description>\n`
       : "";
-    // The sparkleSignature column stores the full `sparkle:edSignature="..."
-    // length="..."` fragment; we paste it inside the <enclosure> unchanged.
+    const edSignature = extractEdSignature(r.sparkleSignature);
     return `    <item>
       <title>Version ${escapeXml(r.version)}</title>
       <pubDate>${pubDate}</pubDate>
@@ -123,9 +125,9 @@ export async function buildAppcastXml(channel: ReleaseChannel, feedUrl: string, 
       <sparkle:minimumSystemVersion>${escapeXml(r.minimumSystemVersion)}</sparkle:minimumSystemVersion>
 ${notes}      <enclosure
         url="${escapeXml(r.dmgUrl)}"
+        sparkle:edSignature="${escapeXml(edSignature)}"
         length="${r.dmgSizeBytes}"
-        type="application/octet-stream"
-        ${r.sparkleSignature} />
+        type="application/octet-stream" />
     </item>`;
   });
 
@@ -151,4 +153,17 @@ function escapeXml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
+}
+
+/**
+ * Pull the bare EdDSA base64 signature out of a `sparkleSignature` column
+ * value. Accepts either:
+ *   - the full `sign_update` output: `sparkle:edSignature="abc==" length="123"`
+ *   - just the base64 value: `abc==`
+ * Trailing `==` padding and `+`/`/` / `-`/`_` alphabets are all preserved.
+ */
+function extractEdSignature(stored: string): string {
+  const m = stored.match(/sparkle:edSignature\s*=\s*"([^"]+)"/);
+  if (m) return m[1];
+  return stored.trim();
 }

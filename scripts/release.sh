@@ -250,7 +250,17 @@ create-dmg \
 # ---- Sparkle sign -------------------------------------------------------
 
 echo "==> Sparkle sign_update"
-SPARKLE_SIG=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
+# sign_update emits `sparkle:edSignature="abc==" length="123"`. We store only
+# the bare base64 signature in D1 — `dmgSizeBytes` is the sole source of
+# `length=` in the appcast enclosure, which keeps the XML valid (duplicate
+# attributes cause Sparkle to fail feed parsing).
+SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
+SPARKLE_SIG=$(echo "$SPARKLE_RAW" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/')
+if [ -z "$SPARKLE_SIG" ] || [ "$SPARKLE_SIG" = "$SPARKLE_RAW" ]; then
+  echo "Could not parse sparkle:edSignature from sign_update output:"
+  echo "  $SPARKLE_RAW"
+  exit 1
+fi
 DMG_SIZE=$(stat -f%z "$DMG_PATH")
 
 # ---- R2 upload ----------------------------------------------------------
