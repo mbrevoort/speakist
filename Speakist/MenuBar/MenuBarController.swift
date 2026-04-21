@@ -114,7 +114,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit Speakist", action: #selector(handleQuit), keyEquivalent: "q")
+        // Use the channel's display name so the menu reads "Quit Speakist",
+        // "Quit Speakist Dev", "Quit Speakist Local", etc. — matches what
+        // the Dock / Cmd+Tab / Privacy panes show for this install.
+        let quit = NSMenuItem(title: "Quit \(AppIdentity.displayName)", action: #selector(handleQuit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
     }
@@ -150,22 +153,26 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         guard let button = statusItem?.button else { return }
         button.alphaValue = 1.0
         button.contentTintColor = nil // colors are baked into the image itself
+        // Tooltip uses the channel's display name so hovering a running
+        // Speakist Dev icon doesn't read "Speakist • Ready" — important when
+        // two channels are installed side-by-side.
+        let name = AppIdentity.displayName
         switch newState {
         case .idle:
             button.image = MenuBarIcon.make()  // black → template, auto-tinted
-            button.toolTip = "Speakist • Ready"
+            button.toolTip = "\(name) • Ready"
         case .recording:
             button.image = MenuBarIcon.make(fill: .speakistPeach)
-            button.toolTip = "Speakist • Recording"
+            button.toolTip = "\(name) • Recording"
             startAnimation(.recording)
         case .transcribing:
             button.image = MenuBarIcon.make(fill: NSColor(red: 0.894, green: 0.714, blue: 0.227, alpha: 1.0))
-            button.toolTip = "Speakist • Transcribing"
+            button.toolTip = "\(name) • Transcribing"
             startAnimation(.transcribing)
         case .paused:
             button.image = MenuBarIcon.make()
             button.alphaValue = 0.45
-            button.toolTip = "Speakist • Paused"
+            button.toolTip = "\(name) • Paused"
         }
     }
 
