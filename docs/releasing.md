@@ -342,6 +342,36 @@ security delete-generic-password -s com.brevoort-studio.speakist.apikeys -a deep
 Then launch the new build → Settings → Account → **Sign in with Speakist**.
 The new entry's ACL matches the release-signed app, no future prompts.
 
+### App ships with a generic (iconless) Finder icon
+
+The app's icon lives at `Speakist/Resources/Assets.xcassets/AppIcon.appiconset/`
+as 10 PNG files (16pt–512pt, @1x and @2x) plus a `Contents.json` manifest.
+If the PNGs are missing, Xcode compiles `Assets.car` without icon pixels,
+omits `CFBundleIconName` from the Info.plist, and Finder falls back to the
+grey-document placeholder. Inside a DMG, this also makes the drag window
+look broken — the source `.app` shows as an empty square next to the
+Applications alias.
+
+Regenerate from `design/Speakist.svg`:
+
+```bash
+make icons
+```
+
+This runs `scripts/generate-app-icon.swift`, which uses NSImage's built-in
+SVG renderer to produce all 10 sizes and rewrites `Contents.json`. Commit
+the resulting PNGs — they're checked into the repo so fresh clones / CI
+don't need to regenerate.
+
+`release.sh` preflight aborts if fewer than 10 PNGs are present in the
+appiconset, so you can't accidentally ship another iconless build.
+
+Note: if you only replace the DMG bytes (same version, same filename) to
+fix an icon regression, the Sparkle signature stored in D1 no longer
+matches the new bytes and Sparkle installs will fail verification. Bump
+to the next patch version (`make release VERSION=0.1.1 …`) instead — that
+inserts a fresh D1 row with a matching signature.
+
 ### Making an already-installed build poll a different channel
 
 Sparkle checks `NSUserDefaults` for `SUFeedURL` before falling back to

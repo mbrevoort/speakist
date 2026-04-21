@@ -162,6 +162,18 @@ if [ -z "$PUBLISH_TOKEN" ]; then
   exit 1
 fi
 
+# Guard against shipping an iconless build. The AppIcon asset catalog
+# declares 10 required slots; if any are missing, Xcode silently builds
+# without an icon and Finder shows the generic placeholder (which also
+# makes the DMG's drag window look broken). Regenerate with `make icons`.
+APPICON_DIR="Speakist/Resources/Assets.xcassets/AppIcon.appiconset"
+ICON_PNG_COUNT=$(find "$APPICON_DIR" -maxdepth 1 -name "*.png" 2>/dev/null | wc -l | tr -d ' ')
+if [ "$ICON_PNG_COUNT" -lt 10 ]; then
+  echo "AppIcon.appiconset has only ${ICON_PNG_COUNT}/10 PNGs — app will ship without an icon."
+  echo "Run 'make icons' to regenerate from design/Speakist.svg, then commit."
+  exit 1
+fi
+
 # ---- project.yml channel injection --------------------------------------
 
 cp project.yml project.yml.release-bak

@@ -4,10 +4,16 @@ CHANNEL ?= stable
 NOTES ?=
 BUILD_DIR := build
 
-.PHONY: project clean build run test archive release
+.PHONY: project clean build run test archive release icons
 
 project:
 	xcodegen generate
+
+# Regenerate the app icon PNGs from design/Speakist.svg into the asset
+# catalog. Run whenever the source SVG changes. Commits the PNGs so the
+# icon doesn't need to be regenerated on CI or fresh clones.
+icons:
+	scripts/generate-app-icon.swift
 
 clean:
 	rm -rf $(BUILD_DIR) Speakist.xcodeproj
