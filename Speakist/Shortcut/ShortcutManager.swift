@@ -35,11 +35,27 @@ final class ShortcutManager {
 
     private func pushDown() {
         guard !env.preferences.shortcutPaused else { return }
+        // Permission failures used to silently early-return, which was the
+        // worst possible UX — a user who'd just installed a fresh-signed
+        // build (e.g. switching from a Debug build to the notarized DMG)
+        // would find the shortcut mysteriously dead, because TCC wipes mic
+        // and accessibility grants when the code signature changes AND
+        // notifications are typically also unauthorized for the new signature
+        // so the denial notification gets eaten.
+        //
+        // Now we fire three signals instead: audible Funk beep, direct jump
+        // to the right System Settings pane, and the notification (best-effort).
         guard env.permissions.mic == .granted else {
+            Logger.shared.warn("Shortcut blocked: microphone permission is \(env.permissions.mic)")
+            NSSound(named: "Funk")?.play()
+            env.permissions.openMicrophoneSettings()
             env.notifier.micDenied()
             return
         }
         guard env.permissions.accessibility == .granted else {
+            Logger.shared.warn("Shortcut blocked: accessibility permission is \(env.permissions.accessibility)")
+            NSSound(named: "Funk")?.play()
+            env.permissions.openAccessibilitySettings()
             env.notifier.accessibilityDenied()
             return
         }
@@ -62,8 +78,22 @@ final class ShortcutManager {
             isToggleRecording = false
             finishRecording()
         } else {
-            guard env.permissions.mic == .granted else { env.notifier.micDenied(); return }
-            guard env.permissions.accessibility == .granted else { env.notifier.accessibilityDenied(); return }
+            // Same rationale as pushDown(): make permission-denial loud and
+            // self-guiding, not silent.
+            guard env.permissions.mic == .granted else {
+                Logger.shared.warn("Toggle shortcut blocked: microphone permission is \(env.permissions.mic)")
+                NSSound(named: "Funk")?.play()
+                env.permissions.openMicrophoneSettings()
+                env.notifier.micDenied()
+                return
+            }
+            guard env.permissions.accessibility == .granted else {
+                Logger.shared.warn("Toggle shortcut blocked: accessibility permission is \(env.permissions.accessibility)")
+                NSSound(named: "Funk")?.play()
+                env.permissions.openAccessibilitySettings()
+                env.notifier.accessibilityDenied()
+                return
+            }
             isToggleRecording = true
             beginRecording()
         }
