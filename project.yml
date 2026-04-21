@@ -73,6 +73,12 @@ targets:
         #   local  → com.brevoort-studio.speakist.local / "Speakist Local" / localhost:3000 (no appcast)
         SUFeedURL: $(SPEAKIST_FEED_URL)
         SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
+        # Cloudflare AI Gateway base for transcription calls. Providers are
+        # appended at call sites (e.g. "/deepgram/v1/listen"). local+dev
+        # share the `speakist-dev` gateway; beta+stable share `speakist-prod`.
+        # Gateways are configured with request/response body logging DISABLED
+        # (privacy) and caching DISABLED (useless for unique audio).
+        SpeakistGatewayBaseURL: $(SPEAKIST_GATEWAY_BASE_URL)
         SUEnableAutomaticChecks: true
         SUPublicEDKey: "uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ="
     entitlements:
@@ -112,7 +118,11 @@ targets:
           SPEAKIST_CHANNEL: local
           SPEAKIST_API_BASE_URL: "http://localhost:3000"
           SPEAKIST_FEED_URL: ""
-        # Release: stable-channel defaults. release.sh rewrites these five
+          # Local builds use the speakist-dev gateway (no separate "local"
+          # gateway — logging is already disabled on dev, so no cross-
+          # contamination concern).
+          SPEAKIST_GATEWAY_BASE_URL: "https://gateway.ai.cloudflare.com/v1/daf0f09bae56e70983442ec8c496c423/speakist-dev"
+        # Release: stable-channel defaults. release.sh rewrites these six
         # lines in-place before xcodegen generate when building beta/dev.
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
@@ -120,6 +130,9 @@ targets:
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+          # Stable + beta share the speakist-prod gateway; dev uses
+          # speakist-dev (release.sh rewrites this line for dev/beta).
+          SPEAKIST_GATEWAY_BASE_URL: "https://gateway.ai.cloudflare.com/v1/daf0f09bae56e70983442ec8c496c423/speakist-prod"
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB

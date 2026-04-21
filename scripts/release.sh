@@ -109,6 +109,14 @@ DEV_DOWNLOAD_BASE="${DEV_DOWNLOAD_BASE:-https://downloads-dev.brevoortstudio.com
 PROD_PUBLISH_URL="${PROD_PUBLISH_URL:-https://speakist.ai/api/admin/releases/publish}"
 DEV_PUBLISH_URL="${DEV_PUBLISH_URL:-https://speakist-dev.brevoortstudio.com/api/admin/releases/publish}"
 
+# Cloudflare AI Gateway routing. local+dev share `speakist-dev`;
+# beta+stable share `speakist-prod`. Account ID is public-safe (it's in
+# every dashboard URL; gateway auth is enforced at the provider level via
+# the Authorization header our Worker/Mac forwards).
+CF_ACCOUNT_ID="${CF_ACCOUNT_ID:-daf0f09bae56e70983442ec8c496c423}"
+DEV_GATEWAY_BASE_URL="${DEV_GATEWAY_BASE_URL:-https://gateway.ai.cloudflare.com/v1/${CF_ACCOUNT_ID}/speakist-dev}"
+PROD_GATEWAY_BASE_URL="${PROD_GATEWAY_BASE_URL:-https://gateway.ai.cloudflare.com/v1/${CF_ACCOUNT_ID}/speakist-prod}"
+
 case "$CHANNEL" in
   stable)
     FEED_URL="$STABLE_FEED_URL"; API_URL="$STABLE_API_URL"
@@ -117,6 +125,7 @@ case "$CHANNEL" in
     WRANGLER_ENV="production"; DMG_SUFFIX=""
     BUNDLE_ID="com.brevoort-studio.speakist"
     DISPLAY_NAME="Speakist"
+    GATEWAY_BASE_URL="$PROD_GATEWAY_BASE_URL"
     ;;
   beta)
     FEED_URL="$BETA_FEED_URL"; API_URL="$BETA_API_URL"
@@ -125,6 +134,7 @@ case "$CHANNEL" in
     WRANGLER_ENV="production"; DMG_SUFFIX="-beta"
     BUNDLE_ID="com.brevoort-studio.speakist.beta"
     DISPLAY_NAME="Speakist Beta"
+    GATEWAY_BASE_URL="$PROD_GATEWAY_BASE_URL"
     ;;
   dev)
     FEED_URL="$DEV_FEED_URL"; API_URL="$DEV_API_URL"
@@ -133,6 +143,7 @@ case "$CHANNEL" in
     WRANGLER_ENV="dev"; DMG_SUFFIX="-dev"
     BUNDLE_ID="com.brevoort-studio.speakist.dev"
     DISPLAY_NAME="Speakist Dev"
+    GATEWAY_BASE_URL="$DEV_GATEWAY_BASE_URL"
     ;;
 esac
 
@@ -210,6 +221,7 @@ sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_DISPLAY_NAME: )\"Speakist\"|\\1\"${DI
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_CHANNEL: )stable\$|\\1${CHANNEL}|" project.yml
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_API_BASE_URL: )\"https://speakist.ai\"|\\1\"${API_URL}\"|" project.yml
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_FEED_URL: )\"https://speakist.ai/appcast.xml\"|\\1\"${FEED_URL}\"|" project.yml
+sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_GATEWAY_BASE_URL: )\"${PROD_GATEWAY_BASE_URL}\"|\\1\"${GATEWAY_BASE_URL}\"|" project.yml
 
 # ---- version bump -------------------------------------------------------
 
@@ -258,11 +270,15 @@ BUILT_FEED=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$APP_PATH/Contents/I
 BUILT_CHANNEL=$(/usr/libexec/PlistBuddy -c "Print :SpeakistChannel" "$APP_PATH/Contents/Info.plist")
 BUILT_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist")
 BUILT_DISPLAY=$(/usr/libexec/PlistBuddy -c "Print :CFBundleName" "$APP_PATH/Contents/Info.plist")
+BUILT_GATEWAY=$(/usr/libexec/PlistBuddy -c "Print :SpeakistGatewayBaseURL" "$APP_PATH/Contents/Info.plist")
 if [ "$BUILT_FEED" != "$FEED_URL" ] || [ "$BUILT_CHANNEL" != "$CHANNEL" ] \
-   || [ "$BUILT_BUNDLE_ID" != "$BUNDLE_ID" ] || [ "$BUILT_DISPLAY" != "$DISPLAY_NAME" ]; then
+   || [ "$BUILT_BUNDLE_ID" != "$BUNDLE_ID" ] || [ "$BUILT_DISPLAY" != "$DISPLAY_NAME" ] \
+   || [ "$BUILT_GATEWAY" != "$GATEWAY_BASE_URL" ]; then
   echo "Channel mismatch in built Info.plist!"
   echo "  Expected: channel=$CHANNEL bundleID=$BUNDLE_ID display=$DISPLAY_NAME feed=$FEED_URL"
+  echo "            gateway=$GATEWAY_BASE_URL"
   echo "  Got:      channel=$BUILT_CHANNEL bundleID=$BUILT_BUNDLE_ID display=$BUILT_DISPLAY feed=$BUILT_FEED"
+  echo "            gateway=$BUILT_GATEWAY"
   echo "Try: rm -rf build/ Speakist.xcodeproj && re-run"
   exit 1
 fi

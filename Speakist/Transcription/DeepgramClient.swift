@@ -39,7 +39,20 @@ struct DeepgramClient: TranscriptionClient {
     var modelLabel: String { model.rawValue }
 
     func transcribe(audioURL: URL, keyterms: [String], language: String?) async throws -> TranscriptionResult {
-        var components = URLComponents(string: "https://api.deepgram.com/v1/listen")!
+        // Route through Cloudflare AI Gateway when configured (all channels
+        // in production), falling back to direct-to-Deepgram only if the
+        // Info.plist key is absent (e.g. tests, or a defensive empty
+        // override). Gateway URL pattern:
+        //   https://gateway.ai.cloudflare.com/v1/{acct}/{gw}/deepgram/v1/listen
+        // The gateway is configured to pass through the Authorization
+        // header unchanged, so the minted Deepgram ephemeral key still
+        // authenticates us at the Deepgram origin. Body logging and caching
+        // are disabled at the gateway rule level — see docs/architecture.
+        let gatewayBase = AppIdentity.gatewayBaseURL
+        let endpoint = gatewayBase.isEmpty
+            ? "https://api.deepgram.com/v1/listen"
+            : "\(gatewayBase)/deepgram/v1/listen"
+        var components = URLComponents(string: endpoint)!
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "model", value: model.rawValue),
             URLQueryItem(name: "smart_format", value: "true"),
