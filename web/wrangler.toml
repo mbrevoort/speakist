@@ -61,12 +61,23 @@ migrations_dir = "drizzle/migrations"
 
 # Workers Analytics Engine — one event per /api/transcribe request
 # (success or failure) with provider, model, status, duration, cost, and
-# latency blobs. Queryable via SQL from the Cloudflare dashboard. Free
-# tier covers ~10M events/month, well above our expected volume. Dataset
-# is per-env so dev traffic doesn't pollute prod metrics.
-[[env.dev.analytics_engine_datasets]]
-binding = "TRANSCRIPTION_EVENTS"
-dataset = "speakist_transcription_dev"
+# latency blobs. Queryable via SQL from the Cloudflare dashboard.
+#
+# Requires **Workers Paid** ($5/mo) — the Free plan returns error 10089
+# at deploy time. `logTranscriptionEvent` no-ops gracefully if the binding
+# is missing, so leaving this commented is safe; the Worker runs fine
+# with no per-request events being recorded.
+#
+# To enable:
+#   1. Cloudflare dashboard → Workers Plans → upgrade to Paid if needed
+#   2. https://dash.cloudflare.com/{ACCOUNT_ID}/workers/analytics-engine
+#      → click "Enable Analytics Engine"
+#   3. Uncomment the blocks below (dev + production)
+#   4. `pnpm deploy:dev` / `pnpm deploy:prod`
+#
+# [[env.dev.analytics_engine_datasets]]
+# binding = "TRANSCRIPTION_EVENTS"
+# dataset = "speakist_transcription_dev"
 
 # [[env.dev.kv_namespaces]]
 # binding = "CACHE"
@@ -98,9 +109,10 @@ database_name = "speakist-prod"
 database_id = "__FILL_ME_IN__"
 migrations_dir = "drizzle/migrations"
 
-[[env.production.analytics_engine_datasets]]
-binding = "TRANSCRIPTION_EVENTS"
-dataset = "speakist_transcription_prod"
+# See dev block above for enablement steps.
+# [[env.production.analytics_engine_datasets]]
+# binding = "TRANSCRIPTION_EVENTS"
+# dataset = "speakist_transcription_prod"
 
 # [[env.production.kv_namespaces]]
 # binding = "CACHE"
