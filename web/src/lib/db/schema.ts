@@ -247,9 +247,9 @@ export const creditLedger = sqliteTable(
 
 // ---- Usage events ---------------------------------------------------------
 // One row per transcription. Deduped per org via (org_id, transcription_client_id)
-// — the client UUID from the Mac app. We also store the Deepgram cost for
-// margin analysis in super admin, but the charge against credits is
-// cost_millicents (which is retail, not Deepgram pass-through).
+// — the client UUID from the Mac app. Also stores `upstream_cost_millicents`
+// (what we paid the provider) alongside `cost_millicents` (what we charged
+// the org) so super-admin can compute margin.
 
 export const usageEvents = sqliteTable(
   "usage_events",
@@ -262,6 +262,10 @@ export const usageEvents = sqliteTable(
       .notNull()
       .references(() => users.id),
     transcriptionClientId: text("transcription_client_id").notNull(),
+    // Which provider produced this transcription. 'deepgram' | 'groq' |
+    // 'openai' | 'xai'. Phase A ships with only 'deepgram' live; defaulted
+    // on the ALTER so legacy rows backfill cleanly.
+    providerId: text("provider_id").notNull().default("deepgram"),
     wordCount: integer("word_count").notNull(),
     // Store ms (integer) rather than real seconds so we don't introduce a
     // second floating-point column. `audio_ms / 1000` in app code when
@@ -269,13 +273,41 @@ export const usageEvents = sqliteTable(
     audioMs: integer("audio_ms"),
     model: text("model").notNull(),
     costMillicents: integer("cost_millicents").notNull().default(0),
-    deepgramCostMillicents: integer("deepgram_cost_millicents"),
+    // Renamed from `deepgram_cost_millicents` in migration 0004. The old
+    // column is still present in the DB for one release as a safety hatch;
+    // Phase D drops it. Drizzle schema only maps the new name.
+    upstreamCostMillicents: integer("upstream_cost_millicents"),
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   },
   (t) => ({
     orgIdx: index("usage_events_org_idx").on(t.orgId, t.createdAt),
     userIdx: index("usage_events_user_idx").on(t.userId, t.createdAt),
     unique: uniqueIndex("usage_events_unique").on(t.orgId, t.transcriptionClientId),
+  })
+);
+
+// ---- Provider pricing -----------------------------------------------------
+// Per-(provider, model) rates. Supersedes `pricing_config.price_per_word_millicents`
+// for transcription billing starting in Phase A (which remains for any
+// legacy callers until Phase D cleanup).
+//
+// `cost_per_minute_millicents` is what the provider charges us; stored as
+// REAL because providers price in fractions of a cent (Groq turbo is
+// ~0.667 mC/min) and we don't want to lose precision before applying the
+// retail markup. `retail_per_minute_millicents` is the charge to the org.
+
+export const providerPricing = sqliteTable(
+  "provider_pricing",
+  {
+    providerId: text("provider_id").notNull(),
+    model: text("model").notNull(),
+    costPerMinuteMillicents: real("cost_per_minute_millicents").notNull(),
+    retailPerMinuteMillicents: real("retail_per_minute_millicents").notNull(),
+    active: bool("active").notNull().default(true),
+    updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.providerId, t.model] }),
   })
 );
 

@@ -137,10 +137,12 @@ struct DeepgramClient: TranscriptionClient {
     }
 }
 
-private extension ReplaceRule {
+extension ReplaceRule {
     /// Screens out pairs Deepgram can't parse (empty sides, colon in either
     /// half which would be mis-split). Deepgram's `replace` find is case-
-    /// insensitive so we lowercase it up front.
+    /// insensitive so we lowercase it up front. Used by both DeepgramClient
+    /// (direct-to-provider path) and SpeakistTranscribeClient (proxy path,
+    /// which filters before serializing pairs into the X-Replace header).
     var isValid: Bool {
         let f = find.trimmingCharacters(in: .whitespacesAndNewlines)
         let r = replacement.trimmingCharacters(in: .whitespacesAndNewlines)

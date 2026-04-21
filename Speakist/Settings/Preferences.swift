@@ -38,6 +38,7 @@ final class Preferences: ObservableObject {
         static let rateDeepgramNova3 = "rate.deepgram.nova3"
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
         static let apiBaseURL = "apiBaseURL"
+        static let useTranscribeProxy = "useTranscribeProxy"
     }
 
     init() {
@@ -84,7 +85,16 @@ final class Preferences: ObservableObject {
             //   defaults write <bundleID> apiBaseURL "https://example.com"
             // where <bundleID> varies per channel — see AppIdentity.bundleID
             // for the mapping.
-            K.apiBaseURL: channelDefaultAPIBase
+            K.apiBaseURL: channelDefaultAPIBase,
+            // Phase A flag: when true, Mac uploads audio to the Worker's
+            // /api/transcribe endpoint. When false, Mac mints a Deepgram
+            // ephemeral key and uploads directly to api.deepgram.com (the
+            // legacy path). Default ON everywhere — the legacy path stays
+            // as a fallback that a user or QA can flip via:
+            //   defaults write <bundleID> useTranscribeProxy 0
+            // If we see breakage in the dev channel, flipping this off
+            // restores the known-good flow without waiting for a release.
+            K.useTranscribeProxy: true
         ])
     }
 
@@ -183,6 +193,14 @@ final class Preferences: ObservableObject {
     var onboardingCompleted: Bool {
         get { defaults.bool(forKey: K.onboardingCompleted) }
         set { defaults.set(newValue, forKey: K.onboardingCompleted); objectWillChange.send() }
+    }
+    /// Phase A transcription routing flag — see `K.useTranscribeProxy`.
+    /// True = audio flows Mac → Worker → Deepgram (new path).
+    /// False = Mac mints ephemeral key + uploads direct to Deepgram (legacy).
+    /// User-overridable via `defaults write <bundleID> useTranscribeProxy 0`.
+    var useTranscribeProxy: Bool {
+        get { defaults.bool(forKey: K.useTranscribeProxy) }
+        set { defaults.set(newValue, forKey: K.useTranscribeProxy); objectWillChange.send() }
     }
 
     // MARK: - Rates

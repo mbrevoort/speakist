@@ -59,6 +59,15 @@ database_name = "speakist-dev"
 database_id = "bb47a53f-9aa2-4a9e-b98a-68350cd90cb2"
 migrations_dir = "drizzle/migrations"
 
+# Workers Analytics Engine — one event per /api/transcribe request
+# (success or failure) with provider, model, status, duration, cost, and
+# latency blobs. Queryable via SQL from the Cloudflare dashboard. Free
+# tier covers ~10M events/month, well above our expected volume. Dataset
+# is per-env so dev traffic doesn't pollute prod metrics.
+[[env.dev.analytics_engine_datasets]]
+binding = "TRANSCRIPTION_EVENTS"
+dataset = "speakist_transcription_dev"
+
 # [[env.dev.kv_namespaces]]
 # binding = "CACHE"
 # id = "__FILL_ME_IN__"
@@ -88,6 +97,10 @@ binding = "DB"
 database_name = "speakist-prod"
 database_id = "__FILL_ME_IN__"
 migrations_dir = "drizzle/migrations"
+
+[[env.production.analytics_engine_datasets]]
+binding = "TRANSCRIPTION_EVENTS"
+dataset = "speakist_transcription_prod"
 
 # [[env.production.kv_namespaces]]
 # binding = "CACHE"

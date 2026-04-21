@@ -23,6 +23,8 @@ import {
   type CreditReason,
 } from "@/lib/db/schema";
 import { getOrgCreditBalance } from "@/lib/orgs";
+import { computeCost, getProviderPricing } from "@/lib/transcription/pricing";
+import type { ProviderId } from "@/lib/transcription/types";
 
 export interface LedgerRow {
   id: string;
@@ -244,6 +246,164 @@ export async function debitForUsage(args: DebitForUsageArgs): Promise<DebitResul
       } catch (err) {
         console.error("[auto-topup] trigger failed:", err);
         // TODO(phase-4-follow-up): email the user. Needs Resend template.
+      }
+    }
+  }
+
+  return {
+    kind: "ok",
+    usageEventId,
+    newBalanceMillicents: newBalance,
+    autoTopupTriggered,
+  };
+}
+
+// --- debit for audio transcription (Phase A) -------------------------------
+//
+// `debitForUsage` above bills on a per-word rate and is kept for /api/usage
+// backward compat with pre-Phase-A Mac builds. Phase A introduces
+// per-(provider, model) per-minute pricing — this function is what
+// /api/transcribe calls.
+//
+// It shares the same `usage_events` dedup key, ledger shape, and
+// auto-topup trigger logic with `debitForUsage`. The only differences:
+//   * cost is computed from `provider_pricing` × provider-reported audio
+//     duration, not per-word;
+//   * we record both `cost_millicents` (retail, ledger) AND
+//     `upstream_cost_millicents` (provider's cost to us, margin analysis);
+//   * `word_count` is still recorded because the ledger UI still uses it
+//     as a rough display metric — we compute it here from the transcript.
+//
+// Returning the same `DebitResult` shape keeps the route handler's switch
+// consistent regardless of which path ran.
+
+export interface DebitForAudioTranscriptionArgs {
+  orgId: string;
+  userId: string;
+  transcriptionClientId: string;
+  providerId: ProviderId;
+  model: string;
+  audioSeconds: number;
+  /** Word count computed from the transcript. Recorded for display only —
+   *  cost is derived from audio duration. */
+  wordCount: number;
+}
+
+export async function debitForAudioTranscription(
+  args: DebitForAudioTranscriptionArgs
+): Promise<DebitResult> {
+  const db = getDb();
+
+  // Compute cost from provider_pricing. Missing row is a config error — we
+  // treat it as comped rather than a hard block, so a newly-added model
+  // never fails user transcriptions just because we forgot to seed the row.
+  const pricing = await getProviderPricing(args.providerId, args.model);
+  let retailMc = 0;
+  let upstreamMc: number | null = null;
+  if (pricing && pricing.active) {
+    const costs = computeCost(pricing, args.audioSeconds);
+    retailMc = costs.retailMc;
+    upstreamMc = costs.upstreamMc;
+  } else {
+    console.warn(
+      `[debitForAudioTranscription] no active pricing row for ${args.providerId}/${args.model} — treating as comped`
+    );
+  }
+
+  // Load org for comp + auto-topup.
+  const [org] = await db
+    .select({
+      isComped: organizations.isComped,
+      autoTopupEnabled: organizations.autoTopupEnabled,
+      autoTopupThresholdMillicents: organizations.autoTopupThresholdMillicents,
+      autoTopupAmountMillicents: organizations.autoTopupAmountMillicents,
+      stripeCustomerId: organizations.stripeCustomerId,
+      stripeDefaultPaymentMethodId: organizations.stripeDefaultPaymentMethodId,
+    })
+    .from(organizations)
+    .where(eq(organizations.id, args.orgId))
+    .limit(1);
+  if (!org) {
+    return { kind: "insufficient", balanceMillicents: 0 };
+  }
+
+  const usageEventId = crypto.randomUUID();
+  try {
+    await db.insert(usageEvents).values({
+      id: usageEventId,
+      orgId: args.orgId,
+      userId: args.userId,
+      transcriptionClientId: args.transcriptionClientId,
+      providerId: args.providerId,
+      wordCount: args.wordCount,
+      audioMs: Math.round(args.audioSeconds * 1000),
+      model: args.model,
+      costMillicents: org.isComped ? 0 : retailMc,
+      upstreamCostMillicents: upstreamMc,
+    });
+  } catch (err) {
+    if (String(err).includes("UNIQUE") || String(err).includes("unique")) {
+      const [existing] = await db
+        .select({ id: usageEvents.id })
+        .from(usageEvents)
+        .where(
+          and(
+            eq(usageEvents.orgId, args.orgId),
+            eq(usageEvents.transcriptionClientId, args.transcriptionClientId)
+          )
+        )
+        .limit(1);
+      return { kind: "duplicate", usageEventId: existing?.id ?? usageEventId };
+    }
+    throw err;
+  }
+
+  if (!org.isComped && retailMc > 0) {
+    await db.insert(creditLedger).values({
+      orgId: args.orgId,
+      deltaMillicents: -retailMc,
+      reason: "usage",
+      usageEventId,
+    });
+  }
+
+  const newBalance = await getOrgCreditBalance(args.orgId);
+
+  // Auto-topup: same contract as debitForUsage — fire-and-forget Stripe
+  // charge if the post-debit balance dips below threshold and the org has
+  // a saved payment method.
+  let autoTopupTriggered = false;
+  if (
+    !org.isComped &&
+    org.autoTopupEnabled &&
+    org.stripeCustomerId &&
+    org.stripeDefaultPaymentMethodId
+  ) {
+    const [cfg] = await db
+      .select({
+        autoTopupThresholdDefault: pricingConfig.defaultAutoTopupThresholdMillicents,
+        autoTopupAmountDefault: pricingConfig.defaultAutoTopupAmountMillicents,
+      })
+      .from(pricingConfig)
+      .where(eq(pricingConfig.id, 1))
+      .limit(1);
+    const threshold =
+      org.autoTopupThresholdMillicents ?? cfg?.autoTopupThresholdDefault ?? 500_000;
+    const amount =
+      org.autoTopupAmountMillicents ?? cfg?.autoTopupAmountDefault ?? 2_000_000;
+
+    if (newBalance < threshold) {
+      try {
+        const { triggerAutoTopup } = await import("@/lib/billing");
+        await triggerAutoTopup({
+          orgId: args.orgId,
+          stripeCustomerId: org.stripeCustomerId,
+          stripePaymentMethodId: org.stripeDefaultPaymentMethodId,
+          amountMillicents: amount,
+        });
+        autoTopupTriggered = true;
+      } catch (err) {
+        console.error("[auto-topup] trigger failed:", err);
       }
     }
   }

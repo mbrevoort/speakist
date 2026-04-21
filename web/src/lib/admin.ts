@@ -40,7 +40,11 @@ export async function getPlatformTotals(): Promise<PlatformTotals> {
       events: sql<number>`COUNT(*)`,
       words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
       cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
-      dgCost: sql<number>`COALESCE(SUM(${usageEvents.deepgramCostMillicents}), 0)`,
+      // Renamed from deepgramCostMillicents in migration 0004 — same
+      // meaning (what we paid the upstream provider), just not Deepgram-
+      // specific anymore. The admin UI label stays "Deepgram cost" for
+      // now since ~100% of traffic is still Deepgram.
+      dgCost: sql<number>`COALESCE(SUM(${usageEvents.upstreamCostMillicents}), 0)`,
     })
     .from(usageEvents)
     .where(gte(usageEvents.createdAt, since30));

@@ -78,10 +78,13 @@ final class TranscriptionService {
             return
         }
 
-        // 2. Build the Deepgram client with a freshly-minted short-lived key.
-        let client: DeepgramClient
+        // 2. Build the transcription client. Phase A default: proxy through
+        //    the Speakist Worker via /api/transcribe. The legacy direct-
+        //    Deepgram path (mint ephemeral key + POST to api.deepgram.com)
+        //    is still reachable by flipping `useTranscribeProxy` off.
+        let client: any TranscriptionClient
         do {
-            client = try await buildClient()
+            client = try await buildClient(transcriptionClientId: entryID)
         } catch SpeakistAPIClient.Error.insufficientCredit {
             notifier.transcriptionFailed("Out of credit. Top up at \(preferences.apiBaseURL.absoluteString)/dashboard/billing")
             hud.hide()
@@ -97,12 +100,12 @@ final class TranscriptionService {
                             errorMessage: "Session rejected — please sign in again")
             return
         } catch {
-            Logger.shared.warn("Deepgram token mint failed: \(String(describing: error))")
+            Logger.shared.warn("Transcription client build failed: \(String(describing: error))")
             notifier.transcriptionFailed("Couldn't start transcription.")
             hud.hide()
             saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
                             audioURL: request.recording.url, bundleID: focus.bundleID,
-                            errorMessage: "Token mint failed")
+                            errorMessage: "Client build failed")
             return
         }
 
@@ -122,6 +125,17 @@ final class TranscriptionService {
             if result.audioSeconds > 0 {
                 audioSeconds = result.audioSeconds
             }
+        } catch SpeakistAPIClient.Error.insufficientCredit {
+            // Surfaced from SpeakistTranscribeClient when server returns 402
+            // mid-request (e.g., balance raced since the pre-check). Same
+            // UX as the pre-check hit above.
+            notifier.transcriptionFailed("Out of credit. Top up at \(preferences.apiBaseURL.absoluteString)/dashboard/billing")
+            saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
+                            audioURL: request.recording.url, bundleID: focus.bundleID,
+                            providerLabel: client.providerLabel, modelLabel: client.modelLabel,
+                            errorMessage: "Insufficient credit")
+            hud.hide()
+            return
         } catch {
             Logger.shared.warn("transcribe failed: \(error.localizedDescription)")
             handleTranscribeFailure(error: error,
@@ -176,18 +190,21 @@ final class TranscriptionService {
                      model: client.modelLabel,
                      audioSeconds: audioSeconds)
 
-        // 6. Report usage to Speakist so the ledger debits. Fire-and-forget
-        // from the user's perspective — we've already pasted + stored
-        // locally. The reporting call deduplicates on entryID, so a network
-        // blip leaves us safe for next run (Phase 7: retry queue).
-        Task.detached { [weak self, entryID, rawText, audioSeconds, modelLabel = client.modelLabel] in
-            guard let self else { return }
-            await self.reportUsage(
-                transcriptionClientId: entryID,
-                wordCount: Self.wordCount(rawText),
-                audioMs: Int(audioSeconds * 1000),
-                model: modelLabel
-            )
+        // 6. Report usage to Speakist so the ledger debits — but only on
+        // the legacy path. When `useTranscribeProxy` is on, the Worker's
+        // /api/transcribe endpoint debited inline, so we skip this call.
+        // This branching lives here (not at call sites below) so the Phase A
+        // proxy flow is one HTTP round-trip total from Mac's perspective.
+        if !preferences.useTranscribeProxy {
+            Task.detached { [weak self, entryID, rawText, audioSeconds, modelLabel = client.modelLabel] in
+                guard let self else { return }
+                await self.reportUsage(
+                    transcriptionClientId: entryID,
+                    wordCount: Self.wordCount(rawText),
+                    audioMs: Int(audioSeconds * 1000),
+                    model: modelLabel
+                )
+            }
         }
 
         playStopSound()
@@ -239,13 +256,12 @@ final class TranscriptionService {
                                          durationMs: Int,
                                          audioURL: URL,
                                          bundleID: String?,
-                                         client: DeepgramClient) {
+                                         client: any TranscriptionClient) {
         let message = error.localizedDescription
         if let te = error as? TranscriptionError, te.isAuthFailure {
-            // A minted Deepgram token getting rejected means the key ladder
-            // is busted on the server side (our project key wrong, or the
-            // mint is returning stale keys). Surface as a Speakist-side
-            // problem, not a "your Deepgram account" problem.
+            // Auth failure on the transcribe-proxy path means the Mac's
+            // bearer token was rejected (session revoked) or the Worker's
+            // provider key is busted — either way, a Speakist-side problem.
             notifier.apiKeyRejected(provider: "Speakist")
         } else {
             notifier.transcriptionFailed(message)
@@ -281,11 +297,39 @@ final class TranscriptionService {
             editedAt: nil))
     }
 
-    // MARK: - Build Deepgram client
+    // MARK: - Build transcription client
 
-    /// Fetches a short-lived Deepgram key and wraps it in a DeepgramClient
-    /// configured with the user's current preferences + correction rules.
-    private func buildClient() async throws -> DeepgramClient {
+    /// Returns the transcription client to use for this request.
+    ///
+    /// * `useTranscribeProxy` ON (Phase A default) → `SpeakistTranscribeClient`
+    ///   which POSTs the audio to our Worker's /api/transcribe. No ephemeral
+    ///   key mint, no separate /api/usage call — the Worker debits inline.
+    ///
+    /// * `useTranscribeProxy` OFF (legacy fallback) → mint a short-lived
+    ///   Deepgram ephemeral key and hand it to a `DeepgramClient` that
+    ///   POSTs audio directly to api.deepgram.com.
+    private func buildClient(transcriptionClientId: String) async throws -> any TranscriptionClient {
+        let replaceRules = VocabularyBuilder.replaceRules(from: correctionStore)
+
+        if preferences.useTranscribeProxy {
+            guard let token = try? keychainToken(), !token.isEmpty else {
+                throw SpeakistAPIClient.Error.notSignedIn
+            }
+            return SpeakistTranscribeClient(
+                apiBaseURL: preferences.apiBaseURL,
+                bearerToken: token,
+                provider: "deepgram",
+                model: preferences.deepgramModel.rawValue,
+                transcriptionClientId: transcriptionClientId,
+                dictation: preferences.dictationMode,
+                fillerWords: preferences.includeFillerWords,
+                measurements: preferences.convertMeasurements,
+                profanityFilter: preferences.maskProfanity,
+                detectLanguage: preferences.autoDetectLanguage,
+                replaceRules: replaceRules)
+        }
+
+        // Legacy path — mint ephemeral key and call Deepgram directly.
         let token = try await apiClient.mintDeepgramToken()
         return DeepgramClient(
             apiKey: token.key,
@@ -295,7 +339,15 @@ final class TranscriptionService {
             measurements: preferences.convertMeasurements,
             profanityFilter: preferences.maskProfanity,
             detectLanguage: preferences.autoDetectLanguage,
-            replaceRules: VocabularyBuilder.replaceRules(from: correctionStore))
+            replaceRules: replaceRules)
+    }
+
+    /// Pull the Mac session bearer token from the account manager. Same
+    /// Keychain slot the SpeakistAPIClient uses via its tokenProvider
+    /// closure, just read directly because SpeakistTranscribeClient needs
+    /// the raw token at construction time (not per-request).
+    private func keychainToken() throws -> String {
+        accountManager.bearerToken ?? ""
     }
 
     private func withRetry<T>(_ work: () async throws -> T) async throws -> T {
