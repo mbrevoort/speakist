@@ -15,8 +15,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: "6"
-    MARKETING_VERSION: "0.1.3"
+    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "0.1.4"
     DEVELOPMENT_TEAM: Q5T8FJNX57
 
 packages:
@@ -76,7 +76,16 @@ targets:
         SUEnableAutomaticChecks: true
         SUPublicEDKey: "uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ="
     entitlements:
+      # xcodegen rewrites this file on every `xcodegen generate` from the
+      # `properties:` block below — don't hand-edit the .entitlements file,
+      # your changes will be clobbered. Add new entitlements here.
       path: Speakist/Speakist.entitlements
+      properties:
+        # Required under hardened runtime (ENABLE_HARDENED_RUNTIME: YES).
+        # Without this, AVCaptureDevice.requestAccess(for: .audio) silently
+        # returns false without showing the TCC prompt — users never see
+        # "<AppName> wants to use the microphone" and can't grant access.
+        com.apple.security.device.audio-input: true
     settings:
       base:
         # PRODUCT_NAME drives the .app bundle filename on disk and the
