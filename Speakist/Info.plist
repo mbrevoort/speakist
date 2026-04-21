@@ -39,12 +39,12 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://speakist.ai/appcast.xml</string>
+	<string>$(SPEAKIST_FEED_URL)</string>
 	<key>SUPublicEDKey</key>
 	<string>uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ=</string>
 	<key>SpeakistChannel</key>
-	<string>stable</string>
+	<string>$(SPEAKIST_CHANNEL)</string>
 	<key>SpeakistDefaultAPIBaseURL</key>
-	<string>https://speakist.ai</string>
+	<string>$(SPEAKIST_API_BASE_URL)</string>
 </dict>
 </plist>

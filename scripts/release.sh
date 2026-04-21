@@ -186,17 +186,17 @@ cp project.yml project.yml.release-bak
 trap 'mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
 
 echo "==> Injecting channel '$CHANNEL' into project.yml"
-sed -i '' -E "s|(SUFeedURL:)[[:space:]]*\"[^\"]*\"|\1 \"${FEED_URL}\"|" project.yml
-sed -i '' -E "s|(SpeakistDefaultAPIBaseURL:)[[:space:]]*\"[^\"]*\"|\1 \"${API_URL}\"|" project.yml
-sed -i '' -E "s|(SpeakistChannel:)[[:space:]]*\"[^\"]*\"|\1 \"${CHANNEL}\"|" project.yml
-
-# Channel-specific bundle ID + display name go only into the Release
-# config. We use a sed address range from the `        Release:` line
-# down to the next top-level section (`    dependencies:` at 4 spaces)
-# so we don't stomp on the Debug config's `.debug` values or the
+# All channel-specific values live under settings.configs.Release. We scope
+# each rewrite with a sed address range from the `        Release:` line
+# down to the next top-level section (`    dependencies:` at 4 spaces) so
+# we don't stomp on the Debug config's Local-channel values or the
 # SpeakistTests target's `.tests` bundle ID.
-sed -i '' -E "/^        Release:\$/,/^    [a-z]/ s|(PRODUCT_BUNDLE_IDENTIFIER: )com\\.brevoort-studio\\.speakist\$|\\1${BUNDLE_ID}|" project.yml
-sed -i '' -E "/^        Release:\$/,/^    [a-z]/ s|(SPEAKIST_DISPLAY_NAME: )\"Speakist\"|\\1\"${DISPLAY_NAME}\"|" project.yml
+RELEASE_RANGE='/^        Release:$/,/^    [a-z]/'
+sed -i '' -E "${RELEASE_RANGE} s|(PRODUCT_BUNDLE_IDENTIFIER: )com\\.brevoort-studio\\.speakist\$|\\1${BUNDLE_ID}|" project.yml
+sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_DISPLAY_NAME: )\"Speakist\"|\\1\"${DISPLAY_NAME}\"|" project.yml
+sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_CHANNEL: )stable\$|\\1${CHANNEL}|" project.yml
+sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_API_BASE_URL: )\"https://speakist.ai\"|\\1\"${API_URL}\"|" project.yml
+sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_FEED_URL: )\"https://speakist.ai/appcast.xml\"|\\1\"${FEED_URL}\"|" project.yml
 
 # ---- version bump -------------------------------------------------------
 

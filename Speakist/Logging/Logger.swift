@@ -5,7 +5,7 @@ import AppKit
 /// A small façade over os.Logger + a rotating file sink at
 /// `~/Library/Logs/{CFBundleName}/speakist.log`. Per-channel builds land
 /// under distinct folders (`Speakist/`, `Speakist Dev/`, `Speakist Beta/`,
-/// `Speakist Debug/`) so you can grep logs from one channel without
+/// `Speakist Local/`) so you can grep logs from one channel without
 /// cross-contamination.
 final class Logger {
     static let shared = Logger()

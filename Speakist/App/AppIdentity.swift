@@ -10,7 +10,7 @@ import Foundation
 ///   stable  → bundleID com.brevoort-studio.speakist        displayName "Speakist"
 ///   beta    → bundleID com.brevoort-studio.speakist.beta   displayName "Speakist Beta"
 ///   dev     → bundleID com.brevoort-studio.speakist.dev    displayName "Speakist Dev"
-///   debug   → bundleID com.brevoort-studio.speakist.debug  displayName "Speakist Debug"
+///   local   → bundleID com.brevoort-studio.speakist.local  displayName "Speakist Local"
 ///
 /// Because bundle-id and display-name are different across channels, macOS
 /// treats each channel as a distinct app: TCC grants, UserDefaults,
@@ -27,16 +27,17 @@ enum AppIdentity {
 
     /// User-facing name shown in Finder, the Dock, Cmd+Tab, System
     /// Settings → Privacy: "Speakist", "Speakist Dev", "Speakist Beta",
-    /// "Speakist Debug". Used for folder names under `Application Support/`
+    /// "Speakist Local". Used for folder names under `Application Support/`
     /// and `~/Library/Logs/` so the channel is obvious in Finder.
     static var displayName: String {
         Bundle.main.infoDictionary?["CFBundleName"] as? String ?? "Speakist"
     }
 
-    /// Release channel slug baked in by `scripts/release.sh`:
-    /// "stable", "beta", "dev", or "debug". Default if unset = "debug"
-    /// (local Xcode builds don't go through the release script).
+    /// Release channel slug: "stable", "beta", "dev", or "local". Local
+    /// builds pick up "local" from project.yml's Debug config; release.sh
+    /// rewrites the Release config's value for dev/beta. Fallback is
+    /// "local" in the vanishingly-unlikely case Info.plist loses the key.
     static var channel: String {
-        Bundle.main.object(forInfoDictionaryKey: "SpeakistChannel") as? String ?? "debug"
+        Bundle.main.object(forInfoDictionaryKey: "SpeakistChannel") as? String ?? "local"
     }
 }

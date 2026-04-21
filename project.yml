@@ -15,8 +15,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: "3"
-    MARKETING_VERSION: "0.1.1"
+    CURRENT_PROJECT_VERSION: "4"
+    MARKETING_VERSION: "0.1.2"
     DEVELOPMENT_TEAM: Q5T8FJNX57
 
 packages:
@@ -41,13 +41,14 @@ targets:
     info:
       path: Speakist/Info.plist
       properties:
-        # CFBundleName & CFBundleDisplayName read SPEAKIST_DISPLAY_NAME,
-        # which is set per-configuration below (stable → "Speakist",
-        # debug → "Speakist Debug"). scripts/release.sh also rewrites
-        # the Release config's value for beta ("Speakist Beta") and dev
-        # ("Speakist Dev") before xcodegen generate.
+        # CFBundleName, CFBundleDisplayName, SpeakistChannel, and
+        # CFBundleIdentifier all read per-configuration build settings
+        # defined below. Xcode's Debug config produces the Local channel;
+        # Release produces stable by default. scripts/release.sh rewrites
+        # the Release block before xcodegen generate when shipping beta/dev.
         CFBundleName: $(SPEAKIST_DISPLAY_NAME)
         CFBundleDisplayName: $(SPEAKIST_DISPLAY_NAME)
+        SpeakistChannel: $(SPEAKIST_CHANNEL)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
@@ -59,19 +60,19 @@ targets:
         NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor."
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
-        # Per-channel values. scripts/release.sh rewrites these before
-        # xcodegen generate so they end up in the built Info.plist with
-        # the right channel's URLs. The defaults below are what you get
-        # from an unflagged `make build` / `make archive` (= stable).
+        # Per-channel URLs. SpeakistDefaultAPIBaseURL and SUFeedURL read
+        # per-configuration build settings (see `configs:` below). For
+        # Local that means localhost + no auto-update. release.sh rewrites
+        # the Release block for dev/beta before xcodegen generate so the
+        # baked-in Info.plist carries the right URLs for each channel.
         #
         # Channel matrix:
         #   stable → com.brevoort-studio.speakist       / "Speakist"       / speakist.ai/appcast.xml
         #   beta   → com.brevoort-studio.speakist.beta  / "Speakist Beta"  / speakist.ai/appcast-beta.xml
         #   dev    → com.brevoort-studio.speakist.dev   / "Speakist Dev"   / speakist-dev.../appcast-dev.xml
-        #   debug  → com.brevoort-studio.speakist.debug / "Speakist Debug" / (no appcast)
-        SUFeedURL: "https://speakist.ai/appcast.xml"
-        SpeakistDefaultAPIBaseURL: "https://speakist.ai"
-        SpeakistChannel: "stable"
+        #   local  → com.brevoort-studio.speakist.local / "Speakist Local" / localhost:3000 (no appcast)
+        SUFeedURL: $(SPEAKIST_FEED_URL)
+        SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
         SUEnableAutomaticChecks: true
         SUPublicEDKey: "uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ="
     entitlements:
@@ -84,18 +85,27 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
       configs:
-        # Debug: Xcode local builds. Distinct bundle ID + display name so a
-        # developer's Debug install (run from Xcode) coexists with any
-        # signed-channel installs without sharing TCC grants, Keychain,
-        # UserDefaults, or Application Support data.
+        # Debug = the Xcode configuration a developer builds/runs locally
+        # ("make build", or Cmd+R in Xcode). Emits the Local channel —
+        # distinct bundle ID + display name so a developer's Local install
+        # coexists with any signed channel (Dev/Beta/Stable) without
+        # sharing TCC grants, Keychain items, UserDefaults, or Application
+        # Support data. Points at localhost:3000 by default so `pnpm dev`
+        # in web/ is the assumed backend.
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.debug
-          SPEAKIST_DISPLAY_NAME: "Speakist Debug"
-        # Release: stable-channel defaults. release.sh rewrites these two
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.local
+          SPEAKIST_DISPLAY_NAME: "Speakist Local"
+          SPEAKIST_CHANNEL: local
+          SPEAKIST_API_BASE_URL: "http://localhost:3000"
+          SPEAKIST_FEED_URL: ""
+        # Release: stable-channel defaults. release.sh rewrites these five
         # lines in-place before xcodegen generate when building beta/dev.
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
           SPEAKIST_DISPLAY_NAME: "Speakist"
+          SPEAKIST_CHANNEL: stable
+          SPEAKIST_API_BASE_URL: "https://speakist.ai"
+          SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB

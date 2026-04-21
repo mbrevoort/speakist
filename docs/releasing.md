@@ -26,24 +26,28 @@ UserDefaults, history DBs, or log files cross-contaminating:
 | `stable` | `com.brevoort-studio.speakist` | Speakist | `speakist.ai/appcast.xml` | `speakist.ai` | `Speakist-0.2.0.dmg` |
 | `beta` | `com.brevoort-studio.speakist.beta` | Speakist Beta | `speakist.ai/appcast-beta.xml` | `speakist.ai` | `Speakist-0.2.0-beta.dmg` |
 | `dev` | `com.brevoort-studio.speakist.dev` | Speakist Dev | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | `Speakist-0.2.0-dev.dmg` |
-| `debug` | `com.brevoort-studio.speakist.debug` | Speakist Debug | *(no auto-update)* | `http://localhost:3000` | *(Xcode local only)* |
+| `local` | `com.brevoort-studio.speakist.local` | Speakist Local | *(no auto-update)* | `http://localhost:3000` | *(Xcode local only)* |
 
-`debug` is what you get from `make build` / running straight from Xcode —
-it has its own bundle ID on purpose so your local dev loop doesn't
-collide with any signed channel you're also using day-to-day.
+`local` is what you get from `make build` / running straight from Xcode
+(Xcode's Debug configuration produces the Local channel). It has its
+own bundle ID on purpose so your local dev loop doesn't collide with
+any signed channel you're also using day-to-day, and it points at
+`localhost:3000` by default so `pnpm dev` in `web/` is the assumed
+backend.
 
 How it works:
 
 - **Channel identity is baked in at build time.** `scripts/release.sh`
-  rewrites `project.yml` before `xcodegen generate` so six values land in
-  the built Info.plist with the channel's settings: `CFBundleIdentifier`,
-  `CFBundleName`, `CFBundleDisplayName`, `SUFeedURL`,
-  `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel`. That survives into
-  the codesigned bundle — modifying Info.plist after signing invalidates
-  the signature, which is why we can't pick the channel at runtime.
-- The Debug-channel values come from `project.yml`'s `settings.configs.Debug`
-  block, which xcodegen reads for local Xcode builds. No release script
-  involvement.
+  rewrites the `Release:` block in `project.yml` before `xcodegen
+  generate` so all five channel-specific build settings carry the right
+  values: `PRODUCT_BUNDLE_IDENTIFIER`, `SPEAKIST_DISPLAY_NAME`,
+  `SPEAKIST_CHANNEL`, `SPEAKIST_API_BASE_URL`, `SPEAKIST_FEED_URL`.
+  Info.plist reads them via `$(...)` references and ships into the
+  codesigned bundle. Modifying Info.plist after signing invalidates the
+  signature, which is why the channel can't be chosen at runtime.
+- The Local-channel values come from `project.yml`'s
+  `settings.configs.Debug` block, which xcodegen reads for local Xcode
+  builds. No release script involvement.
 - **Users switch channels by installing a different DMG**, not by a
   toggle. Sparkle only ever polls the URL baked into its current .app.
 - **The dev-channel appcast lives on the dev Worker** so you can ship
@@ -350,21 +354,20 @@ Users who already installed 0.2.0 are stuck on it until you ship 0.2.1.
 
 ### "Speakist wants to access the keychain" prompt
 
-With per-channel bundle IDs (`…speakist.dev`, `…speakist.beta`, `…speakist.debug`,
-etc.), each channel writes to its own Keychain service
-(`{bundleID}.apikeys`), so cross-channel prompts don't happen anymore —
-the dev build asks about the dev service, the stable build asks about the
-stable service, they never touch each other's items.
+With per-channel bundle IDs (`…speakist.local`, `…speakist.dev`,
+`…speakist.beta`, `…speakist`), each channel writes to its own Keychain
+service (`{bundleID}.apikeys`), so cross-channel prompts don't happen
+anymore — each build asks about its own service only.
 
-You may still see a prompt **once**, the first time a signed release of a
-given channel runs after a local Debug/Xcode install of the same channel:
-Keychain ACLs are tied to the specific code signature, so the Developer
-ID-signed release is seen as a different identity from your
-Apple-Development-signed Debug build. Click **Always Allow** — the release
-signature gets added to the item's ACL and future launches are silent.
+You may still see a prompt **once**, the first time a new signature runs
+against an existing Keychain item within the same channel (e.g., if you
+re-sign the Local build with a different Apple Development identity).
+Keychain ACLs are tied to the specific code signature. Click **Always
+Allow** — the new signature is added to the item's ACL and future
+launches are silent.
 
 Clean-slate recipe if you want to start fresh for a channel (replace
-`.dev` with `.beta`, `.debug`, or remove the suffix for stable):
+`.dev` with `.beta`, `.local`, or remove the suffix entirely for stable):
 
 ```bash
 security delete-generic-password -s com.brevoort-studio.speakist.dev.apikeys -a refreshToken
@@ -405,28 +408,35 @@ inserts a fresh D1 row with a matching signature.
 ### Making an already-installed build poll a different channel
 
 Sparkle checks `NSUserDefaults` for `SUFeedURL` before falling back to
-the Info.plist value. That means you can temporarily point a Debug build
-(or any install) at a different channel's appcast without rebuilding:
+the Info.plist value. That means you can temporarily point a signed
+install at a different channel's appcast without rebuilding. Because
+each channel has its own bundle ID, use the right one for the install
+you want to reconfigure:
 
 ```bash
-# Point at dev channel
-defaults write com.brevoort-studio.speakist SUFeedURL \
-  "https://speakist-dev.brevoortstudio.com/appcast-dev.xml"
+# Point a Dev install at the beta channel (use Dev's bundle ID)
+defaults write com.brevoort-studio.speakist.dev SUFeedURL \
+  "https://speakist.ai/appcast-beta.xml"
 
 # Undo (revert to the URL baked into Info.plist)
-defaults delete com.brevoort-studio.speakist SUFeedURL
+defaults delete com.brevoort-studio.speakist.dev SUFeedURL
 ```
 
-Pair with `apiBaseURL` if you also want the app calling the dev backend:
+Pair with `apiBaseURL` if you also want the app calling a different backend:
 
 ```bash
-defaults write com.brevoort-studio.speakist apiBaseURL \
-  "https://speakist-dev.brevoortstudio.com"
+defaults write com.brevoort-studio.speakist.dev apiBaseURL \
+  "https://speakist.ai"
 ```
 
 Restart Speakist after either change. This is strictly a dev-convenience
 knob — distributed builds should have the correct channel baked in at
 release time via `scripts/release.sh`.
+
+Note: the Local build (`com.brevoort-studio.speakist.local`) has an
+empty `SUFeedURL` and no auto-update — overriding the default wouldn't
+help because Local installs don't ship through the release pipeline that
+would sign a compatible replacement. Just `make build` to rebuild.
 
 ### Sparkle tarball extracts into your current directory
 
