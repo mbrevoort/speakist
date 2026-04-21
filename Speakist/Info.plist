@@ -39,12 +39,12 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://speakist.ai/appcast.xml</string>
+	<string>https://speakist-dev.brevoortstudio.com/appcast-dev.xml</string>
 	<key>SUPublicEDKey</key>
-	<string></string>
+	<string>uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ=</string>
 	<key>SpeakistChannel</key>
-	<string>stable</string>
+	<string>dev</string>
 	<key>SpeakistDefaultAPIBaseURL</key>
-	<string>https://speakist.ai</string>
+	<string>https://speakist-dev.brevoortstudio.com</string>
 </dict>
 </plist>
