@@ -74,7 +74,11 @@ final class AudioArchive {
                                                in: .userDomainMask,
                                                appropriateFor: nil,
                                                create: true)
-        let dir = base.appendingPathComponent("Speakist/Audio", isDirectory: true)
+        // Per-channel subfolder (e.g. "Speakist Dev/Audio") keeps each
+        // channel's retained audio files isolated.
+        let dir = base
+            .appendingPathComponent(AppIdentity.displayName, isDirectory: true)
+            .appendingPathComponent("Audio", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

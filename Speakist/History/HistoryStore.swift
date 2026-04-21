@@ -265,7 +265,8 @@ final class HistoryStore: ObservableObject {
     static func databaseURL() throws -> URL {
         let fm = FileManager.default
         let base = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let dir = base.appendingPathComponent("Speakist", isDirectory: true)
+        // Per-channel folder name keeps dev/beta/prod databases isolated.
+        let dir = base.appendingPathComponent(AppIdentity.displayName, isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("history.sqlite")
     }

@@ -2,17 +2,21 @@ import Foundation
 import OSLog
 import AppKit
 
-/// A small façade over os.Logger + a rotating file sink at ~/Library/Logs/Speakist/speakist.log.
+/// A small façade over os.Logger + a rotating file sink at
+/// `~/Library/Logs/{CFBundleName}/speakist.log`. Per-channel builds land
+/// under distinct folders (`Speakist/`, `Speakist Dev/`, `Speakist Beta/`,
+/// `Speakist Debug/`) so you can grep logs from one channel without
+/// cross-contamination.
 final class Logger {
     static let shared = Logger()
 
-    private let subsystem = "com.brevoort-studio.speakist"
+    private let subsystem = AppIdentity.bundleID
     private let osLog: os.Logger
-    private let queue = DispatchQueue(label: "com.brevoort-studio.speakist.logger", qos: .utility)
+    private let queue = DispatchQueue(label: "\(AppIdentity.bundleID).logger", qos: .utility)
     private let fileManager = FileManager.default
     private lazy var logDirectory: URL = {
         let base = fileManager.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Logs").appendingPathComponent("Speakist")
+        return base.appendingPathComponent("Logs").appendingPathComponent(AppIdentity.displayName)
     }()
     private lazy var logFile: URL = logDirectory.appendingPathComponent("speakist.log")
 

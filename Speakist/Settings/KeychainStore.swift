@@ -10,13 +10,16 @@ enum KeychainAccount: String, CaseIterable {
 }
 
 /// Keychain wrapper for Speakist credentials.
-/// Service: "com.brevoort-studio.speakist.apikeys"; account = slot rawValue.
+/// Service: "{bundleID}.apikeys"; account = slot rawValue.
+/// The service name is derived from AppIdentity so each release channel
+/// (stable / beta / dev / debug) gets its own Keychain partition — tokens
+/// don't bleed between channels when multiple builds are installed.
 /// Prior versions stored a Deepgram API key here directly; that slot is
 /// gone now — Deepgram keys are minted short-lived by the server per
 /// transcription, never persisted on the Mac.
 @MainActor
 final class KeychainStore: ObservableObject {
-    private let service = "com.brevoort-studio.speakist.apikeys"
+    private let service = "\(AppIdentity.bundleID).apikeys"
 
     func set(_ value: String?, for account: KeychainAccount) {
         if let value, !value.isEmpty {

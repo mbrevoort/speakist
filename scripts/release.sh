@@ -113,18 +113,24 @@ case "$CHANNEL" in
     R2_BUCKET="$STABLE_R2_BUCKET"; DOWNLOAD_BASE="$STABLE_DOWNLOAD_BASE"
     PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
     WRANGLER_ENV="production"; DMG_SUFFIX=""
+    BUNDLE_ID="com.brevoort-studio.speakist"
+    DISPLAY_NAME="Speakist"
     ;;
   beta)
     FEED_URL="$BETA_FEED_URL"; API_URL="$BETA_API_URL"
     R2_BUCKET="$BETA_R2_BUCKET"; DOWNLOAD_BASE="$BETA_DOWNLOAD_BASE"
     PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
     WRANGLER_ENV="production"; DMG_SUFFIX="-beta"
+    BUNDLE_ID="com.brevoort-studio.speakist.beta"
+    DISPLAY_NAME="Speakist Beta"
     ;;
   dev)
     FEED_URL="$DEV_FEED_URL"; API_URL="$DEV_API_URL"
     R2_BUCKET="$DEV_R2_BUCKET"; DOWNLOAD_BASE="$DEV_DOWNLOAD_BASE"
     PUBLISH_URL="$DEV_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_DEV:-}"
     WRANGLER_ENV="dev"; DMG_SUFFIX="-dev"
+    BUNDLE_ID="com.brevoort-studio.speakist.dev"
+    DISPLAY_NAME="Speakist Dev"
     ;;
 esac
 
@@ -184,6 +190,14 @@ sed -i '' -E "s|(SUFeedURL:)[[:space:]]*\"[^\"]*\"|\1 \"${FEED_URL}\"|" project.
 sed -i '' -E "s|(SpeakistDefaultAPIBaseURL:)[[:space:]]*\"[^\"]*\"|\1 \"${API_URL}\"|" project.yml
 sed -i '' -E "s|(SpeakistChannel:)[[:space:]]*\"[^\"]*\"|\1 \"${CHANNEL}\"|" project.yml
 
+# Channel-specific bundle ID + display name go only into the Release
+# config. We use a sed address range from the `        Release:` line
+# down to the next top-level section (`    dependencies:` at 4 spaces)
+# so we don't stomp on the Debug config's `.debug` values or the
+# SpeakistTests target's `.tests` bundle ID.
+sed -i '' -E "/^        Release:\$/,/^    [a-z]/ s|(PRODUCT_BUNDLE_IDENTIFIER: )com\\.brevoort-studio\\.speakist\$|\\1${BUNDLE_ID}|" project.yml
+sed -i '' -E "/^        Release:\$/,/^    [a-z]/ s|(SPEAKIST_DISPLAY_NAME: )\"Speakist\"|\\1\"${DISPLAY_NAME}\"|" project.yml
+
 # ---- version bump -------------------------------------------------------
 
 echo "==> Bumping MARKETING_VERSION → $VERSION"
@@ -220,12 +234,18 @@ xcodebuild -exportArchive \
 [ -d "$APP_PATH" ] || { echo "Export didn't produce $APP_PATH"; exit 1; }
 
 # Channel sanity check — abort if build cache served a wrong-channel plist.
+# This catches sed-range regressions (e.g., if someone reorders the Release
+# config in project.yml and our pattern stops matching) so we never ship a
+# build whose bundle ID / channel URL / display name has drifted.
 BUILT_FEED=$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$APP_PATH/Contents/Info.plist")
 BUILT_CHANNEL=$(/usr/libexec/PlistBuddy -c "Print :SpeakistChannel" "$APP_PATH/Contents/Info.plist")
-if [ "$BUILT_FEED" != "$FEED_URL" ] || [ "$BUILT_CHANNEL" != "$CHANNEL" ]; then
+BUILT_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist")
+BUILT_DISPLAY=$(/usr/libexec/PlistBuddy -c "Print :CFBundleName" "$APP_PATH/Contents/Info.plist")
+if [ "$BUILT_FEED" != "$FEED_URL" ] || [ "$BUILT_CHANNEL" != "$CHANNEL" ] \
+   || [ "$BUILT_BUNDLE_ID" != "$BUNDLE_ID" ] || [ "$BUILT_DISPLAY" != "$DISPLAY_NAME" ]; then
   echo "Channel mismatch in built Info.plist!"
-  echo "  Expected: channel=$CHANNEL feed=$FEED_URL"
-  echo "  Got:      channel=$BUILT_CHANNEL feed=$BUILT_FEED"
+  echo "  Expected: channel=$CHANNEL bundleID=$BUNDLE_ID display=$DISPLAY_NAME feed=$FEED_URL"
+  echo "  Got:      channel=$BUILT_CHANNEL bundleID=$BUILT_BUNDLE_ID display=$BUILT_DISPLAY feed=$BUILT_FEED"
   echo "Try: rm -rf build/ Speakist.xcodeproj && re-run"
   exit 1
 fi

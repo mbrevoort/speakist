@@ -81,7 +81,9 @@ final class Preferences: ObservableObject {
             // dev→speakist-dev.brevoortstudio.com, etc.). Unflagged Xcode
             // builds fall back to localhost. Users can still override per
             // machine with:
-            //   defaults write com.brevoort-studio.speakist apiBaseURL "https://example.com"
+            //   defaults write <bundleID> apiBaseURL "https://example.com"
+            // where <bundleID> varies per channel — see AppIdentity.bundleID
+            // for the mapping.
             K.apiBaseURL: channelDefaultAPIBase
         ])
     }

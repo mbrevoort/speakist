@@ -273,7 +273,7 @@ struct AccountSettingsView: View {
             Section {
                 LabeledContent("API endpoint", value: prefs.apiBaseURL.absoluteString)
                     .font(.system(.body, design: .monospaced))
-                Text("Change with: `defaults write com.brevoort-studio.speakist apiBaseURL \"https://speakist.ai\"` and restart the app.")
+                Text("Change with: `defaults write \(AppIdentity.bundleID) apiBaseURL \"https://speakist.ai\"` and restart the app.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             } header: {

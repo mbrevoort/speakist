@@ -175,8 +175,10 @@ final class AudioRecorder: ObservableObject {
     ]
 
     private static func makeTempURL() -> URL {
+        // Per-channel temp subdir keeps different builds' in-flight recordings
+        // distinct in /tmp, useful when inspecting leftover files.
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Speakist", isDirectory: true)
+            .appendingPathComponent(AppIdentity.displayName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("rec-\(UUID().uuidString).wav")
     }

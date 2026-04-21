@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Speakist</string>
+	<string>$(SPEAKIST_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Speakist</string>
+	<string>$(SPEAKIST_DISPLAY_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -39,12 +39,12 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://speakist-dev.brevoortstudio.com/appcast-dev.xml</string>
+	<string>https://speakist.ai/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ=</string>
 	<key>SpeakistChannel</key>
-	<string>dev</string>
+	<string>stable</string>
 	<key>SpeakistDefaultAPIBaseURL</key>
-	<string>https://speakist-dev.brevoortstudio.com</string>
+	<string>https://speakist.ai</string>
 </dict>
 </plist>

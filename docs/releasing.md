@@ -16,31 +16,60 @@ This doc has five parts:
 
 ## 0. Release channels
 
-Three channels, each fully isolated:
+Four channels, fully isolated. Each has a **distinct bundle ID and
+display name**, which makes macOS treat them as different apps — you can
+install all four side-by-side without TCC grants, Keychain items,
+UserDefaults, history DBs, or log files cross-contaminating:
 
-| Channel | `SUFeedURL` baked into the build | `apiBaseURL` default | DMG filename | Appcast file |
-|---|---|---|---|---|
-| `stable` | `speakist.ai/appcast.xml` | `speakist.ai` | `Speakist-0.2.0.dmg` | `web/public/appcast.xml` |
-| `beta` | `speakist.ai/appcast-beta.xml` | `speakist.ai` | `Speakist-0.2.0-beta.dmg` | `web/public/appcast-beta.xml` |
-| `dev` | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | `Speakist-0.2.0-dev.dmg` | `web/public/appcast-dev.xml` |
+| Channel | Bundle ID | Display name | `SUFeedURL` | `apiBaseURL` default | DMG filename |
+|---|---|---|---|---|---|
+| `stable` | `com.brevoort-studio.speakist` | Speakist | `speakist.ai/appcast.xml` | `speakist.ai` | `Speakist-0.2.0.dmg` |
+| `beta` | `com.brevoort-studio.speakist.beta` | Speakist Beta | `speakist.ai/appcast-beta.xml` | `speakist.ai` | `Speakist-0.2.0-beta.dmg` |
+| `dev` | `com.brevoort-studio.speakist.dev` | Speakist Dev | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | `Speakist-0.2.0-dev.dmg` |
+| `debug` | `com.brevoort-studio.speakist.debug` | Speakist Debug | *(no auto-update)* | `http://localhost:3000` | *(Xcode local only)* |
+
+`debug` is what you get from `make build` / running straight from Xcode —
+it has its own bundle ID on purpose so your local dev loop doesn't
+collide with any signed channel you're also using day-to-day.
 
 How it works:
 
-- **Channel is baked in at build time.** `scripts/release.sh` rewrites
-  `project.yml` before `xcodegen generate`, so `SUFeedURL`,
-  `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel` land in the built
-  Info.plist with the channel's values. That survives into the codesigned
-  bundle — modifying Info.plist after signing invalidates the signature,
-  which is why we can't pick the channel at runtime.
+- **Channel identity is baked in at build time.** `scripts/release.sh`
+  rewrites `project.yml` before `xcodegen generate` so six values land in
+  the built Info.plist with the channel's settings: `CFBundleIdentifier`,
+  `CFBundleName`, `CFBundleDisplayName`, `SUFeedURL`,
+  `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel`. That survives into
+  the codesigned bundle — modifying Info.plist after signing invalidates
+  the signature, which is why we can't pick the channel at runtime.
+- The Debug-channel values come from `project.yml`'s `settings.configs.Debug`
+  block, which xcodegen reads for local Xcode builds. No release script
+  involvement.
 - **Users switch channels by installing a different DMG**, not by a
   toggle. Sparkle only ever polls the URL baked into its current .app.
 - **The dev-channel appcast lives on the dev Worker** so you can ship
   dev-channel updates without touching prod. Beta + stable appcasts
   live on the prod Worker.
+- **Everything keyed on identity derives from `Bundle.main` at runtime**
+  via `Speakist/App/AppIdentity.swift` — Keychain service (`{bundleID}.apikeys`),
+  logger subsystem, Application Support folder (`{displayName}/`), temp
+  dir (`/tmp/{displayName}/`), log directory (`~/Library/Logs/{displayName}/`).
 - **Preferences.swift reads `SpeakistDefaultAPIBaseURL` from Info.plist**
   as the default for the `apiBaseURL` UserDefaults key. Users can still
-  override per-install with `defaults write
-  com.brevoort-studio.speakist apiBaseURL "…"`.
+  override per-install with `defaults write {bundle-id} apiBaseURL "…"`
+  (the correct bundle ID varies by channel — see the table above).
+
+### Switching someone from an old single-bundle-ID install
+
+If someone was running a pre-channel-split build of Speakist, their
+existing data lives under `Application Support/Speakist/` and their
+Keychain tokens sit under `com.brevoort-studio.speakist.apikeys`. Installing
+a new dev DMG (`com.brevoort-studio.speakist.dev`) won't migrate that —
+they'll see a fresh empty history, sign in again, and re-grant Microphone
+and Accessibility (the new bundle ID is a new app to TCC). That's expected.
+If they want to keep their old history, manually copy
+`~/Library/Application Support/Speakist/*.sqlite` to
+`~/Library/Application Support/Speakist Dev/` (or the matching display
+name for whatever channel they're moving to).
 
 ### When to use each channel
 
@@ -319,28 +348,29 @@ Users who already installed 0.2.0 are stuck on it until you ship 0.2.1.
 
 ## 4. Troubleshooting
 
-### "Speakist wants to access the keychain" prompt after installing a signed DMG
+### "Speakist wants to access the keychain" prompt
 
-Expected, once. The new build is signed with **Developer ID** while your
-previous install was signed with **Apple Development** (Xcode Debug default).
-Keychain ACLs are tied to the code signature, so the release build is seen
-as a different identity trying to read an item the Debug build wrote.
+With per-channel bundle IDs (`…speakist.dev`, `…speakist.beta`, `…speakist.debug`,
+etc.), each channel writes to its own Keychain service
+(`{bundleID}.apikeys`), so cross-channel prompts don't happen anymore —
+the dev build asks about the dev service, the stable build asks about the
+stable service, they never touch each other's items.
 
-Two fixes:
+You may still see a prompt **once**, the first time a signed release of a
+given channel runs after a local Debug/Xcode install of the same channel:
+Keychain ACLs are tied to the specific code signature, so the Developer
+ID-signed release is seen as a different identity from your
+Apple-Development-signed Debug build. Click **Always Allow** — the release
+signature gets added to the item's ACL and future launches are silent.
 
-**Always Allow** (simplest) — click it on the dialog; the release build's
-signature is added to the ACL and future launches are silent.
-
-**Clean slate** (recommended before first notarized install):
+Clean-slate recipe if you want to start fresh for a channel (replace
+`.dev` with `.beta`, `.debug`, or remove the suffix for stable):
 
 ```bash
-security delete-generic-password -s com.brevoort-studio.speakist.apikeys -a refreshToken
-# Old pre-Phase-6 slot, just in case:
-security delete-generic-password -s com.brevoort-studio.speakist.apikeys -a deepgram 2>/dev/null || true
+security delete-generic-password -s com.brevoort-studio.speakist.dev.apikeys -a refreshToken
 ```
 
-Then launch the new build → Settings → Account → **Sign in with Speakist**.
-The new entry's ACL matches the release-signed app, no future prompts.
+Then relaunch → Settings → Account → **Sign in with Speakist**.
 
 ### App ships with a generic (iconless) Finder icon
 

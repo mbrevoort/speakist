@@ -41,8 +41,13 @@ targets:
     info:
       path: Speakist/Info.plist
       properties:
-        CFBundleName: Speakist
-        CFBundleDisplayName: Speakist
+        # CFBundleName & CFBundleDisplayName read SPEAKIST_DISPLAY_NAME,
+        # which is set per-configuration below (stable → "Speakist",
+        # debug → "Speakist Debug"). scripts/release.sh also rewrites
+        # the Release config's value for beta ("Speakist Beta") and dev
+        # ("Speakist Dev") before xcodegen generate.
+        CFBundleName: $(SPEAKIST_DISPLAY_NAME)
+        CFBundleDisplayName: $(SPEAKIST_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
@@ -57,12 +62,13 @@ targets:
         # Per-channel values. scripts/release.sh rewrites these before
         # xcodegen generate so they end up in the built Info.plist with
         # the right channel's URLs. The defaults below are what you get
-        # from an unflagged `make build` / `make archive`.
+        # from an unflagged `make build` / `make archive` (= stable).
         #
         # Channel matrix:
-        #   stable → speakist.ai/appcast.xml     + apiBaseURL=speakist.ai
-        #   beta   → speakist.ai/appcast-beta.xml + apiBaseURL=speakist.ai
-        #   dev    → speakist-dev.../appcast-dev.xml + apiBaseURL=speakist-dev.*
+        #   stable → com.brevoort-studio.speakist       / "Speakist"       / speakist.ai/appcast.xml
+        #   beta   → com.brevoort-studio.speakist.beta  / "Speakist Beta"  / speakist.ai/appcast-beta.xml
+        #   dev    → com.brevoort-studio.speakist.dev   / "Speakist Dev"   / speakist-dev.../appcast-dev.xml
+        #   debug  → com.brevoort-studio.speakist.debug / "Speakist Debug" / (no appcast)
         SUFeedURL: "https://speakist.ai/appcast.xml"
         SpeakistDefaultAPIBaseURL: "https://speakist.ai"
         SpeakistChannel: "stable"
@@ -72,12 +78,24 @@ targets:
       path: Speakist/Speakist.entitlements
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
         PRODUCT_NAME: Speakist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+      configs:
+        # Debug: Xcode local builds. Distinct bundle ID + display name so a
+        # developer's Debug install (run from Xcode) coexists with any
+        # signed-channel installs without sharing TCC grants, Keychain,
+        # UserDefaults, or Application Support data.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.debug
+          SPEAKIST_DISPLAY_NAME: "Speakist Debug"
+        # Release: stable-channel defaults. release.sh rewrites these two
+        # lines in-place before xcodegen generate when building beta/dev.
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
+          SPEAKIST_DISPLAY_NAME: "Speakist"
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB
