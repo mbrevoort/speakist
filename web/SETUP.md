@@ -1,12 +1,23 @@
-# Speakist web — setup checklist
+# Speakist web — local setup checklist
 
-One-page path from fresh clone to running dev environment on Cloudflare.
-Every step is idempotent; re-running is safe.
+One-page path from fresh clone to running web backend **locally**. Every
+step is idempotent; re-running is safe.
 
 We deploy via the **OpenNext Cloudflare adapter** (`@opennextjs/cloudflare`),
 which emits a single Worker that serves the entire Next.js app (SSR + API
 routes) with static assets via Cloudflare's `ASSETS` binding. The older
 `@cloudflare/next-on-pages` approach is deprecated — don't use it.
+
+### Related docs
+
+- **Deploying to a real Cloudflare environment** (dev or prod) →
+  [DEPLOYING.md](./DEPLOYING.md). Covers custom domains, Stripe webhooks,
+  `/admin/system` configuration.
+- **Shipping a Mac DMG** (signing, notarization, Sparkle updates) →
+  [../docs/releasing.md](../docs/releasing.md). Independent of web
+  deployment.
+- **Everything else** (architecture, env matrix, secret locations) →
+  [../docs/README.md](../docs/README.md).
 
 ## Prerequisites
 

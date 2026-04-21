@@ -3,11 +3,14 @@
 End-to-end: build → sign → notarize → DMG → Sparkle-sign → host → users
 auto-update.
 
-This doc has three parts:
+This doc has five parts:
 
 0. **Release channels** — dev / beta / stable (the model)
 1. **One-time setup** — once per machine that will ever produce a release
 2. **Per-release runbook** — every time you ship a new version
+3. **Emergency rollback** — yanking a bad release
+4. **Troubleshooting** — the errors you'll actually hit
+5. **Future: CI automation** — not wired yet
 
 ---
 
@@ -255,35 +258,7 @@ git push
 There's no appcast file to edit (dynamic now), no release artifacts in
 the repo, no GitHub Release to create.
 
-### 2.3 (Legacy) Where stuff used to live
-
-Previous versions of this pipeline used GitHub Releases + static
-`web/public/appcast*.xml` files. That's gone — DMGs are on R2, appcasts
-are dynamic. Nothing to deploy to the Worker per-release; only when
-the Worker **code** changes do you `pnpm deploy:*`.
-
-### Old "deploy web" step — no longer needed
-
-```bash
-# cd web
-# pnpm deploy:dev / :prod   ← only when YOUR CODE changes, not per-release
-
-# Beta or stable channel — appcast is hosted on the prod Worker:
-pnpm deploy:prod
-```
-
-You can also deploy both if you want the appcast file present on both
-envs; the released app only polls the URL baked into its Info.plist,
-but having the file at both URLs is harmless.
-
-Also push the git tag + commits:
-
-```bash
-git push
-git push --tags   # if using release-publish, the tag is already there
-```
-
-### 2.4 Verify the release end-to-end
+### 2.3 Verify the release end-to-end
 
 **Sparkle path (existing installs):**
 
@@ -342,7 +317,135 @@ Users who already installed 0.2.0 are stuck on it until you ship 0.2.1.
 
 ---
 
-## 4. Future: automate via CI
+## 4. Troubleshooting
+
+### "Speakist wants to access the keychain" prompt after installing a signed DMG
+
+Expected, once. The new build is signed with **Developer ID** while your
+previous install was signed with **Apple Development** (Xcode Debug default).
+Keychain ACLs are tied to the code signature, so the release build is seen
+as a different identity trying to read an item the Debug build wrote.
+
+Two fixes:
+
+**Always Allow** (simplest) — click it on the dialog; the release build's
+signature is added to the ACL and future launches are silent.
+
+**Clean slate** (recommended before first notarized install):
+
+```bash
+security delete-generic-password -s com.brevoort-studio.speakist.apikeys -a refreshToken
+# Old pre-Phase-6 slot, just in case:
+security delete-generic-password -s com.brevoort-studio.speakist.apikeys -a deepgram 2>/dev/null || true
+```
+
+Then launch the new build → Settings → Account → **Sign in with Speakist**.
+The new entry's ACL matches the release-signed app, no future prompts.
+
+### Making an already-installed build poll a different channel
+
+Sparkle checks `NSUserDefaults` for `SUFeedURL` before falling back to
+the Info.plist value. That means you can temporarily point a Debug build
+(or any install) at a different channel's appcast without rebuilding:
+
+```bash
+# Point at dev channel
+defaults write com.brevoort-studio.speakist SUFeedURL \
+  "https://speakist-dev.brevoortstudio.com/appcast-dev.xml"
+
+# Undo (revert to the URL baked into Info.plist)
+defaults delete com.brevoort-studio.speakist SUFeedURL
+```
+
+Pair with `apiBaseURL` if you also want the app calling the dev backend:
+
+```bash
+defaults write com.brevoort-studio.speakist apiBaseURL \
+  "https://speakist-dev.brevoortstudio.com"
+```
+
+Restart Speakist after either change. This is strictly a dev-convenience
+knob — distributed builds should have the correct channel baked in at
+release time via `scripts/release.sh`.
+
+### Sparkle tarball extracts into your current directory
+
+`Sparkle-X.Y.Z.tar.xz` uses `./` as its tar root. Running `tar -xf` in
+`~/Downloads` will scatter `bin/`, `Symbols/`, `Sparkle.framework`,
+`Sparkle Test App.app`, etc. directly into your Downloads folder.
+**Always extract into a temp directory:**
+
+```bash
+TMP=$(mktemp -d)
+(cd "$TMP" && tar -xf ~/Downloads/Sparkle-*.tar.xz)
+cp -R "$TMP/bin" ~/Library/Developer/Sparkle/
+rm -rf "$TMP"
+```
+
+### Restoring the Sparkle private key on a new machine
+
+Your private key backup (from 1Password) is a ~44-char base64 string,
+not a `.p12` — Sparkle stores EdDSA keys as raw "password value" in the
+login Keychain, not as a certificate.
+
+To use the backed-up key directly when signing:
+
+```bash
+sign_update -s "<the-base64-private-key>" Speakist-0.2.0.dmg
+```
+
+To re-add it to a fresh machine's Keychain so it's picked up automatically,
+the simplest path is to run `generate_keys --account-name …` with the
+`--insert` flag — see `generate_keys -h`. Or manually re-create the
+Keychain item with `security add-generic-password -s "https://sparkle-project.org"
+-a "ed25519" -w "<private-key>"`.
+
+### `make release` preflight errors
+
+| Error | Fix |
+|---|---|
+| `brew install create-dmg` | `brew install create-dmg` |
+| `brew install jq` | `brew install jq` |
+| `Sparkle sign_update missing at …` | Install Sparkle tools (§1.3) |
+| `notarytool keychain profile 'SPEAKIST_NOTARY' not configured` | `xcrun notarytool store-credentials …` (§1.4) |
+| `wrangler not logged in` | `cd web && pnpm exec wrangler login` |
+| `SPEAKIST_PUBLISH_TOKEN_{DEV,PROD} env var is not set` | Export matching `RELEASE_PUBLISH_TOKEN` value in shell (§1.6) |
+| `Channel mismatch in built Info.plist!` | Stale build cache. Run `rm -rf build/ Speakist.xcodeproj` and retry |
+| `Publish API returned HTTP 401` | `RELEASE_PUBLISH_TOKEN` Worker secret doesn't match your shell's `SPEAKIST_PUBLISH_TOKEN_*` value; re-sync |
+| `Publish API returned HTTP 503` | `RELEASE_PUBLISH_TOKEN` not configured on the Worker. Run `wrangler secret put RELEASE_PUBLISH_TOKEN --env …` + redeploy |
+
+### Post-release verification failures
+
+**Sparkle says "You're up to date" but I just shipped:**
+- The appcast is empty or stale. Hit the URL directly:
+  `curl -s https://speakist-dev.brevoortstudio.com/appcast-dev.xml | head -30`
+  If there are no `<item>` blocks, the publish API call didn't insert a row.
+  Check `wrangler tail speakist-web-dev --env dev --format pretty` while
+  re-running `make release` to see the `/api/admin/releases/publish` POST.
+- Sparkle caches appcasts briefly — force-check via Settings → About →
+  **Check for updates…** rather than waiting for the automatic poll.
+- Running install's `sparkle:version` is ≥ the latest release's. Sparkle
+  won't downgrade or re-install the same build number. Bump
+  `CURRENT_PROJECT_VERSION` by running `make release` again (it
+  auto-increments).
+
+**"Update available" prompt but Install fails with a signature error:**
+- EdDSA verification failing means the DMG was modified after `sign_update`
+  produced its signature. If you re-uploaded or regenerated the DMG
+  manually, the signature in D1 no longer matches. Re-run
+  `scripts/release.sh` — it re-signs + re-uploads + updates D1.
+
+**Download works but app fails Gatekeeper check on launch:**
+- Stapler didn't attach the notary ticket. Verify:
+  `xcrun stapler validate /Applications/Speakist.app`
+- If invalid, re-run the release (notarization is the step that produces
+  the ticket; stapling attaches it). Apple's notary queue can reject builds
+  with hardened-runtime violations — read the `notarytool log` output
+  carefully.
+
+---
+
+## 5. Future: automate via CI
 
 What's here today is a Mac-only workflow — you run `make release` from your
 own laptop. When you want to move it off your laptop:

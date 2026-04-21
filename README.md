@@ -2,9 +2,18 @@
 
 Push-to-talk dictation for macOS. Hold a shortcut, speak, release — transcribed text appears at your cursor in any app.
 
+## Documentation map
+
+Start here: **[docs/README.md](docs/README.md)** is the operations index
+with a "I want to do X, read Y" matrix.
+
+Direct links:
+
 - **Product spec** → [docs/speakist-prd.md](docs/speakist-prd.md)
 - **Architecture** → [docs/architecture.md](docs/architecture.md)
-- **Web app & SaaS backend** → [web/](web/) ([setup](web/SETUP.md))
+- **Run the web backend locally** → [web/SETUP.md](web/SETUP.md)
+- **Deploy the web backend** (dev / staging / prod) → [web/DEPLOYING.md](web/DEPLOYING.md)
+- **Ship a Mac release** (build, sign, notarize, DMG, Sparkle) → [docs/releasing.md](docs/releasing.md)
 
 ## Requirements
 
@@ -69,11 +78,22 @@ Speakist/
 web/                  # Next.js SaaS backend on Cloudflare — see web/README.md
 ```
 
-## Distribution (maintainers)
+## Shipping (maintainers)
 
-1. Set `DEVELOPMENT_TEAM` in `project.yml` to your Apple Developer Team ID.
-2. Fill `SUPublicEDKey` with your Sparkle EdDSA public key.
-3. `make archive` produces a signed, notarized DMG (requires `xcrun notarytool` credentials).
+```bash
+# dev channel (iterate freely; deploys to R2 bucket behind downloads-dev.brevoortstudio.com)
+make release VERSION=0.2.0 CHANNEL=dev NOTES="..."
+
+# beta channel (pre-release candidate on prod infra)
+make release VERSION=0.2.0 CHANNEL=beta NOTES="..."
+
+# stable channel (public)
+make release VERSION=0.2.0 NOTES="..."
+```
+
+See [docs/releasing.md](docs/releasing.md) for the one-time setup
+(Developer ID cert, Sparkle keypair + backup, notarytool profile, R2
+buckets, publish-token secret) and per-release runbook.
 
 ## License
 

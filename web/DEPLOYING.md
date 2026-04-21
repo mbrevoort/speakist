@@ -26,6 +26,24 @@ need R2 buckets + `RELEASE_PUBLISH_TOKEN` — see
 [`docs/releasing.md`](../docs/releasing.md) sections 1.5 and 1.6. Not
 required for the web backend alone.
 
+### One-time Cloudflare account activations
+
+Two features the Cloudflare account has to be opted into **before** wrangler
+can touch them — both are dashboard clicks, both are free at our scale.
+
+**1. Register a `*.workers.dev` subdomain.** Cloudflare requires every
+account to claim a workers-subdomain before it'll accept Worker deploys,
+even if you only ever use custom domains. First `pnpm deploy:dev` will
+fail with a link to the onboarding page; visit it, pick something (e.g.
+`brevoortstudio`), done. Your dev Worker then lives at
+`speakist-web-dev.brevoortstudio.workers.dev` as a fallback URL.
+
+**2. Enable R2 Object Storage** (only needed if you're hosting Mac DMG
+releases here too — skip for web-backend-only envs). Dashboard →
+**R2 Object Storage** → **Purchase R2 Plan**. Requires a payment method
+on file, but free tier covers ~10 GB storage + unlimited egress; actual
+billing won't trigger unless you blow past that.
+
 **Check your current state:**
 ```bash
 cd web
@@ -339,6 +357,26 @@ Rollback: Cloudflare's Workers UI → Deployments tab → pick a prior version
 → Rollback. Instant. Migration rollbacks are manual — Drizzle doesn't
 auto-generate down-migrations, so undoing schema changes is a "write a
 new forward migration" affair.
+
+---
+
+## Troubleshooting
+
+| Error / symptom | Fix |
+|---|---|
+| `Multiple environments are defined... no target environment was specified` on `wrangler secret put` | Pass `--env dev` or `--env production`. Both envs are explicitly named; wrangler won't pick a default. |
+| `There doesn't seem to be a Worker called …` on first `secret put` | Answer **y** at the prompt. Wrangler creates a stub Worker to hold the secret; your first `pnpm deploy:dev` replaces the stub with real code, keeping the secrets. |
+| `You need to register a workers.dev subdomain before publishing` on first deploy | One-time dashboard step — see "One-time Cloudflare account activations" at the top of this doc. |
+| `Please enable R2 through the Cloudflare Dashboard` on `wrangler r2 bucket create` | Same section — activate R2 in the dashboard first. |
+| `Could not find compiled Open Next config` on deploy | `pnpm deploy:dev` now chains `opennextjs-cloudflare build` before deploy. If you invoked `deploy` directly, run the build first. |
+| `ERROR: "getCloudflareContext" has been called in sync mode in either a static route` during build | Every page that touches D1 (directly or via `requireUser()`) must be dynamic. The root layout sets `export const dynamic = "force-dynamic"` for exactly this reason — don't remove it. |
+| Sign-in lands back on `/auth/signin` looking signed-out | Browser cached an earlier cookie state. Hard reload, or sign out via the account menu first. The signin page now redirects to the callback URL if already signed in. |
+| Deepgram "mint failed: Error: DEEPGRAM_PROJECT_ID is not set" in worker logs | Set the secret (`wrangler secret put DEEPGRAM_PROJECT_ID --env dev`) + redeploy. |
+| Deepgram "No Deepgram key configured" in worker logs | `/admin/system` → System Deepgram key → paste your admin key. Requires `APP_ENCRYPTION_KEY` secret to already be set. |
+| Stripe 402 on `/api/billing/topup` | `STRIPE_SECRET_KEY` is wrong mode (live vs test) or missing. Test keys start `sk_test_…`, live start `sk_live_…`. |
+| Stripe webhook 400 "bad signature" | `STRIPE_WEBHOOK_SECRET` Worker secret doesn't match the endpoint's signing secret. Copy again from Stripe Dashboard → Developers → Webhooks → your endpoint. |
+| Magic-link email never arrives (prod) | `RESEND_API_KEY` missing, `RESEND_FROM_EMAIL` not on a verified Resend domain, or Resend is rejecting. Check the Resend dashboard → Logs. |
+| Magic-link email never arrives (dev) | Look in `pnpm dev` terminal — links are logged there when `RESEND_API_KEY` is unset. |
 
 ---
 
