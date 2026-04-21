@@ -26,8 +26,18 @@ build: project
 		-derivedDataPath $(BUILD_DIR) \
 		build
 
+# The .app filename follows PRODUCT_NAME which tracks SPEAKIST_DISPLAY_NAME
+# per config — Debug produces "Speakist Local.app", Release produces
+# "Speakist.app" (or e.g. "Speakist Dev.app" after release.sh has rewritten
+# project.yml for a non-stable channel). Finding it by glob keeps the
+# target correct regardless of which config/channel you last built.
 run: build
-	open $(BUILD_DIR)/Build/Products/$(CONFIG)/Speakist.app
+	@APP=$$(find "$(BUILD_DIR)/Build/Products/$(CONFIG)" -maxdepth 1 -type d -name "Speakist*.app" | head -n1); \
+	if [ -z "$$APP" ]; then \
+		echo "No Speakist*.app under $(BUILD_DIR)/Build/Products/$(CONFIG)/"; exit 1; \
+	fi; \
+	echo "Opening $$APP"; \
+	open "$$APP"
 
 test: project
 	xcodebuild \
