@@ -115,12 +115,16 @@ install.
 ### 1.2 Command-line tools
 
 ```bash
-brew install xcodegen create-dmg jq
+brew install xcodegen jq
 ```
 
 - `xcodegen` — regenerates `Speakist.xcodeproj` from `project.yml`
-- `create-dmg` — builds the drag-to-Applications DMG
 - `jq` — used by the release script to build the publish-API JSON payload safely
+
+DMG creation uses `hdiutil` and AppleScript (both shipped with macOS),
+no extra dependencies. See `scripts/release.sh` — we deliberately don't
+use `create-dmg` because its `--app-drop-link` symlink no longer
+auto-resolves to the Applications folder icon in modern macOS DMGs.
 
 ### 1.3 Sparkle tools + keypair
 
@@ -261,7 +265,10 @@ This runs `scripts/release.sh`, which:
    (guards against stale build-cache returning a wrong-channel plist)
 8. Zips the `.app`, submits to Apple via `notarytool`, waits for "Accepted"
 9. `stapler staple` the notary ticket onto the `.app`
-10. `create-dmg` produces `build/Speakist-0.2.0{-dev|-beta}.dmg`
+10. Builds `build/Speakist-0.2.0{-dev|-beta}.dmg` via `hdiutil` + a short
+    AppleScript that lays out the window and uses a Finder alias (not a
+    symlink) for the drag-to-Applications target
+
 11. `sign_update` (from Sparkle) computes an EdDSA signature for the DMG
 12. **Uploads the DMG to the channel's R2 bucket** via
     `wrangler r2 object put --remote`
@@ -474,7 +481,6 @@ Keychain item with `security add-generic-password -s "https://sparkle-project.or
 
 | Error | Fix |
 |---|---|
-| `brew install create-dmg` | `brew install create-dmg` |
 | `brew install jq` | `brew install jq` |
 | `Sparkle sign_update missing at …` | Install Sparkle tools (§1.3) |
 | `notarytool keychain profile 'SPEAKIST_NOTARY' not configured` | `xcrun notarytool store-credentials …` (§1.4) |

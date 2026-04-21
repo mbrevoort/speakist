@@ -15,7 +15,7 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: "4"
+    CURRENT_PROJECT_VERSION: "5"
     MARKETING_VERSION: "0.1.2"
     DEVELOPMENT_TEAM: Q5T8FJNX57
 
@@ -79,7 +79,12 @@ targets:
       path: Speakist/Speakist.entitlements
     settings:
       base:
-        PRODUCT_NAME: Speakist
+        # PRODUCT_NAME drives the .app bundle filename on disk and the
+        # executable name inside it. Tracking SPEAKIST_DISPLAY_NAME means
+        # Local builds produce `Speakist Local.app`, Dev releases produce
+        # `Speakist Dev.app`, etc. — so users see the channel in /Applications
+        # and in the Dock, not a generic "Speakist" for every channel.
+        PRODUCT_NAME: $(SPEAKIST_DISPLAY_NAME)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
@@ -124,7 +129,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.tests
         GENERATE_INFOPLIST_FILE: YES
         BUNDLE_LOADER: "$(TEST_HOST)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Speakist.app/Contents/MacOS/Speakist"
+        # Tests only ever run under the Debug configuration (see scheme
+        # below), which produces the Local channel → PRODUCT_NAME is
+        # "Speakist Local". Spaces in paths are fine here; Xcode quotes.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Speakist Local.app/Contents/MacOS/Speakist Local"
 
 schemes:
   Speakist:

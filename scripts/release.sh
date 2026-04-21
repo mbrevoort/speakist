@@ -12,7 +12,9 @@
 #   1. Rewrite project.yml with channel-specific SUFeedURL + API URL
 #   2. Bump version in project.yml
 #   3. xcodegen + xcodebuild archive → export → notarize → staple
-#   4. create-dmg produces the DMG
+#   4. hdiutil + AppleScript package the app into a DMG with a Finder
+#      alias for the Applications drop target (not a symlink, which
+#      doesn't render with the correct icon in modern macOS)
 #   5. Sparkle sign_update computes the EdDSA signature
 #   6. Upload DMG to the channel's R2 bucket via `wrangler r2 object put`
 #   7. POST to the Worker's /api/admin/releases/publish endpoint so the D1
@@ -33,7 +35,7 @@
 #
 # Prerequisites (one-time per machine):
 #   * Xcode + Developer ID Application cert in Keychain for team Q5T8FJNX57
-#   * brew install xcodegen create-dmg jq
+#   * brew install xcodegen jq  (hdiutil ships with macOS)
 #   * Sparkle tools: https://github.com/sparkle-project/Sparkle/releases
 #     copy bin/ to ~/Library/Developer/Sparkle/bin (or set SPARKLE_TOOLS)
 #   * EdDSA keypair: $SPARKLE_TOOLS/generate_keys → paste the public key
@@ -136,15 +138,26 @@ esac
 
 # ---- config -------------------------------------------------------------
 
-APP_NAME="Speakist"
+# Xcode project + scheme filenames never change per channel — xcodegen
+# reads `name: Speakist` at the top of project.yml, producing
+# Speakist.xcodeproj with a single "Speakist" scheme regardless of
+# which configuration (Debug/Release) or channel ends up selected.
+PROJECT_NAME="Speakist"
+# The built .app bundle filename follows PRODUCT_NAME, which tracks
+# SPEAKIST_DISPLAY_NAME per-config — so Release builds for this channel
+# produce e.g. "Speakist Dev.app" / "Speakist.app" / "Speakist Beta.app".
+APP_BUNDLE_NAME="$DISPLAY_NAME"
+
 TEAM_ID="Q5T8FJNX57"
 NOTARY_PROFILE="${NOTARY_PROFILE:-SPEAKIST_NOTARY}"
 SPARKLE_TOOLS="${SPARKLE_TOOLS:-$HOME/Library/Developer/Sparkle/bin}"
 BUILD_DIR="build"
 EXPORT_DIR="${BUILD_DIR}/export"
-ARCHIVE_PATH="${BUILD_DIR}/${APP_NAME}.xcarchive"
-APP_PATH="${EXPORT_DIR}/${APP_NAME}.app"
-DMG_FILENAME="${APP_NAME}-${VERSION}${DMG_SUFFIX}.dmg"
+ARCHIVE_PATH="${BUILD_DIR}/${PROJECT_NAME}.xcarchive"
+APP_PATH="${EXPORT_DIR}/${APP_BUNDLE_NAME}.app"
+# DMG filename stays URL-safe (no spaces) so download URLs don't require
+# percent-encoding. Channel differentiation comes from DMG_SUFFIX.
+DMG_FILENAME="${PROJECT_NAME}-${VERSION}${DMG_SUFFIX}.dmg"
 DMG_PATH="${BUILD_DIR}/${DMG_FILENAME}"
 
 # ---- preflight ----------------------------------------------------------
@@ -152,7 +165,7 @@ DMG_PATH="${BUILD_DIR}/${DMG_FILENAME}"
 echo "==> Preflight (channel=$CHANNEL, version=$VERSION)"
 command -v xcodebuild >/dev/null || { echo "xcodebuild not found"; exit 1; }
 command -v xcodegen   >/dev/null || { echo "brew install xcodegen"; exit 1; }
-command -v create-dmg >/dev/null || { echo "brew install create-dmg"; exit 1; }
+command -v hdiutil    >/dev/null || { echo "hdiutil not found (comes with macOS)"; exit 1; }
 command -v jq         >/dev/null || { echo "brew install jq"; exit 1; }
 command -v curl       >/dev/null || { echo "curl not found"; exit 1; }
 [ -x "${SPARKLE_TOOLS}/sign_update" ] || { echo "Sparkle sign_update missing at ${SPARKLE_TOOLS}/sign_update"; exit 1; }
@@ -217,8 +230,8 @@ xcodegen generate
 
 echo "==> xcodebuild archive (Release)"
 rm -rf "$ARCHIVE_PATH"
-xcodebuild -project "${APP_NAME}.xcodeproj" \
-    -scheme "${APP_NAME}" \
+xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
+    -scheme "${PROJECT_NAME}" \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
     -destination 'generic/platform=macOS' \
@@ -231,7 +244,11 @@ xcodebuild -exportArchive \
     -exportPath "${EXPORT_DIR}" \
     -exportOptionsPlist scripts/exportOptions.plist
 
-[ -d "$APP_PATH" ] || { echo "Export didn't produce $APP_PATH"; exit 1; }
+[ -d "$APP_PATH" ] || {
+  echo "Export didn't produce $APP_PATH"
+  echo "Contents of $EXPORT_DIR:"; ls -la "$EXPORT_DIR" 2>&1
+  exit 1
+}
 
 # Channel sanity check — abort if build cache served a wrong-channel plist.
 # This catches sed-range regressions (e.g., if someone reorders the Release
@@ -252,7 +269,7 @@ fi
 
 # ---- notarize -----------------------------------------------------------
 
-ZIP_PATH="${BUILD_DIR}/${APP_NAME}-notarize.zip"
+ZIP_PATH="${BUILD_DIR}/${PROJECT_NAME}-notarize.zip"
 echo "==> Zipping for notarization"
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
@@ -266,18 +283,94 @@ xcrun stapler validate "$APP_PATH"
 
 # ---- DMG ----------------------------------------------------------------
 
+# Why we're not using `create-dmg` here: it implements the Applications
+# drop target as a raw symlink (`ln -s /Applications ./Applications`),
+# which modern macOS versions (Sonoma / Sequoia / Tahoe) stop
+# auto-resolving to the system Applications-folder icon inside read-only
+# DMGs. Users see an empty dashed placeholder next to the app instead of
+# the familiar "drag here" Applications folder. We fix that by creating a
+# proper Finder alias file via AppleScript — Finder always renders
+# aliases with the correct target-folder icon.
+#
+# The pipeline: staging dir → writable UDRW DMG → mount → AppleScript
+# sets window bounds + icon positions → unmount → convert to compressed
+# UDZO. ~30 lines, no brew dependencies, reliably good-looking result.
+
 echo "==> Building DMG at $DMG_PATH"
 rm -f "$DMG_PATH"
-create-dmg \
-    --volname "${APP_NAME} ${VERSION}" \
-    --window-pos 200 120 \
-    --window-size 600 400 \
-    --icon-size 100 \
-    --icon "${APP_NAME}.app" 175 200 \
-    --app-drop-link 425 200 \
-    --no-internet-enable \
-    "$DMG_PATH" \
-    "$APP_PATH"
+
+VOL_NAME="${DISPLAY_NAME} ${VERSION}"
+STAGING_DIR=$(mktemp -d)
+TEMP_DMG_DIR=$(mktemp -d)
+TEMP_DMG="$TEMP_DMG_DIR/temp.dmg"
+# Cleanup even on failure so we don't leak mounts/temp dirs. The unmount
+# is best-effort — if AppleScript already succeeded the volume may be
+# gone; if we bailed early it may never have mounted.
+cleanup_dmg() {
+  hdiutil detach "/Volumes/$VOL_NAME" -quiet 2>/dev/null || true
+  rm -rf "$STAGING_DIR" "$TEMP_DMG_DIR"
+}
+trap 'cleanup_dmg; mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
+
+# 1. Stage the app bundle.
+cp -R "$APP_PATH" "$STAGING_DIR/"
+
+# 2. Create a proper Finder alias to /Applications (NOT a symlink).
+#    AppleScript's `make new alias file` produces an alias file that
+#    Finder renders with the real Applications-folder icon. A bare
+#    symlink (what `create-dmg --app-drop-link` produces) no longer
+#    auto-resolves to that icon in modern macOS read-only DMGs.
+osascript <<APPLE_SCRIPT
+tell application "Finder"
+    set appsAlias to make new alias file at POSIX file "$STAGING_DIR" to POSIX file "/Applications"
+    set name of appsAlias to "Applications"
+end tell
+APPLE_SCRIPT
+
+# 3. Build a writable DMG from the staging folder.
+hdiutil create -volname "$VOL_NAME" -srcfolder "$STAGING_DIR" \
+    -ov -format UDRW -fs HFS+ "$TEMP_DMG" >/dev/null
+
+# 4. Mount the writable DMG at its default location (/Volumes/\$VOL_NAME)
+#    so Finder registers it by volume name and our AppleScript's
+#    \`tell disk "$VOL_NAME"\` can find it. `-noautoopen` keeps Finder
+#    from popping a window at the user; we still script the window
+#    customization below.
+hdiutil attach "$TEMP_DMG" -noautoopen -quiet
+# Small beat so Finder notices the mount before we ask about it.
+sleep 1
+
+# 5. Finder window layout. `update without registering applications` at
+#    the end is what flushes the .DS_Store to disk so the layout
+#    persists in the final compressed DMG.
+osascript <<APPLE_SCRIPT
+tell application "Finder"
+    tell disk "$VOL_NAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 800, 520}
+        set viewOptions to the icon view options of container window
+        set arrangement of viewOptions to not arranged
+        set icon size of viewOptions to 100
+        set position of item "${APP_BUNDLE_NAME}.app" of container window to {150, 180}
+        set position of item "Applications" of container window to {450, 180}
+        close
+        open
+        update without registering applications
+        delay 1
+    end tell
+end tell
+APPLE_SCRIPT
+
+# 6. Unmount, then convert to compressed read-only UDZO.
+hdiutil detach "/Volumes/$VOL_NAME" -quiet
+hdiutil convert "$TEMP_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" -ov -quiet
+
+# Clean up staging/temp immediately (trap will no-op on already-gone files).
+cleanup_dmg
+trap 'mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
 
 # ---- Sparkle sign -------------------------------------------------------
 
