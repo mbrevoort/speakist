@@ -35,34 +35,59 @@ final class ShortcutManager {
 
     private func pushDown() {
         guard !env.preferences.shortcutPaused else { return }
-        // Permission failures used to silently early-return, which was the
-        // worst possible UX — a user who'd just installed a fresh-signed
-        // build (e.g. switching from a Debug build to the notarized DMG)
-        // would find the shortcut mysteriously dead, because TCC wipes mic
-        // and accessibility grants when the code signature changes AND
-        // notifications are typically also unauthorized for the new signature
-        // so the denial notification gets eaten.
-        //
-        // Now we fire three signals instead: audible Funk beep, direct jump
-        // to the right System Settings pane, and the notification (best-effort).
-        guard env.permissions.mic == .granted else {
-            Logger.shared.warn("Shortcut blocked: microphone permission is \(env.permissions.mic)")
-            NSSound(named: "Funk")?.play()
-            env.permissions.openMicrophoneSettings()
-            env.notifier.micDenied()
-            return
-        }
-        guard env.permissions.accessibility == .granted else {
-            Logger.shared.warn("Shortcut blocked: accessibility permission is \(env.permissions.accessibility)")
-            NSSound(named: "Funk")?.play()
-            env.permissions.openAccessibilitySettings()
-            env.notifier.accessibilityDenied()
-            return
-        }
+        guard handlePermissionPrecondition() else { return }
         // Debounce: ignore key-down while a prior recording is still transcribing.
         if env.hudController.state == .transcribing { return }
         if env.audioRecorder.isRecording { return }
         beginRecording()
+    }
+
+    /// Check mic + accessibility. Returns `true` only if both are granted
+    /// and recording can proceed.
+    ///
+    /// The branching matters: when a permission is `.notDetermined` (fresh
+    /// install, TCC has no record yet), we need to actually *trigger* the
+    /// OS prompt — just opening System Settings → Privacy doesn't help,
+    /// because the app won't even appear in that list until it's invoked
+    /// the matching permission API at least once. Only once the user has
+    /// explicitly denied (`.denied`) does the Settings toggle exist for
+    /// them to flip.
+    ///
+    /// Historic bug this fixes: pre-this-refactor, `.notDetermined` fell
+    /// into the same branch as `.denied` and opened System Settings →
+    /// Microphone, where users couldn't find their Speakist entry (because
+    /// we'd never prompted) — and ended up thinking the shortcut was
+    /// broken.
+    private func handlePermissionPrecondition() -> Bool {
+        switch env.permissions.mic {
+        case .granted:
+            break
+        case .notDetermined:
+            Logger.shared.info("Shortcut pressed with mic=.notDetermined; triggering OS prompt")
+            Task { _ = await env.permissions.requestMicrophone() }
+            return false
+        case .denied:
+            Logger.shared.warn("Shortcut blocked: microphone permission is denied")
+            NSSound(named: "Funk")?.play()
+            env.permissions.openMicrophoneSettings()
+            env.notifier.micDenied()
+            return false
+        }
+        switch env.permissions.accessibility {
+        case .granted:
+            break
+        case .notDetermined:
+            Logger.shared.info("Shortcut pressed with accessibility=.notDetermined; triggering OS prompt")
+            _ = env.permissions.promptAccessibility()
+            return false
+        case .denied:
+            Logger.shared.warn("Shortcut blocked: accessibility permission is denied")
+            NSSound(named: "Funk")?.play()
+            env.permissions.openAccessibilitySettings()
+            env.notifier.accessibilityDenied()
+            return false
+        }
+        return true
     }
 
     private func pushUp() {
@@ -78,22 +103,7 @@ final class ShortcutManager {
             isToggleRecording = false
             finishRecording()
         } else {
-            // Same rationale as pushDown(): make permission-denial loud and
-            // self-guiding, not silent.
-            guard env.permissions.mic == .granted else {
-                Logger.shared.warn("Toggle shortcut blocked: microphone permission is \(env.permissions.mic)")
-                NSSound(named: "Funk")?.play()
-                env.permissions.openMicrophoneSettings()
-                env.notifier.micDenied()
-                return
-            }
-            guard env.permissions.accessibility == .granted else {
-                Logger.shared.warn("Toggle shortcut blocked: accessibility permission is \(env.permissions.accessibility)")
-                NSSound(named: "Funk")?.play()
-                env.permissions.openAccessibilitySettings()
-                env.notifier.accessibilityDenied()
-                return
-            }
+            guard handlePermissionPrecondition() else { return }
             isToggleRecording = true
             beginRecording()
         }
