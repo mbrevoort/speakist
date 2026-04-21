@@ -40,19 +40,4 @@ enum AppIdentity {
     static var channel: String {
         Bundle.main.object(forInfoDictionaryKey: "SpeakistChannel") as? String ?? "local"
     }
-
-    /// Cloudflare AI Gateway base URL for this channel, e.g.
-    /// `https://gateway.ai.cloudflare.com/v1/{acct}/speakist-dev`. Provider
-    /// paths are appended at call sites (e.g. `/deepgram/v1/listen`).
-    ///
-    /// local+dev  → `speakist-dev` gateway
-    /// beta+stable → `speakist-prod` gateway
-    ///
-    /// Per-gateway rules disable request/response body logging and caching,
-    /// so using the gateway adds request-count analytics without touching
-    /// audio payloads or privacy guarantees. The account ID is baked into
-    /// project.yml; release.sh rewrites the URL for dev/beta channels.
-    static var gatewayBaseURL: String {
-        Bundle.main.object(forInfoDictionaryKey: "SpeakistGatewayBaseURL") as? String ?? ""
-    }
 }
