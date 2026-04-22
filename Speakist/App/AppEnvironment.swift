@@ -53,7 +53,7 @@ final class AppEnvironment: ObservableObject {
         )
         self.apiClient = apiClient
         accountManager.bind(client: apiClient)
-        // Lets refreshIdentity write the cleanup block back into Preferences.
+        // Lets refreshIdentity write the polish block back into Preferences.
         accountManager.bind(preferences: prefs)
 
         self.transcriptionService = TranscriptionService(

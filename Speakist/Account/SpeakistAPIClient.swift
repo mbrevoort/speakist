@@ -159,7 +159,7 @@ final class SpeakistAPIClient {
         let displayName: String?
         let isSuperAdmin: Bool
         let org: OrgInfo?
-        let cleanup: CleanupInfo?
+        let polish: PolishInfo?
 
         struct OrgInfo: Decodable {
             let id: String
@@ -176,7 +176,7 @@ final class SpeakistAPIClient {
             }
         }
 
-        struct CleanupInfo: Decodable {
+        struct PolishInfo: Decodable {
             let enabled: Bool
             /// The currently-effective prompt (custom if set, else default).
             let systemPrompt: String
@@ -198,7 +198,7 @@ final class SpeakistAPIClient {
         }
 
         enum CodingKeys: String, CodingKey {
-            case id, email, org, cleanup
+            case id, email, org, polish
             case displayName = "display_name"
             case isSuperAdmin = "is_super_admin"
         }
@@ -210,9 +210,9 @@ final class SpeakistAPIClient {
         try await perform(path: "/api/me", method: "GET", body: nil, auth: true)
     }
 
-    // MARK: - Cleanup prefs
+    // MARK: - Polish prefs
 
-    struct CleanupPrefsResponse: Decodable {
+    struct PolishPrefsResponse: Decodable {
         let enabled: Bool
         let systemPrompt: String
         let isCustom: Bool
@@ -226,15 +226,15 @@ final class SpeakistAPIClient {
         }
     }
 
-    /// PATCH-style update of the user's cleanup prefs. `systemPrompt = nil`
+    /// PATCH-style update of the user's polish prefs. `systemPrompt = nil`
     /// (as an explicit Optional set via `.some(.none)`) clears the custom
     /// override and reverts to the server default. Pass `nil` for either
     /// field to leave it unchanged.
     ///
     /// Returns the post-save state so callers can refresh their local cache
     /// without a follow-up GET.
-    func updateCleanup(enabled: Bool?,
-                       systemPrompt: OptionalValue<String>?) async throws -> CleanupPrefsResponse {
+    func updatePolish(enabled: Bool?,
+                      systemPrompt: OptionalValue<String>?) async throws -> PolishPrefsResponse {
         var body: [String: Any] = [:]
         if let enabled { body["enabled"] = enabled }
         if let systemPrompt {
@@ -243,11 +243,11 @@ final class SpeakistAPIClient {
             case .null: body["system_prompt"] = NSNull()
             }
         }
-        return try await perform(path: "/api/me/cleanup", method: "PUT", body: body, auth: true)
+        return try await perform(path: "/api/me/polish", method: "PUT", body: body, auth: true)
     }
 
     /// Helper enum so callers can distinguish "omit this field" (`nil` at
-    /// the `updateCleanup(systemPrompt:)` call site) from "explicitly
+    /// the `updatePolish(systemPrompt:)` call site) from "explicitly
     /// clear the value" (`.null`).
     enum OptionalValue<T> {
         case value(T)

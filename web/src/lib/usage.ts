@@ -142,6 +142,8 @@ export interface RecentEvent {
   audioMs: number | null;
   costMillicents: number;
   model: string;
+  providerId: string;
+  polishApplied: boolean;
   createdAt: Date;
 }
 
@@ -156,6 +158,8 @@ export async function getRecentEvents(orgId: string, limit = 20): Promise<Recent
       audioMs: usageEvents.audioMs,
       costMillicents: usageEvents.costMillicents,
       model: usageEvents.model,
+      providerId: usageEvents.providerId,
+      polishApplied: usageEvents.polishApplied,
       createdAt: usageEvents.createdAt,
     })
     .from(usageEvents)

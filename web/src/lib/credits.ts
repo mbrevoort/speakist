@@ -287,6 +287,10 @@ export interface DebitForAudioTranscriptionArgs {
   /** Word count computed from the transcript. Recorded for display only —
    *  cost is derived from audio duration. */
   wordCount: number;
+  /** True when the LLM polish pass ran on this event (and the stored
+   *  wordCount is the post-polish figure). Surfaced in the usage
+   *  dashboard; never factored into billing. Defaults to false. */
+  polishApplied?: boolean;
 }
 
 export async function debitForAudioTranscription(
@@ -340,6 +344,7 @@ export async function debitForAudioTranscription(
       model: args.model,
       costMillicents: org.isComped ? 0 : retailMc,
       upstreamCostMillicents: upstreamMc,
+      polishApplied: args.polishApplied ?? false,
     });
   } catch (err) {
     if (String(err).includes("UNIQUE") || String(err).includes("unique")) {

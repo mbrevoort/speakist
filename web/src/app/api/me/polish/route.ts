@@ -1,9 +1,8 @@
-// GET/PUT /api/me/cleanup
+// GET/PUT /api/me/polish
 //
-// Per-user cleanup preferences. Source of truth for whether
-// /api/transcribe runs the LLM cleanup pass and what system prompt it
-// uses. Mac calls this when the user flips the toggle or edits the
-// prompt in Settings.
+// Per-user polish preferences. Source of truth for whether /api/transcribe
+// runs the LLM polish pass and what system prompt it uses. Mac calls this
+// when the user flips the toggle or edits the prompt in Settings.
 //
 // Auth: bearer (Mac session) or cookie (web debugging).
 //
@@ -21,12 +20,12 @@ import { z } from "zod";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { DEFAULT_CLEANUP_PROMPT } from "@/lib/transcription/cleanup";
+import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
     const user = await requireUserFromRequest(req);
-    return Response.json(await readCleanup(user.id));
+    return Response.json(await readPolish(user.id));
   } catch (err) {
     return errorResponse(err);
   }
@@ -52,14 +51,14 @@ export async function PUT(req: Request): Promise<Response> {
       );
     }
 
-    const patch: Partial<{ cleanupEnabled: boolean; cleanupSystemPrompt: string | null }> = {};
-    if (parsed.data.enabled !== undefined) patch.cleanupEnabled = parsed.data.enabled;
+    const patch: Partial<{ polishEnabled: boolean; polishSystemPrompt: string | null }> = {};
+    if (parsed.data.enabled !== undefined) patch.polishEnabled = parsed.data.enabled;
     if (parsed.data.system_prompt !== undefined) {
       // Treat whitespace-only as "clear" so users can't accidentally
       // commit a blank custom prompt (which would produce empty LLM
-      // outputs at cleanup time).
+      // outputs at polish time).
       const trimmed = parsed.data.system_prompt?.trim() ?? null;
-      patch.cleanupSystemPrompt = trimmed && trimmed.length > 0 ? trimmed : null;
+      patch.polishSystemPrompt = trimmed && trimmed.length > 0 ? trimmed : null;
     }
 
     if (Object.keys(patch).length > 0) {
@@ -67,27 +66,27 @@ export async function PUT(req: Request): Promise<Response> {
       await db.update(users).set(patch).where(eq(users.id, user.id));
     }
 
-    return Response.json(await readCleanup(user.id));
+    return Response.json(await readPolish(user.id));
   } catch (err) {
     return errorResponse(err);
   }
 }
 
-async function readCleanup(userId: string) {
+async function readPolish(userId: string) {
   const db = getDb();
   const [row] = await db
     .select({
-      enabled: users.cleanupEnabled,
-      prompt: users.cleanupSystemPrompt,
+      enabled: users.polishEnabled,
+      prompt: users.polishSystemPrompt,
     })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
   return {
     enabled: !!row?.enabled,
-    system_prompt: row?.prompt ?? DEFAULT_CLEANUP_PROMPT,
+    system_prompt: row?.prompt ?? DEFAULT_POLISH_PROMPT,
     is_custom: !!row?.prompt,
-    default_prompt: DEFAULT_CLEANUP_PROMPT,
+    default_prompt: DEFAULT_POLISH_PROMPT,
   };
 }
 
@@ -95,6 +94,6 @@ function errorResponse(err: unknown): Response {
   if (err instanceof AuthzError) {
     return Response.json({ error: err.message }, { status: err.status });
   }
-  console.error("[/api/me/cleanup] unexpected:", err);
+  console.error("[/api/me/polish] unexpected:", err);
   return Response.json({ error: "internal_error" }, { status: 500 });
 }

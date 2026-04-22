@@ -45,7 +45,7 @@ final class SpeakistAccountManager: ObservableObject {
     private let keychain: KeychainStore
     /// Preferences is optional so the manager can be constructed before the
     /// full app graph is wired; call `bind(preferences:)` to enable the
-    /// /api/me cleanup-cache sync. If unbound, refreshIdentity still
+    /// /api/me polish-cache sync. If unbound, refreshIdentity still
     /// updates `state` but skips the Preferences write.
     private var preferences: Preferences?
     private var client: SpeakistAPIClient?
@@ -72,7 +72,7 @@ final class SpeakistAccountManager: ObservableObject {
         }
     }
 
-    /// Inject Preferences so the /api/me cleanup block writes back to the
+    /// Inject Preferences so the /api/me polish block writes back to the
     /// local Settings cache. Called by AppEnvironment after both objects
     /// exist.
     func bind(preferences: Preferences) {
@@ -197,14 +197,14 @@ final class SpeakistAccountManager: ObservableObject {
                 balanceMillicents: me.org?.balanceMillicents
             )
             state = .signedIn(identity: identity)
-            // Hydrate the local cleanup cache so Settings renders accurate
-            // state on launch without a separate /api/me/cleanup call.
-            if let cleanup = me.cleanup {
-                preferences?.applyCleanupFromServer(
-                    enabled: cleanup.enabled,
-                    systemPrompt: cleanup.systemPrompt,
-                    isCustom: cleanup.isCustom,
-                    defaultPrompt: cleanup.defaultPrompt
+            // Hydrate the local polish cache so Settings renders accurate
+            // state on launch without a separate /api/me/polish call.
+            if let polish = me.polish {
+                preferences?.applyPolishFromServer(
+                    enabled: polish.enabled,
+                    systemPrompt: polish.systemPrompt,
+                    isCustom: polish.isCustom,
+                    defaultPrompt: polish.defaultPrompt
                 )
             }
         } catch SpeakistAPIClient.Error.notSignedIn {

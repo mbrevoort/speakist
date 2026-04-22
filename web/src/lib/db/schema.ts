@@ -54,12 +54,13 @@ export const users = sqliteTable("users", {
   // Speakist extensions:
   displayName: text("display_name"),
   isSuperAdmin: bool("is_super_admin").notNull().default(false),
-  // Post-transcription cleanup pass. When enabled, /api/transcribe runs
+  // Post-transcription polish pass. When enabled, /api/transcribe runs
   // the transcript through llama-3.1-8b-instant on Groq with the system
   // prompt below (or a server-baked default when null). Stored on the
-  // user so every signed-in Mac inherits the same behavior.
-  cleanupEnabled: bool("cleanup_enabled").notNull().default(false),
-  cleanupSystemPrompt: text("cleanup_system_prompt"),
+  // user so every signed-in Mac inherits the same behavior. Originally
+  // shipped as "cleanup"; renamed in migration 0007.
+  polishEnabled: bool("polish_enabled").notNull().default(false),
+  polishSystemPrompt: text("polish_system_prompt"),
   createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
@@ -292,6 +293,10 @@ export const usageEvents = sqliteTable(
     // column is still present in the DB for one release as a safety hatch;
     // Phase D drops it. Drizzle schema only maps the new name.
     upstreamCostMillicents: integer("upstream_cost_millicents"),
+    // 1 when /api/transcribe ran the LLM polish pass and used the polished
+    // output, 0 otherwise. Added in migration 0007 so the usage dashboard
+    // can show which transcriptions went through polish.
+    polishApplied: bool("polish_applied").notNull().default(false),
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   },
   (t) => ({

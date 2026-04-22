@@ -18,7 +18,7 @@ import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
-import { DEFAULT_CLEANUP_PROMPT } from "@/lib/transcription/cleanup";
+import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -26,14 +26,14 @@ export async function GET(req: Request): Promise<Response> {
     const org = await getCurrentOrgForUser(user.id);
     const balance = org ? await getOrgCreditBalance(org.id) : 0;
 
-    // Cleanup prefs — one extra row read, cheap. Mac caches the result
+    // Polish prefs — one extra row read, cheap. Mac caches the result
     // so Settings renders with the right state on launch without a
     // second round-trip.
     const db = getDb();
     const [prefs] = await db
       .select({
-        enabled: users.cleanupEnabled,
-        prompt: users.cleanupSystemPrompt,
+        enabled: users.polishEnabled,
+        prompt: users.polishSystemPrompt,
       })
       .from(users)
       .where(eq(users.id, user.id))
@@ -54,15 +54,15 @@ export async function GET(req: Request): Promise<Response> {
             balance_millicents: balance,
           }
         : null,
-      cleanup: {
+      polish: {
         enabled: !!prefs?.enabled,
         // `null` on the user row → return the default so Mac shows it
         // pre-filled in the Settings editor. `isCustom` tells the Mac
         // whether the prompt on the user row is a custom override or
         // the server default baked into the response.
-        system_prompt: prefs?.prompt ?? DEFAULT_CLEANUP_PROMPT,
+        system_prompt: prefs?.prompt ?? DEFAULT_POLISH_PROMPT,
         is_custom: !!prefs?.prompt,
-        default_prompt: DEFAULT_CLEANUP_PROMPT,
+        default_prompt: DEFAULT_POLISH_PROMPT,
       },
     });
   } catch (err) {

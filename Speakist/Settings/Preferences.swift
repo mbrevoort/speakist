@@ -41,10 +41,10 @@ final class Preferences: ObservableObject {
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
         static let apiBaseURL = "apiBaseURL"
         static let useTranscribeProxy = "useTranscribeProxy"
-        static let cleanupEnabled = "cleanupEnabled"
-        static let cleanupSystemPrompt = "cleanupSystemPrompt"
-        static let cleanupDefaultPrompt = "cleanupDefaultPrompt"
-        static let cleanupIsCustom = "cleanupIsCustom"
+        static let polishEnabled = "polishEnabled"
+        static let polishSystemPrompt = "polishSystemPrompt"
+        static let polishDefaultPrompt = "polishDefaultPrompt"
+        static let polishIsCustom = "polishIsCustom"
     }
 
     init() {
@@ -110,16 +110,16 @@ final class Preferences: ObservableObject {
             // If we see breakage in the dev channel, flipping this off
             // restores the known-good flow without waiting for a release.
             K.useTranscribeProxy: true,
-            // Cleanup prefs are authoritative on the backend (source of
-            // truth = /api/me/cleanup). These local values are a cache so
+            // Polish prefs are authoritative on the backend (source of
+            // truth = /api/me/polish). These local values are a cache so
             // Settings can render instantly on launch without blocking on
             // /api/me. Refreshed after sign-in and after every successful
             // PUT. Default false + empty prompt matches what a fresh user
             // gets server-side.
-            K.cleanupEnabled: false,
-            K.cleanupSystemPrompt: "",
-            K.cleanupDefaultPrompt: "",
-            K.cleanupIsCustom: false
+            K.polishEnabled: false,
+            K.polishSystemPrompt: "",
+            K.polishDefaultPrompt: "",
+            K.polishIsCustom: false
         ])
     }
 
@@ -263,48 +263,48 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: K.useTranscribeProxy); objectWillChange.send() }
     }
 
-    // MARK: - Cleanup prefs (cached from /api/me)
+    // MARK: - Polish prefs (cached from /api/me)
     //
-    // These four mirror the `cleanup` block in the /api/me response. The
+    // These four mirror the `polish` block in the /api/me response. The
     // backend is source of truth; local writes always fire a PUT and then
     // sync the cache from the response. Reads are free; writes that happen
     // offline will error and the user needs to retry when online.
 
-    /// Runs the LLM cleanup pass on each transcription when true.
-    var cleanupEnabled: Bool {
-        get { defaults.bool(forKey: K.cleanupEnabled) }
-        set { defaults.set(newValue, forKey: K.cleanupEnabled); objectWillChange.send() }
+    /// Runs the LLM polish pass on each transcription when true.
+    var polishEnabled: Bool {
+        get { defaults.bool(forKey: K.polishEnabled) }
+        set { defaults.set(newValue, forKey: K.polishEnabled); objectWillChange.send() }
     }
 
     /// Currently-effective system prompt — either the user's custom one or
-    /// the server default, depending on `cleanupIsCustom`.
-    var cleanupSystemPrompt: String {
-        get { defaults.string(forKey: K.cleanupSystemPrompt) ?? "" }
-        set { defaults.set(newValue, forKey: K.cleanupSystemPrompt); objectWillChange.send() }
+    /// the server default, depending on `polishIsCustom`.
+    var polishSystemPrompt: String {
+        get { defaults.string(forKey: K.polishSystemPrompt) ?? "" }
+        set { defaults.set(newValue, forKey: K.polishSystemPrompt); objectWillChange.send() }
     }
 
     /// Server's baked-in default prompt. Shown as placeholder / reset target.
-    var cleanupDefaultPrompt: String {
-        get { defaults.string(forKey: K.cleanupDefaultPrompt) ?? "" }
-        set { defaults.set(newValue, forKey: K.cleanupDefaultPrompt); objectWillChange.send() }
+    var polishDefaultPrompt: String {
+        get { defaults.string(forKey: K.polishDefaultPrompt) ?? "" }
+        set { defaults.set(newValue, forKey: K.polishDefaultPrompt); objectWillChange.send() }
     }
 
     /// True when the user has saved a custom prompt. False when they're
     /// still on the server default.
-    var cleanupIsCustom: Bool {
-        get { defaults.bool(forKey: K.cleanupIsCustom) }
-        set { defaults.set(newValue, forKey: K.cleanupIsCustom); objectWillChange.send() }
+    var polishIsCustom: Bool {
+        get { defaults.bool(forKey: K.polishIsCustom) }
+        set { defaults.set(newValue, forKey: K.polishIsCustom); objectWillChange.send() }
     }
 
-    /// Atomically update all four cleanup cache fields from a fresh server
+    /// Atomically update all four polish cache fields from a fresh server
     /// response. Single `objectWillChange.send()` so Settings doesn't
     /// flicker through intermediate states.
-    func applyCleanupFromServer(enabled: Bool, systemPrompt: String,
+    func applyPolishFromServer(enabled: Bool, systemPrompt: String,
                                 isCustom: Bool, defaultPrompt: String) {
-        defaults.set(enabled, forKey: K.cleanupEnabled)
-        defaults.set(systemPrompt, forKey: K.cleanupSystemPrompt)
-        defaults.set(isCustom, forKey: K.cleanupIsCustom)
-        defaults.set(defaultPrompt, forKey: K.cleanupDefaultPrompt)
+        defaults.set(enabled, forKey: K.polishEnabled)
+        defaults.set(systemPrompt, forKey: K.polishSystemPrompt)
+        defaults.set(isCustom, forKey: K.polishIsCustom)
+        defaults.set(defaultPrompt, forKey: K.polishDefaultPrompt)
         objectWillChange.send()
     }
 

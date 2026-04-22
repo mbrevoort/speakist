@@ -48,7 +48,7 @@ import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { dispatch, TranscriptionDispatchError } from "@/lib/transcription";
 import { logTranscriptionEvent } from "@/lib/transcription/analytics";
-import { runCleanup } from "@/lib/transcription/cleanup";
+import { runPolish } from "@/lib/transcription/polish";
 import { checkOrgModelAccess } from "@/lib/transcription/orgAccess";
 import { isProviderId, type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
 
@@ -220,49 +220,49 @@ export async function POST(req: Request): Promise<Response> {
       ? input.audioMsHint / 1000
       : 0;
 
-  // ---- optional cleanup pass ---------------------------------------------
-  // Load the user's cleanup prefs (cheap single-row read). Cleanup runs
-  // synchronously so the returned `text` is already cleaned; cost is
-  // absorbed (not billed) in Phase 1 since per-transcription cleanup is
+  // ---- optional polish pass -----------------------------------------------
+  // Load the user's polish prefs (cheap single-row read). Polish runs
+  // synchronously so the returned `text` is already polished; cost is
+  // absorbed (not billed) in Phase 1 since per-transcription polish is
   // ~$0.0001 vs ~$0.01 transcription.
   let finalText = output.text;
-  let cleanupApplied = false;
+  let polishApplied = false;
   try {
     const db = getDb();
     const [userPrefs] = await db
       .select({
-        cleanupEnabled: users.cleanupEnabled,
-        cleanupSystemPrompt: users.cleanupSystemPrompt,
+        polishEnabled: users.polishEnabled,
+        polishSystemPrompt: users.polishSystemPrompt,
       })
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1);
-    if (userPrefs?.cleanupEnabled && output.text.trim().length > 0) {
-      const cleanup = await runCleanup(
-        env as unknown as Parameters<typeof runCleanup>[0],
+    if (userPrefs?.polishEnabled && output.text.trim().length > 0) {
+      const polish = await runPolish(
+        env as unknown as Parameters<typeof runPolish>[0],
         org.id,
         output.text,
-        userPrefs.cleanupSystemPrompt
+        userPrefs.polishSystemPrompt
       );
       // Metadata-only log (no content) so operators can confirm in
       // `pnpm dev` / tail logs that the right prompt variant ran +
       // whether the model output changed length unexpectedly.
       console.info(
-        `[transcribe] cleanup ${cleanup.applied ? "applied" : "skipped"} ` +
-          `prompt=${userPrefs.cleanupSystemPrompt ? "custom" : "default"} ` +
-          `inChars=${output.text.length} outChars=${cleanup.text.length} ` +
-          `tokens=${cleanup.promptTokens}/${cleanup.completionTokens} ` +
-          `latencyMs=${cleanup.latencyMs}` +
-          (cleanup.errorReason ? ` reason=${cleanup.errorReason}` : "")
+        `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
+          `prompt=${userPrefs.polishSystemPrompt ? "custom" : "default"} ` +
+          `inChars=${output.text.length} outChars=${polish.text.length} ` +
+          `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
+          `latencyMs=${polish.latencyMs}` +
+          (polish.errorReason ? ` reason=${polish.errorReason}` : "")
       );
-      if (cleanup.applied) {
-        finalText = cleanup.text;
-        cleanupApplied = true;
+      if (polish.applied) {
+        finalText = polish.text;
+        polishApplied = true;
       }
     }
   } catch (err) {
-    // Cleanup errors never block transcription — fall through with raw text.
-    console.warn("[transcribe] cleanup threw:", err);
+    // Polish errors never block transcription — fall through with raw text.
+    console.warn("[transcribe] polish threw:", err);
   }
 
   // ---- debit --------------------------------------------------------------
@@ -273,7 +273,12 @@ export async function POST(req: Request): Promise<Response> {
     providerId,
     model,
     audioSeconds: audioSecondsForBilling,
+    // Billed on the final (post-polish) word count so users see what they
+    // actually got, not a pre-edit estimate. Note: billing math is driven
+    // by audio duration × per-minute rate inside debitForAudioTranscription;
+    // wordCount is stored on the row purely for the dashboard display.
     wordCount: wordCount(finalText),
+    polishApplied,
   });
 
   if (debit.kind === "duplicate") {
@@ -284,7 +289,7 @@ export async function POST(req: Request): Promise<Response> {
       audioSeconds: output.audioSeconds,
       provider: providerId,
       model,
-      cleanupApplied,
+      polishApplied,
       usageEventId: debit.usageEventId,
       duplicate: true,
     }));
@@ -315,7 +320,7 @@ export async function POST(req: Request): Promise<Response> {
     audioSeconds: output.audioSeconds,
     provider: providerId,
     model,
-    cleanupApplied,
+    polishApplied,
     usageEventId: debit.usageEventId,
     newBalanceMillicents: debit.newBalanceMillicents,
     autoTopupTriggered: debit.autoTopupTriggered,

@@ -20,7 +20,7 @@ struct BrandHeader: View {
 }
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case account, general, shortcuts, audio, transcription, cleanup, vocabulary, history, about
+    case account, general, shortcuts, audio, transcription, polish, vocabulary, history, about
 
     var id: String { rawValue }
 
@@ -31,7 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: return "Shortcuts"
         case .audio: return "Audio"
         case .transcription: return "Transcription"
-        case .cleanup: return "Cleanup"
+        case .polish: return "Polish"
         case .vocabulary: return "Vocabulary"
         case .history: return "History"
         case .about: return "About"
@@ -45,7 +45,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .shortcuts: return "keyboard"
         case .audio: return "mic"
         case .transcription: return "waveform"
-        case .cleanup: return "sparkles"
+        case .polish: return "sparkles"
         case .vocabulary: return "character.book.closed"
         case .history: return "clock.arrow.circlepath"
         case .about: return "info.circle"
@@ -105,7 +105,7 @@ struct SettingsWindow: View {
         case .shortcuts: ShortcutsSettingsView()
         case .audio: AudioSettingsView()
         case .transcription: TranscriptionSettingsView()
-        case .cleanup: CleanupSettingsView()
+        case .polish: PolishSettingsView()
         case .vocabulary: VocabularySettingsView()
         case .history: HistorySettingsView()
         case .about: AboutSettingsView()
@@ -612,14 +612,14 @@ struct TranscriptionSettingsView: View {
     }
 }
 
-// MARK: - Cleanup
+// MARK: - Polish
 //
-// Post-transcription LLM cleanup pass. Settings here mutate the server's
+// Post-transcription LLM polish pass. Settings here mutate the server's
 // source-of-truth on PUT — the local Preferences cache is refreshed from
 // the PUT's response shape, so the UI always reflects what the server
 // saved. Offline writes surface as an inline error; user retries.
 
-struct CleanupSettingsView: View {
+struct PolishSettingsView: View {
     @EnvironmentObject var prefs: Preferences
     @EnvironmentObject var env: AppEnvironment
 
@@ -633,32 +633,32 @@ struct CleanupSettingsView: View {
         // "Dirty" = different from what the server currently has.
         // When the user hasn't customized yet, the current effective prompt
         // is the default, so any edit counts as dirty.
-        draftPrompt != prefs.cleanupSystemPrompt
+        draftPrompt != prefs.polishSystemPrompt
     }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Run a cleanup pass after each transcription", isOn: Binding(
-                    get: { prefs.cleanupEnabled },
+                Toggle("Polish each transcription with AI", isOn: Binding(
+                    get: { prefs.polishEnabled },
                     set: { newValue in saveToggle(newValue) }))
                     .disabled(savingToggle)
 
-                Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, fix grammar, and patch obvious word-level mistakes — the model is instructed to return only the cleaned text. Adds ~200–500 ms of latency and a fraction of a cent per transcription.")
+                Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, fix grammar, and patch obvious word-level mistakes — the model is instructed to return only the polished text with nothing added. Adds ~200–500 ms of latency; the cost is absorbed.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
-                Text("Post-transcription cleanup")
+                Text("Post-transcription polish")
             }
 
             Section {
                 TextEditor(text: $draftPrompt)
                     .font(.system(.body, design: .monospaced))
                     .frame(minHeight: 180)
-                    .disabled(!prefs.cleanupEnabled || savingPrompt)
+                    .disabled(!prefs.polishEnabled || savingPrompt)
                     .overlay(alignment: .topLeading) {
-                        if draftPrompt.isEmpty && !prefs.cleanupEnabled {
-                            Text("Enable cleanup above to edit the system prompt.")
+                        if draftPrompt.isEmpty && !prefs.polishEnabled {
+                            Text("Enable polish above to edit the system prompt.")
                                 .font(.callout)
                                 .foregroundColor(.secondary)
                                 .padding(6)
@@ -667,7 +667,7 @@ struct CleanupSettingsView: View {
                     }
 
                 HStack {
-                    if prefs.cleanupIsCustom {
+                    if prefs.polishIsCustom {
                         Button("Reset to default") { resetToDefault() }
                             .disabled(savingPrompt)
                     } else {
@@ -680,7 +680,7 @@ struct CleanupSettingsView: View {
 
                     Button(savingPrompt ? "Saving…" : "Save prompt") { savePrompt() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!prefs.cleanupEnabled || savingPrompt || !draftIsDirty || draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!prefs.polishEnabled || savingPrompt || !draftIsDirty || draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             } header: {
                 Text("System prompt")
@@ -691,7 +691,7 @@ struct CleanupSettingsView: View {
                     Text("Saved \(relativeTimeString(savedAt)).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                } else if prefs.cleanupEnabled {
+                } else if prefs.polishEnabled {
                     Text("Synced from your account. Any Mac you sign into will use the same prompt.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
@@ -705,7 +705,7 @@ struct CleanupSettingsView: View {
             // the first time Settings opens. After that, the user's edits
             // hold until they Save or Reset.
             if draftPrompt.isEmpty {
-                draftPrompt = prefs.cleanupSystemPrompt
+                draftPrompt = prefs.polishSystemPrompt
             }
         }
     }
@@ -718,8 +718,8 @@ struct CleanupSettingsView: View {
         Task {
             defer { savingToggle = false }
             do {
-                let resp = try await env.apiClient.updateCleanup(enabled: newValue, systemPrompt: nil)
-                prefs.applyCleanupFromServer(
+                let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
+                prefs.applyPolishFromServer(
                     enabled: resp.enabled,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
@@ -727,7 +727,7 @@ struct CleanupSettingsView: View {
                 )
                 lastSavedAt = Date()
                 // Keep the editor in sync with whatever the server returned.
-                if draftPrompt.isEmpty || !prefs.cleanupIsCustom {
+                if draftPrompt.isEmpty || !prefs.polishIsCustom {
                     draftPrompt = resp.systemPrompt
                 }
             } catch {
@@ -743,10 +743,10 @@ struct CleanupSettingsView: View {
         Task {
             defer { savingPrompt = false }
             do {
-                let resp = try await env.apiClient.updateCleanup(
+                let resp = try await env.apiClient.updatePolish(
                     enabled: nil,
                     systemPrompt: .value(trimmed))
-                prefs.applyCleanupFromServer(
+                prefs.applyPolishFromServer(
                     enabled: resp.enabled,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
@@ -766,8 +766,8 @@ struct CleanupSettingsView: View {
         Task {
             defer { savingPrompt = false }
             do {
-                let resp = try await env.apiClient.updateCleanup(enabled: nil, systemPrompt: .null)
-                prefs.applyCleanupFromServer(
+                let resp = try await env.apiClient.updatePolish(enabled: nil, systemPrompt: .null)
+                prefs.applyPolishFromServer(
                     enabled: resp.enabled,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
