@@ -291,6 +291,10 @@ export interface DebitForAudioTranscriptionArgs {
    *  wordCount is the post-polish figure). Surfaced in the usage
    *  dashboard; never factored into billing. Defaults to false. */
   polishApplied?: boolean;
+  /** Wall-clock ms the Worker spent handling the request (STT +
+   *  optional polish + bookkeeping). Surfaced in the dashboard for
+   *  latency visibility; never factored into billing. */
+  processingMs?: number;
 }
 
 export async function debitForAudioTranscription(
@@ -345,6 +349,7 @@ export async function debitForAudioTranscription(
       costMillicents: org.isComped ? 0 : retailMc,
       upstreamCostMillicents: upstreamMc,
       polishApplied: args.polishApplied ?? false,
+      processingMs: args.processingMs ?? null,
     });
   } catch (err) {
     if (String(err).includes("UNIQUE") || String(err).includes("unique")) {

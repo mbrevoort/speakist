@@ -297,6 +297,10 @@ export const usageEvents = sqliteTable(
     // output, 0 otherwise. Added in migration 0007 so the usage dashboard
     // can show which transcriptions went through polish.
     polishApplied: bool("polish_applied").notNull().default(false),
+    // Wall-clock ms the Worker spent handling this transcription (STT
+    // upstream + polish + DB writes). NULL for events inserted before
+    // migration 0008. Surfaced in the dashboard's recent-events table.
+    processingMs: integer("processing_ms"),
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   },
   (t) => ({

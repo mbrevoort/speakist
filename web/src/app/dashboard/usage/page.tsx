@@ -135,7 +135,13 @@ export default async function UsagePage() {
                   <th className="px-5 py-3 font-medium">Member</th>
                   <th className="px-5 py-3 font-medium">Provider / Model</th>
                   <th className="px-5 py-3 font-medium text-right">Words</th>
-                  <th className="px-5 py-3 font-medium text-right">Duration</th>
+                  <th className="px-5 py-3 font-medium text-right">Audio</th>
+                  <th
+                    className="px-5 py-3 font-medium text-right"
+                    title="Server wall-clock time (STT + optional polish + bookkeeping), independent of audio length."
+                  >
+                    Processing
+                  </th>
                   <th className="px-5 py-3 font-medium text-right">Cost</th>
                 </tr>
               </thead>
@@ -165,7 +171,10 @@ export default async function UsagePage() {
                       {e.wordCount.toLocaleString()}
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums text-muted-foreground">
-                      {e.audioMs ? `${(e.audioMs / 1000).toFixed(1)}s` : "—"}
+                      {e.audioMs ? formatDuration(e.audioMs) : "—"}
+                    </td>
+                    <td className="px-5 py-3 text-right tabular-nums text-muted-foreground">
+                      {e.processingMs != null ? formatDuration(e.processingMs) : "—"}
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums text-muted-foreground">
                       {formatDollars(e.costMillicents, { precision: 4 })}
@@ -179,6 +188,12 @@ export default async function UsagePage() {
       </section>
     </div>
   );
+}
+
+/** Short duration formatter. ≤999 ms → "347 ms"; ≥1 s → "3.4 s". */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
 }
 
 function StatTile({

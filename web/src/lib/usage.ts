@@ -62,19 +62,28 @@ export interface DayPoint {
 /** Word+cost totals for each of the last N days (including today). */
 export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[]> {
   const db = getDb();
-  // SQLite's strftime — created_at is stored as Unix ms (integer); divide
-  // by 1000 and format as YYYY-MM-DD. GROUP BY day, latest first.
-  const rows = await db.all<{ day: string; words: number; cost: number }>(sql`
-    SELECT
-      strftime('%Y-%m-%d', ${usageEvents.createdAt} / 1000, 'unixepoch') AS day,
-      COALESCE(SUM(${usageEvents.wordCount}), 0) AS words,
-      COALESCE(SUM(${usageEvents.costMillicents}), 0) AS cost
-    FROM ${usageEvents}
-    WHERE ${usageEvents.orgId} = ${orgId}
-      AND ${usageEvents.createdAt} >= ${Date.now() - days * 24 * 60 * 60 * 1000}
-    GROUP BY day
-    ORDER BY day ASC
-  `);
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+
+  // Using Drizzle's typed `.select()` instead of a raw `sql` template here
+  // because `db.all<T>(sql`…`)` returned `{ results: [...] }`-wrapped data
+  // on D1 in some driver revisions, which the caller wasn't unwrapping —
+  // the chart showed "no usage yet" despite data existing. The typed
+  // builder is guaranteed to return a flat array of row objects.
+  const rows = await db
+    .select({
+      day: sql<string>`strftime('%Y-%m-%d', ${usageEvents.createdAt} / 1000, 'unixepoch')`,
+      words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
+    })
+    .from(usageEvents)
+    .where(
+      and(
+        eq(usageEvents.orgId, orgId),
+        gte(usageEvents.createdAt, new Date(sinceMs))
+      )
+    )
+    .groupBy(sql`day`)
+    .orderBy(sql`day ASC`);
 
   // Fill in missing days so the chart doesn't have gaps.
   const byDay = new Map(rows.map((r) => [r.day, r]));
@@ -140,6 +149,9 @@ export interface RecentEvent {
   userDisplayName: string | null;
   wordCount: number;
   audioMs: number | null;
+  /** Wall-clock Worker processing time — null for events from before
+   *  migration 0008 or any event where the Worker crashed mid-request. */
+  processingMs: number | null;
   costMillicents: number;
   model: string;
   providerId: string;
@@ -156,6 +168,7 @@ export async function getRecentEvents(orgId: string, limit = 20): Promise<Recent
       userDisplayName: users.displayName,
       wordCount: usageEvents.wordCount,
       audioMs: usageEvents.audioMs,
+      processingMs: usageEvents.processingMs,
       costMillicents: usageEvents.costMillicents,
       model: usageEvents.model,
       providerId: usageEvents.providerId,
@@ -167,5 +180,9 @@ export async function getRecentEvents(orgId: string, limit = 20): Promise<Recent
     .where(eq(usageEvents.orgId, orgId))
     .orderBy(desc(usageEvents.createdAt))
     .limit(limit);
-  return rows.map((r) => ({ ...r, audioMs: r.audioMs ?? null }));
+  return rows.map((r) => ({
+    ...r,
+    audioMs: r.audioMs ?? null,
+    processingMs: r.processingMs ?? null,
+  }));
 }

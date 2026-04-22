@@ -266,6 +266,10 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ---- debit --------------------------------------------------------------
+  // processingMs = wall-clock from request start to this point. Captures
+  // upstream STT fetch + optional polish call + validation. Storing it
+  // gives the dashboard a real latency signal independent of audio length.
+  const processingMs = Date.now() - startedAt;
   const debit = await debitForAudioTranscription({
     orgId: org.id,
     userId: user.id,
@@ -279,6 +283,7 @@ export async function POST(req: Request): Promise<Response> {
     // wordCount is stored on the row purely for the dashboard display.
     wordCount: wordCount(finalText),
     polishApplied,
+    processingMs,
   });
 
   if (debit.kind === "duplicate") {
