@@ -315,11 +315,17 @@ final class TranscriptionService {
             guard let token = try? keychainToken(), !token.isEmpty else {
                 throw SpeakistAPIClient.Error.notSignedIn
             }
+            // Phase B: provider + model come from Preferences, not from the
+            // Deepgram-only `deepgramModel` enum. Deepgram-specific toggles
+            // (dictation, fillerWords, etc.) are still passed for all
+            // providers — the server's per-provider adapter picks what it
+            // understands and ignores the rest, so there's no harm sending
+            // them to Groq.
             return SpeakistTranscribeClient(
                 apiBaseURL: preferences.apiBaseURL,
                 bearerToken: token,
-                provider: "deepgram",
-                model: preferences.deepgramModel.rawValue,
+                provider: preferences.transcriptionProvider.rawValue,
+                model: preferences.transcriptionModel,
                 transcriptionClientId: transcriptionClientId,
                 dictation: preferences.dictationMode,
                 fillerWords: preferences.includeFillerWords,

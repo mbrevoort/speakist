@@ -16,6 +16,8 @@ final class Preferences: ObservableObject {
 
     // MARK: - Keys
     private enum K {
+        static let transcriptionProvider = "transcriptionProvider"
+        static let transcriptionModel = "transcriptionModel"
         static let deepgramModel = "deepgramModel"
         static let dictationMode = "dictationMode"
         static let includeFillerWords = "includeFillerWords"
@@ -49,6 +51,15 @@ final class Preferences: ObservableObject {
             ?? "http://localhost:3000"
 
         defaults.register(defaults: [
+            // Phase B transcription provider + model. Default to Deepgram
+            // nova-3 so upgrading from Phase A preserves the exact upstream.
+            // User picks between Deepgram / Groq in Settings → Transcription;
+            // when they switch providers, the model auto-flips to that
+            // provider's default (see SettingsWindow provider picker).
+            K.transcriptionProvider: TranscriptionProvider.deepgram.rawValue,
+            K.transcriptionModel: TranscriptionProvider.deepgram.defaultModel,
+            // Legacy — only consulted by the direct-Deepgram path when
+            // useTranscribeProxy is OFF. Kept for backward compat.
             K.deepgramModel: DeepgramModel.nova3.rawValue,
             // Dictation mode is opt-in. When ON, Deepgram converts spoken
             // commands ("period", "comma", "new paragraph") to characters —
@@ -99,6 +110,41 @@ final class Preferences: ObservableObject {
     }
 
     // MARK: - Bindings
+
+    /// Selected transcription provider for the /api/transcribe proxy path
+    /// (Phase B). Drives which upstream the Worker dispatches to. When
+    /// useTranscribeProxy is false, this is ignored — the legacy direct-
+    /// Deepgram path uses `deepgramModel` instead.
+    var transcriptionProvider: TranscriptionProvider {
+        get {
+            let raw = defaults.string(forKey: K.transcriptionProvider) ?? ""
+            return TranscriptionProvider(rawValue: raw) ?? .deepgram
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: K.transcriptionProvider)
+            // Auto-reset model to the new provider's default if the current
+            // model isn't valid for the new provider. Avoids the state where
+            // a user picks Groq but the stored model is still "nova-3".
+            if !newValue.models.contains(transcriptionModel) {
+                transcriptionModel = newValue.defaultModel
+            }
+            objectWillChange.send()
+        }
+    }
+
+    /// Model slug within the selected provider. Raw string (not an enum)
+    /// because the server accepts whatever slug the provider's API wants
+    /// — we don't want to bottleneck new model rollout on a Mac release.
+    var transcriptionModel: String {
+        get {
+            let raw = defaults.string(forKey: K.transcriptionModel) ?? ""
+            return raw.isEmpty ? transcriptionProvider.defaultModel : raw
+        }
+        set { defaults.set(newValue, forKey: K.transcriptionModel); objectWillChange.send() }
+    }
+
+    /// Legacy — only used by the direct-Deepgram path when
+    /// `useTranscribeProxy` is OFF. New proxy path uses `transcriptionModel`.
     var deepgramModel: DeepgramModel {
         get { DeepgramModel(rawValue: defaults.string(forKey: K.deepgramModel) ?? "") ?? .nova3 }
         set { defaults.set(newValue.rawValue, forKey: K.deepgramModel); objectWillChange.send() }

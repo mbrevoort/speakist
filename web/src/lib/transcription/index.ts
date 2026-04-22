@@ -9,6 +9,7 @@
 // handler's job, so it can log analytics even on dispatch errors.
 
 import { deepgramAdapter } from "./adapters/deepgram";
+import { groqAdapter } from "./adapters/groq";
 import { resolveProviderKey, type ProviderKeyEnv } from "./secrets";
 import {
   TranscriptionDispatchError,
@@ -25,7 +26,7 @@ const UPSTREAM_TIMEOUT_MS = 25_000;
 
 const ADAPTERS: Partial<Record<ProviderId, ProviderAdapter>> = {
   deepgram: deepgramAdapter,
-  // Phase B adds: groq: groqAdapter
+  groq: groqAdapter,
   // Phase C adds: openai: openaiAdapter, xai: xaiAdapter
 };
 
@@ -34,7 +35,8 @@ export function getAdapter(providerId: ProviderId): ProviderAdapter {
   if (!adapter) {
     throw new TranscriptionDispatchError(
       "unsupported_model",
-      `Provider '${providerId}' isn't wired up yet (Phase A ships deepgram only).`
+      `Provider '${providerId}' isn't wired up yet. Currently supported: ` +
+        Object.keys(ADAPTERS).join(", ")
     );
   }
   return adapter;

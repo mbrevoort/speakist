@@ -107,7 +107,10 @@ export async function POST(req: Request): Promise<Response> {
 
   const providerHint = (req.headers.get("X-Provider-Hint") ?? "deepgram").toLowerCase();
   if (!isProviderId(providerHint)) {
-    return finish("invalid_input", json({ error: "bad_provider", allowed: ["deepgram"] }, 400));
+    return finish(
+      "invalid_input",
+      json({ error: "bad_provider", allowed: ["deepgram", "groq"] }, 400)
+    );
   }
   providerId = providerHint;
 

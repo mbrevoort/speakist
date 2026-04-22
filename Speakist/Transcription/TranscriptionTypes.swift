@@ -40,3 +40,46 @@ protocol TranscriptionClient: Sendable {
     var providerLabel: String { get }
     var modelLabel: String { get }
 }
+
+// ---- Provider + model selection --------------------------------------------
+
+/// Supported upstream STT providers the Mac can ask the Worker to route to.
+/// The server's `/api/transcribe` accepts the `rawValue` as `X-Provider-Hint`.
+/// Keep in sync with `web/src/lib/transcription/types.ts#ProviderId`.
+enum TranscriptionProvider: String, CaseIterable, Identifiable, Codable {
+    case deepgram
+    case groq
+    // Phase C: case openai, case xai
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .deepgram: return "Deepgram"
+        case .groq: return "Groq Whisper"
+        }
+    }
+
+    /// Model slugs supported by this provider. The first is the default when
+    /// a user switches providers in Settings.
+    var models: [String] {
+        switch self {
+        case .deepgram: return ["nova-3", "nova-2"]
+        case .groq: return ["whisper-large-v3-turbo", "whisper-large-v3"]
+        }
+    }
+
+    var defaultModel: String { models[0] }
+
+    /// User-friendly labels for the model picker. Falls back to the raw
+    /// slug if we don't have a nicer label.
+    func modelDisplayName(_ slug: String) -> String {
+        switch (self, slug) {
+        case (.deepgram, "nova-3"): return "Nova-3 (latest)"
+        case (.deepgram, "nova-2"): return "Nova-2"
+        case (.groq, "whisper-large-v3-turbo"): return "Whisper v3 Turbo (fastest, cheapest)"
+        case (.groq, "whisper-large-v3"): return "Whisper v3 Large (most accurate)"
+        default: return slug
+        }
+    }
+}
