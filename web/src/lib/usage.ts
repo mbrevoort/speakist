@@ -69,9 +69,15 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
   // on D1 in some driver revisions, which the caller wasn't unwrapping —
   // the chart showed "no usage yet" despite data existing. The typed
   // builder is guaranteed to return a flat array of row objects.
+  //
+  // The strftime expression is inlined into both groupBy + orderBy rather
+  // than referring to the SELECT alias `day`, because D1 rejected the
+  // alias ("D1_ERROR: no such column: day"). SQLite is supposed to resolve
+  // SELECT-list aliases in GROUP BY, but D1's driver doesn't always.
+  const dayExpr = sql<string>`strftime('%Y-%m-%d', ${usageEvents.createdAt} / 1000, 'unixepoch')`;
   const rows = await db
     .select({
-      day: sql<string>`strftime('%Y-%m-%d', ${usageEvents.createdAt} / 1000, 'unixepoch')`,
+      day: dayExpr,
       words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
       cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
     })
@@ -82,8 +88,8 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
         gte(usageEvents.createdAt, new Date(sinceMs))
       )
     )
-    .groupBy(sql`day`)
-    .orderBy(sql`day ASC`);
+    .groupBy(dayExpr)
+    .orderBy(dayExpr);
 
   // Fill in missing days so the chart doesn't have gaps.
   const byDay = new Map(rows.map((r) => [r.day, r]));
