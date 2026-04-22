@@ -159,6 +159,7 @@ final class SpeakistAPIClient {
         let displayName: String?
         let isSuperAdmin: Bool
         let org: OrgInfo?
+        let cleanup: CleanupInfo?
 
         struct OrgInfo: Decodable {
             let id: String
@@ -175,8 +176,29 @@ final class SpeakistAPIClient {
             }
         }
 
+        struct CleanupInfo: Decodable {
+            let enabled: Bool
+            /// The currently-effective prompt (custom if set, else default).
+            let systemPrompt: String
+            /// True when `systemPrompt` is a user-set override; false when
+            /// it's the baked-in server default. Distinguishes "user
+            /// customized and happens to match default" from "user hasn't
+            /// customized yet" in the Settings editor.
+            let isCustom: Bool
+            /// Server's current default — shown as placeholder text under
+            /// the editor so users know what they're overriding.
+            let defaultPrompt: String
+
+            enum CodingKeys: String, CodingKey {
+                case enabled
+                case systemPrompt = "system_prompt"
+                case isCustom = "is_custom"
+                case defaultPrompt = "default_prompt"
+            }
+        }
+
         enum CodingKeys: String, CodingKey {
-            case id, email, org
+            case id, email, org, cleanup
             case displayName = "display_name"
             case isSuperAdmin = "is_super_admin"
         }
@@ -186,6 +208,50 @@ final class SpeakistAPIClient {
     /// line) and on launch-with-existing-token (to rehydrate state).
     func fetchMe() async throws -> MeResponse {
         try await perform(path: "/api/me", method: "GET", body: nil, auth: true)
+    }
+
+    // MARK: - Cleanup prefs
+
+    struct CleanupPrefsResponse: Decodable {
+        let enabled: Bool
+        let systemPrompt: String
+        let isCustom: Bool
+        let defaultPrompt: String
+
+        enum CodingKeys: String, CodingKey {
+            case enabled
+            case systemPrompt = "system_prompt"
+            case isCustom = "is_custom"
+            case defaultPrompt = "default_prompt"
+        }
+    }
+
+    /// PATCH-style update of the user's cleanup prefs. `systemPrompt = nil`
+    /// (as an explicit Optional set via `.some(.none)`) clears the custom
+    /// override and reverts to the server default. Pass `nil` for either
+    /// field to leave it unchanged.
+    ///
+    /// Returns the post-save state so callers can refresh their local cache
+    /// without a follow-up GET.
+    func updateCleanup(enabled: Bool?,
+                       systemPrompt: OptionalValue<String>?) async throws -> CleanupPrefsResponse {
+        var body: [String: Any] = [:]
+        if let enabled { body["enabled"] = enabled }
+        if let systemPrompt {
+            switch systemPrompt {
+            case .value(let s): body["system_prompt"] = s
+            case .null: body["system_prompt"] = NSNull()
+            }
+        }
+        return try await perform(path: "/api/me/cleanup", method: "PUT", body: body, auth: true)
+    }
+
+    /// Helper enum so callers can distinguish "omit this field" (`nil` at
+    /// the `updateCleanup(systemPrompt:)` call site) from "explicitly
+    /// clear the value" (`.null`).
+    enum OptionalValue<T> {
+        case value(T)
+        case null
     }
 
     // MARK: - Usage reporting

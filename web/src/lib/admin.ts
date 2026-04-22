@@ -164,6 +164,9 @@ export interface AdminOrgDetail extends AdminOrgRow {
   stripeCustomerId: string | null;
   hasPaymentMethod: boolean;
   autoTopupEnabled: boolean;
+  hasGroqOverride: boolean;
+  /** Parsed `allowed_models_json` — empty array means "no restriction". */
+  allowedModels: string[];
 }
 
 export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null> {
@@ -176,6 +179,8 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
       isComped: organizations.isComped,
       autoJoinDomain: organizations.autoJoinDomain,
       deepgramOverride: organizations.deepgramKeyOverrideEncrypted,
+      groqOverride: organizations.groqKeyOverrideEncrypted,
+      allowedModelsJson: organizations.allowedModelsJson,
       createdAt: organizations.createdAt,
       stripeCustomerId: organizations.stripeCustomerId,
       stripePmId: organizations.stripeDefaultPaymentMethodId,
@@ -186,6 +191,18 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
     .limit(1);
 
   if (!row) return null;
+
+  let allowedModels: string[] = [];
+  if (row.allowedModelsJson) {
+    try {
+      const parsed = JSON.parse(row.allowedModelsJson);
+      if (Array.isArray(parsed)) {
+        allowedModels = parsed.filter((s): s is string => typeof s === "string");
+      }
+    } catch {
+      // Treat malformed JSON as "no restriction" — matches orgAccess.ts behavior.
+    }
+  }
 
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const [memberRow] = await db
@@ -216,6 +233,8 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
     isComped: row.isComped,
     autoJoinDomain: row.autoJoinDomain,
     hasDeepgramOverride: !!row.deepgramOverride,
+    hasGroqOverride: !!row.groqOverride,
+    allowedModels,
     stripeCustomerId: row.stripeCustomerId,
     hasPaymentMethod: !!row.stripePmId,
     autoTopupEnabled: row.autoTopupEnabled,
@@ -225,6 +244,29 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
     last30dEvents: Number(eventsRow?.n ?? 0),
     createdAt: row.createdAt,
   };
+}
+
+/** All active `provider_pricing` rows, used by the admin UI to render the
+ *  allowed-models checkbox list. */
+export async function listActiveProviderModels(): Promise<
+  { providerId: string; model: string; retailPerMinuteMillicents: number }[]
+> {
+  const db = getDb();
+  const { providerPricing } = await import("@/lib/db/schema");
+  const rows = await db
+    .select()
+    .from(providerPricing);
+  return rows
+    .filter((r) => r.active)
+    .map((r) => ({
+      providerId: r.providerId,
+      model: r.model,
+      retailPerMinuteMillicents: r.retailPerMinuteMillicents,
+    }))
+    .sort((a, b) => {
+      if (a.providerId !== b.providerId) return a.providerId.localeCompare(b.providerId);
+      return a.model.localeCompare(b.model);
+    });
 }
 
 // --- users list ------------------------------------------------------------

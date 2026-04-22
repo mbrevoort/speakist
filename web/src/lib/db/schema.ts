@@ -54,6 +54,12 @@ export const users = sqliteTable("users", {
   // Speakist extensions:
   displayName: text("display_name"),
   isSuperAdmin: bool("is_super_admin").notNull().default(false),
+  // Post-transcription cleanup pass. When enabled, /api/transcribe runs
+  // the transcript through llama-3.1-8b-instant on Groq with the system
+  // prompt below (or a server-baked default when null). Stored on the
+  // user so every signed-in Mac inherits the same behavior.
+  cleanupEnabled: bool("cleanup_enabled").notNull().default(false),
+  cleanupSystemPrompt: text("cleanup_system_prompt"),
   createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
@@ -118,6 +124,15 @@ export const organizations = sqliteTable(
     // Encrypted at the app layer — never read without going through
     // src/lib/crypto.ts (added in Phase 5). Nullable ⇒ use system key.
     deepgramKeyOverrideEncrypted: text("deepgram_key_override_encrypted"),
+    // Parallel Groq key override (added Phase B+). Same encrypt pattern;
+    // when set, this org's Groq transcriptions bill against their Groq
+    // project, not ours. Our credit ledger still debits retail.
+    groqKeyOverrideEncrypted: text("groq_key_override_encrypted"),
+
+    // JSON array of "provider/model" slugs this org's users are allowed
+    // to dispatch. NULL ⇒ no restriction (every active provider_pricing
+    // row is usable). /api/transcribe enforces this with a 403.
+    allowedModelsJson: text("allowed_models_json"),
 
     // e.g. "acme.com" — anyone signing up with this email domain is auto-
     // joined as a 'member' at signup time.

@@ -141,3 +141,94 @@ export async function setDeepgramOverride(formData: FormData): Promise<ActionRes
     return { ok: false, error: "Couldn't save." };
   }
 }
+
+// --- Groq override --------------------------------------------------------
+
+export async function setGroqOverride(formData: FormData): Promise<ActionResult> {
+  try {
+    await requireSuperAdmin();
+    const parsed = setKeySchema.safeParse({
+      orgId: formData.get("orgId"),
+      key: formData.get("key") || "",
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    if (parsed.data.key === "") {
+      await db
+        .update(organizations)
+        .set({ groqKeyOverrideEncrypted: null })
+        .where(eq(organizations.id, parsed.data.orgId));
+      revalidatePath(`/admin/orgs/${parsed.data.orgId}`);
+      return { ok: true, message: "Override cleared." };
+    }
+
+    // Groq keys look like `gsk_<48+ alphanumeric>`. Conservative regex so a
+    // fat-fingered paste (bare token, extra spaces) surfaces as a validation
+    // error rather than a 401 from Groq on the next transcription.
+    if (!/^gsk_[A-Za-z0-9]{20,}$/.test(parsed.data.key)) {
+      return { ok: false, error: "That doesn't look like a Groq key (expected `gsk_…`)." };
+    }
+
+    const encrypted = await encryptSecret(parsed.data.key);
+    await db
+      .update(organizations)
+      .set({ groqKeyOverrideEncrypted: encrypted })
+      .where(eq(organizations.id, parsed.data.orgId));
+
+    revalidatePath(`/admin/orgs/${parsed.data.orgId}`);
+    return { ok: true, message: "Override saved." };
+  } catch (err) {
+    console.error("setGroqOverride failed:", err);
+    if (String(err).includes("APP_ENCRYPTION_KEY")) {
+      return {
+        ok: false,
+        error: "APP_ENCRYPTION_KEY not configured. Set it in .env.local first.",
+      };
+    }
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
+// --- allowed-models whitelist --------------------------------------------
+//
+// Input: a FormData carrying `orgId` + any number of `slugs` entries
+// (multi-value), each of the form "provider/model". Empty set (no `slugs`
+// entries) clears the restriction — NULL column, Worker treats as "all
+// models allowed".
+
+const setAllowedModelsSchema = z.object({
+  orgId: z.string().uuid(),
+  slugs: z.array(z.string().regex(/^[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*$/)),
+});
+
+export async function setAllowedModels(formData: FormData): Promise<ActionResult> {
+  try {
+    await requireSuperAdmin();
+    const slugs = formData.getAll("slugs").map(String);
+    const parsed = setAllowedModelsSchema.safeParse({
+      orgId: formData.get("orgId"),
+      slugs,
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    const value = parsed.data.slugs.length === 0 ? null : JSON.stringify(parsed.data.slugs);
+    await db
+      .update(organizations)
+      .set({ allowedModelsJson: value })
+      .where(eq(organizations.id, parsed.data.orgId));
+
+    revalidatePath(`/admin/orgs/${parsed.data.orgId}`);
+    return {
+      ok: true,
+      message:
+        parsed.data.slugs.length === 0
+          ? "All models allowed."
+          : `Restricted to ${parsed.data.slugs.length} model${parsed.data.slugs.length === 1 ? "" : "s"}.`,
+    };
+  } catch (err) {
+    console.error("setAllowedModels failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}

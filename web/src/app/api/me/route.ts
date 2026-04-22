@@ -13,14 +13,31 @@
 // org (edge case after leaving/deleting the last one), `org` is null rather
 // than error; the Mac shows a "set up a workspace" hint.
 
+import { eq } from "drizzle-orm";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
+import { getDb } from "@/lib/db";
+import { users } from "@/lib/db/schema";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
+import { DEFAULT_CLEANUP_PROMPT } from "@/lib/transcription/cleanup";
 
 export async function GET(req: Request): Promise<Response> {
   try {
     const user = await requireUserFromRequest(req);
     const org = await getCurrentOrgForUser(user.id);
     const balance = org ? await getOrgCreditBalance(org.id) : 0;
+
+    // Cleanup prefs — one extra row read, cheap. Mac caches the result
+    // so Settings renders with the right state on launch without a
+    // second round-trip.
+    const db = getDb();
+    const [prefs] = await db
+      .select({
+        enabled: users.cleanupEnabled,
+        prompt: users.cleanupSystemPrompt,
+      })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
 
     return Response.json({
       id: user.id,
@@ -37,6 +54,16 @@ export async function GET(req: Request): Promise<Response> {
             balance_millicents: balance,
           }
         : null,
+      cleanup: {
+        enabled: !!prefs?.enabled,
+        // `null` on the user row → return the default so Mac shows it
+        // pre-filled in the Settings editor. `isCustom` tells the Mac
+        // whether the prompt on the user row is a custom override or
+        // the server default baked into the response.
+        system_prompt: prefs?.prompt ?? DEFAULT_CLEANUP_PROMPT,
+        is_custom: !!prefs?.prompt,
+        default_prompt: DEFAULT_CLEANUP_PROMPT,
+      },
     });
   } catch (err) {
     if (err instanceof AuthzError) {

@@ -43,6 +43,11 @@ final class SpeakistAccountManager: ObservableObject {
     @Published private(set) var lastError: String?
 
     private let keychain: KeychainStore
+    /// Preferences is optional so the manager can be constructed before the
+    /// full app graph is wired; call `bind(preferences:)` to enable the
+    /// /api/me cleanup-cache sync. If unbound, refreshIdentity still
+    /// updates `state` but skips the Preferences write.
+    private var preferences: Preferences?
     private var client: SpeakistAPIClient?
     private var pollTask: Task<Void, Never>?
 
@@ -65,6 +70,13 @@ final class SpeakistAccountManager: ObservableObject {
         if case .signedIn = state {
             Task { await refreshIdentity() }
         }
+    }
+
+    /// Inject Preferences so the /api/me cleanup block writes back to the
+    /// local Settings cache. Called by AppEnvironment after both objects
+    /// exist.
+    func bind(preferences: Preferences) {
+        self.preferences = preferences
     }
 
     /// Current bearer token, if any. Callable from any task via the @MainActor
@@ -185,6 +197,16 @@ final class SpeakistAccountManager: ObservableObject {
                 balanceMillicents: me.org?.balanceMillicents
             )
             state = .signedIn(identity: identity)
+            // Hydrate the local cleanup cache so Settings renders accurate
+            // state on launch without a separate /api/me/cleanup call.
+            if let cleanup = me.cleanup {
+                preferences?.applyCleanupFromServer(
+                    enabled: cleanup.enabled,
+                    systemPrompt: cleanup.systemPrompt,
+                    isCustom: cleanup.isCustom,
+                    defaultPrompt: cleanup.defaultPrompt
+                )
+            }
         } catch SpeakistAPIClient.Error.notSignedIn {
             // Server says our token is no good. Treat as signed out.
             signOut()

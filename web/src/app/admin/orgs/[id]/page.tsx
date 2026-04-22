@@ -9,7 +9,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Gift } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireSuperAdmin } from "@/lib/authz";
-import { getOrgDetail } from "@/lib/admin";
+import { getOrgDetail, listActiveProviderModels } from "@/lib/admin";
 import { listOrgMembers } from "@/lib/orgs";
 import { listLedger } from "@/lib/credits";
 import { formatDollars } from "@/lib/utils";
@@ -25,10 +25,11 @@ export default async function AdminOrgPage({
   await requireSuperAdmin();
   const { id } = await params;
 
-  const [org, members, ledger] = await Promise.all([
+  const [org, members, ledger, availableModels] = await Promise.all([
     getOrgDetail(id),
     listOrgMembers(id).catch(() => []),
     listLedger(id, 25).catch(() => []),
+    listActiveProviderModels().catch(() => []),
   ]);
   if (!org) notFound();
 
@@ -104,6 +105,9 @@ export default async function AdminOrgPage({
         orgId={org.id}
         isComped={org.isComped}
         hasDeepgramOverride={org.hasDeepgramOverride}
+        hasGroqOverride={org.hasGroqOverride}
+        allowedModels={org.allowedModels}
+        availableModels={availableModels}
       />
 
       {/* Recent ledger */}

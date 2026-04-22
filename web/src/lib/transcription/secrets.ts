@@ -43,16 +43,22 @@ export async function resolveProviderKey(
   orgId: string,
   providerId: ProviderId
 ): Promise<string> {
-  // 1. Org override (Deepgram only in Phase A).
-  if (providerId === "deepgram") {
+  // 1. Org override. We select both override columns in one query; cheaper
+  //    than a conditional round-trip, and keeps the future "one more
+  //    provider" work to a single .select() line.
+  if (providerId === "deepgram" || providerId === "groq") {
     const db = getDb();
     const [row] = await db
-      .select({ override: organizations.deepgramKeyOverrideEncrypted })
+      .select({
+        deepgram: organizations.deepgramKeyOverrideEncrypted,
+        groq: organizations.groqKeyOverrideEncrypted,
+      })
       .from(organizations)
       .where(eq(organizations.id, orgId))
       .limit(1);
-    if (row?.override) {
-      return decryptSecret(row.override);
+    const envelope = providerId === "deepgram" ? row?.deepgram : row?.groq;
+    if (envelope) {
+      return decryptSecret(envelope);
     }
   }
 

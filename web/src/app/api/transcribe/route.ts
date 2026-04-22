@@ -43,8 +43,13 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { debitForAudioTranscription } from "@/lib/credits";
+import { eq } from "drizzle-orm";
+import { getDb } from "@/lib/db";
+import { users } from "@/lib/db/schema";
 import { dispatch, TranscriptionDispatchError } from "@/lib/transcription";
 import { logTranscriptionEvent } from "@/lib/transcription/analytics";
+import { runCleanup } from "@/lib/transcription/cleanup";
+import { checkOrgModelAccess } from "@/lib/transcription/orgAccess";
 import { isProviderId, type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
 
 /** Workers' default request-body cap is generous; we enforce a sensible
@@ -116,6 +121,22 @@ export async function POST(req: Request): Promise<Response> {
 
   model = (req.headers.get("X-Model-Hint") ?? "nova-3").trim();
   if (model.length === 0) model = "nova-3";
+
+  // ---- org allowed-models gate -------------------------------------------
+  const access = await checkOrgModelAccess(org.id, providerId, model);
+  if (!access.allowed) {
+    return finish(
+      "invalid_input",
+      json(
+        {
+          error: "model_not_allowed",
+          detail: access.reason,
+          allowed: access.allowedSlugs ?? [],
+        },
+        403
+      )
+    );
+  }
 
   // ---- balance gate (comped orgs bypass) ---------------------------------
   if (!org.isComped) {
@@ -199,6 +220,42 @@ export async function POST(req: Request): Promise<Response> {
       ? input.audioMsHint / 1000
       : 0;
 
+  // ---- optional cleanup pass ---------------------------------------------
+  // Load the user's cleanup prefs (cheap single-row read). Cleanup runs
+  // synchronously so the returned `text` is already cleaned; cost is
+  // absorbed (not billed) in Phase 1 since per-transcription cleanup is
+  // ~$0.0001 vs ~$0.01 transcription.
+  let finalText = output.text;
+  let cleanupApplied = false;
+  try {
+    const db = getDb();
+    const [userPrefs] = await db
+      .select({
+        cleanupEnabled: users.cleanupEnabled,
+        cleanupSystemPrompt: users.cleanupSystemPrompt,
+      })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
+    if (userPrefs?.cleanupEnabled && output.text.trim().length > 0) {
+      const cleanup = await runCleanup(
+        env as unknown as Parameters<typeof runCleanup>[0],
+        org.id,
+        output.text,
+        userPrefs.cleanupSystemPrompt
+      );
+      if (cleanup.applied) {
+        finalText = cleanup.text;
+        cleanupApplied = true;
+      } else if (cleanup.errorReason) {
+        console.warn(`[transcribe] cleanup skipped: ${cleanup.errorReason}`);
+      }
+    }
+  } catch (err) {
+    // Cleanup errors never block transcription — fall through with raw text.
+    console.warn("[transcribe] cleanup threw:", err);
+  }
+
   // ---- debit --------------------------------------------------------------
   const debit = await debitForAudioTranscription({
     orgId: org.id,
@@ -207,17 +264,18 @@ export async function POST(req: Request): Promise<Response> {
     providerId,
     model,
     audioSeconds: audioSecondsForBilling,
-    wordCount: wordCount(output.text),
+    wordCount: wordCount(finalText),
   });
 
   if (debit.kind === "duplicate") {
     // Idempotent replay — return the transcript we already have from this
     // call (not from the stored row; we never persist transcript text).
     return finish("ok", json({
-      text: output.text,
+      text: finalText,
       audioSeconds: output.audioSeconds,
       provider: providerId,
       model,
+      cleanupApplied,
       usageEventId: debit.usageEventId,
       duplicate: true,
     }));
@@ -244,10 +302,11 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   return finish("ok", json({
-    text: output.text,
+    text: finalText,
     audioSeconds: output.audioSeconds,
     provider: providerId,
     model,
+    cleanupApplied,
     usageEventId: debit.usageEventId,
     newBalanceMillicents: debit.newBalanceMillicents,
     autoTopupTriggered: debit.autoTopupTriggered,
