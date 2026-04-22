@@ -244,11 +244,20 @@ export async function POST(req: Request): Promise<Response> {
         output.text,
         userPrefs.cleanupSystemPrompt
       );
+      // Metadata-only log (no content) so operators can confirm in
+      // `pnpm dev` / tail logs that the right prompt variant ran +
+      // whether the model output changed length unexpectedly.
+      console.info(
+        `[transcribe] cleanup ${cleanup.applied ? "applied" : "skipped"} ` +
+          `prompt=${userPrefs.cleanupSystemPrompt ? "custom" : "default"} ` +
+          `inChars=${output.text.length} outChars=${cleanup.text.length} ` +
+          `tokens=${cleanup.promptTokens}/${cleanup.completionTokens} ` +
+          `latencyMs=${cleanup.latencyMs}` +
+          (cleanup.errorReason ? ` reason=${cleanup.errorReason}` : "")
+      );
       if (cleanup.applied) {
         finalText = cleanup.text;
         cleanupApplied = true;
-      } else if (cleanup.errorReason) {
-        console.warn(`[transcribe] cleanup skipped: ${cleanup.errorReason}`);
       }
     }
   } catch (err) {
