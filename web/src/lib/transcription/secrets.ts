@@ -5,11 +5,13 @@
 //      For Phase A only Deepgram has an override column — we reuse the
 //      existing `organizations.deepgramKeyOverrideEncrypted`. Phase B adds
 //      a `providerKeysEncrypted` JSON envelope column covering all providers.
-//   2. Environment secret (wrangler secret put X --env dev|production).
+//   2. Env secret, read from the Cloudflare context env FIRST (authoritative
+//      in deployed Workers + bindings shape), then falling back to
+//      `process.env` (how `pnpm dev` surfaces `.env.local` values —
+//      Cloudflare's local dev env only carries wrangler-declared bindings,
+//      not arbitrary local env-file keys). Existing `deepgram.ts` uses
+//      `process.env` for the same reason.
 //   3. Throw — admin hasn't configured this provider yet.
-//
-// The Worker's env is passed explicitly rather than pulled via
-// `getCloudflareContext()` to keep this module pure-ish and testable.
 
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -54,14 +56,18 @@ export async function resolveProviderKey(
     }
   }
 
-  // 2. Environment secret.
-  const envKey = env[ENV_KEY_FIELD[providerId]];
+  // 2. Environment secret. Cloudflare context env first (deployed Worker
+  //    secrets land there), then process.env (local `pnpm dev` reads
+  //    `.env.local` into process.env only).
+  const fieldName = ENV_KEY_FIELD[providerId];
+  const envKey = env[fieldName] ?? process.env[fieldName];
   if (envKey && envKey.length > 0) return envKey;
 
   // 3. Not configured.
   throw new TranscriptionDispatchError(
     "no_key_configured",
-    `No ${providerId} API key. Set ${ENV_KEY_FIELD[providerId]} via ` +
-      `\`wrangler secret put ${ENV_KEY_FIELD[providerId]} --env <dev|production>\`.`
+    `No ${providerId} API key. For deployed Worker: ` +
+      `\`wrangler secret put ${fieldName} --env <dev|production>\`. ` +
+      `For local pnpm dev: add ${fieldName}=... to web/.env.local.`
   );
 }
