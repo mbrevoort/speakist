@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AVFoundation
+import KeyboardShortcuts
 
 @MainActor
 final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
@@ -11,7 +12,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         self.env = env
         self.onFinish = onFinish
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         window.title = "Welcome to Speakist"
@@ -44,7 +45,15 @@ struct OnboardingView: View {
 
     let onFinish: () -> Void
 
+    private static let lastStep = 5
+
     @State private var step: Int = 0
+    @State private var shortcutBaseline: Int? = nil
+    @State private var shortcutTried: Bool = false
+    @State private var polishBaseline: Int? = nil
+    @State private var polishTried: Bool = false
+    @State private var polishSaving: Bool = false
+    @State private var polishError: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,7 +65,24 @@ struct OnboardingView: View {
             controls
                 .padding(14)
         }
-        .frame(width: 620, height: 440)
+        .frame(width: 620, height: 500)
+        .onChange(of: step) { _, newStep in
+            if newStep == 3 && shortcutBaseline == nil {
+                shortcutBaseline = okTranscriptCount()
+            }
+            if newStep == 4 && polishBaseline == nil {
+                polishBaseline = okTranscriptCount()
+            }
+        }
+        .onReceive(env.historyStore.$entries) { entries in
+            let count = entries.filter { $0.transcriptionStatus == "ok" }.count
+            if let b = shortcutBaseline, count > b { shortcutTried = true }
+            if let b = polishBaseline, count > b { polishTried = true }
+        }
+    }
+
+    private func okTranscriptCount() -> Int {
+        env.historyStore.entries.filter { $0.transcriptionStatus == "ok" }.count
     }
 
     @ViewBuilder
@@ -65,7 +91,11 @@ struct OnboardingView: View {
         case 0: WelcomePane()
         case 1: PermissionsPane()
         case 2: ProviderPane()
-        case 3: LaunchPane()
+        case 3: ShortcutTryPane(tried: shortcutTried)
+        case 4: PolishTryPane(tried: polishTried,
+                              saving: $polishSaving,
+                              errorMessage: $polishError)
+        case 5: LaunchPane()
         default: EmptyView()
         }
     }
@@ -76,7 +106,7 @@ struct OnboardingView: View {
                 Button("Back") { step -= 1 }
             }
             Spacer()
-            if step < 3 {
+            if step < Self.lastStep {
                 Button("Continue") { step += 1 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canAdvance)
@@ -91,6 +121,8 @@ struct OnboardingView: View {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
         case 2: return keychain.hasKey(.refreshToken)
+        case 3: return shortcutTried
+        case 4: return polishTried
         default: return true
         }
     }
@@ -244,6 +276,140 @@ private struct ProviderPane: View {
     }
 }
 
+private struct ShortcutTryPane: View {
+    @EnvironmentObject var prefs: Preferences
+
+    let tried: Bool
+
+    @State private var demoText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Set your shortcut").font(.title2.weight(.semibold))
+            Text("Hold the shortcut anywhere on your Mac, speak, and release. The transcript appears at your cursor. Change the combo here if the default clashes with another app.")
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Image(systemName: "keyboard")
+                    .foregroundColor(.speakistPeach)
+                    .frame(width: 24)
+                Text("Hold to record")
+                Spacer()
+                KeyboardShortcuts.Recorder(for: .pushToTalk)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Try it now").font(.headline)
+                Text("Click into the field below, hold your shortcut, say a short sentence, and release.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+
+            TextEditor(text: $demoText)
+                .font(.body)
+                .frame(minHeight: 70)
+                .padding(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                )
+
+            if tried {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.speakistSage)
+                    Text("Got it — shortcut works.")
+                        .font(.callout.weight(.medium))
+                }
+            }
+        }
+    }
+}
+
+private struct PolishTryPane: View {
+    @EnvironmentObject var prefs: Preferences
+    @EnvironmentObject var env: AppEnvironment
+
+    let tried: Bool
+    @Binding var saving: Bool
+    @Binding var errorMessage: String?
+
+    @State private var demoText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Polish your transcripts").font(.title2.weight(.semibold))
+            Text("When polish is on, each transcript runs through a fast language model that tidies grammar, adds punctuation, and patches obvious word-level mistakes. Adds ~200–500 ms.")
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Toggle(isOn: Binding(
+                get: { prefs.polishEnabled },
+                set: { savePolish($0) })) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .foregroundColor(.speakistPeach)
+                    Text("Polish each transcription with AI")
+                }
+            }
+            .disabled(saving)
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(prefs.polishEnabled ? "One more dictation" : "Turn it on, then dictate once more")
+                    .font(.headline)
+                Text("Hold your shortcut and say a sentence with a couple of \u{201C}ums\u{201D} or a run-on thought. Polish will clean it up.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+
+            TextEditor(text: $demoText)
+                .font(.body)
+                .frame(minHeight: 70)
+                .padding(6)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                )
+
+            if tried {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.speakistSage)
+                    Text(prefs.polishEnabled ? "Nice — polish is on and applied." : "Done. Flip polish on above if you'd like it applied going forward.")
+                        .font(.callout.weight(.medium))
+                }
+            }
+
+            if let err = errorMessage {
+                Text(err).font(.footnote).foregroundColor(.red)
+            }
+        }
+    }
+
+    private func savePolish(_ newValue: Bool) {
+        saving = true
+        errorMessage = nil
+        Task {
+            defer { saving = false }
+            do {
+                let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
+                prefs.applyPolishFromServer(
+                    enabled: resp.enabled,
+                    systemPrompt: resp.systemPrompt,
+                    isCustom: resp.isCustom,
+                    defaultPrompt: resp.defaultPrompt)
+            } catch {
+                errorMessage = "Couldn't save: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
 private struct LaunchPane: View {
     @EnvironmentObject var prefs: Preferences
 
@@ -263,7 +429,7 @@ private struct LaunchPane: View {
                 get: { prefs.launchAtLogin },
                 set: { prefs.launchAtLogin = $0 }))
 
-            Text("You're ready. Try ⌃⌘X anywhere on your Mac.")
+            Text("You're ready. Hold your shortcut anywhere on your Mac to dictate.")
                 .foregroundColor(.secondary)
                 .padding(.top, 8)
         }
