@@ -9,6 +9,7 @@ enum MenuBarAction {
     case openHistory
     case openOnboarding
     case revealLogs
+    case checkForUpdates
     case startToggleRecording
     case quit
 }
@@ -80,6 +81,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         let status = NSMenuItem(title: statusLine(), action: nil, keyEquivalent: "")
         status.isEnabled = false
+        // Show the current push-to-talk shortcut in the right gutter of the
+        // status line ("Ready                    ⌃⌘X"). Kept in sync with
+        // changes the user makes in Settings via setShortcut(for:)'s observer.
+        if !env.preferences.shortcutPaused {
+            status.setShortcut(for: .pushToTalk)
+        }
         menu.addItem(status)
         menu.addItem(.separator())
 
@@ -92,15 +99,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(toggle)
         }
 
-        let history = NSMenuItem(title: "History…", action: #selector(handleOpenHistory), keyEquivalent: "")
-        history.target = self
-        menu.addItem(history)
-
-        menu.addItem(.separator())
-
         let settings = NSMenuItem(title: "Settings…", action: #selector(handleOpenSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+
+        let history = NSMenuItem(title: "History…", action: #selector(handleOpenHistory), keyEquivalent: "")
+        history.target = self
+        menu.addItem(history)
 
         menu.addItem(.separator())
 
@@ -111,6 +116,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let logs = NSMenuItem(title: "Reveal Logs in Finder", action: #selector(handleRevealLogs), keyEquivalent: "")
         logs.target = self
         menu.addItem(logs)
+
+        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(handleCheckForUpdates), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
 
         menu.addItem(.separator())
 
@@ -128,6 +137,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func handleOpenHistory() { dispatch(.openHistory) }
     @objc private func handleOpenOnboarding() { dispatch(.openOnboarding) }
     @objc private func handleRevealLogs() { dispatch(.revealLogs) }
+    @objc private func handleCheckForUpdates() { dispatch(.checkForUpdates) }
     @objc private func handleStartToggle() { dispatch(.startToggleRecording) }
     @objc private func handleQuit() { dispatch(.quit) }
 

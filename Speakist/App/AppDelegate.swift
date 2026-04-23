@@ -81,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showOnboarding()
         case .revealLogs:
             Logger.shared.revealInFinder()
+        case .checkForUpdates:
+            env.updater.checkForUpdates()
         case .startToggleRecording:
             shortcutManager.toggleRecording()
         case .quit:
