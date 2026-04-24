@@ -64,46 +64,76 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
   const db = getDb();
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
 
-  // Using Drizzle's typed `.select()` instead of a raw `sql` template here
-  // because `db.all<T>(sql`…`)` returned `{ results: [...] }`-wrapped data
-  // on D1 in some driver revisions, which the caller wasn't unwrapping —
-  // the chart showed "no usage yet" despite data existing. The typed
-  // builder is guaranteed to return a flat array of row objects.
+  // Fetch raw events in the window and bucket them in JavaScript. The
+  // previous two revisions both tried SQL-side `GROUP BY strftime(...)`
+  // — first with an alias (D1 rejected), then with the expression
+  // inlined in groupBy/orderBy (ran without error but returned zero
+  // rows in practice, for reasons we couldn't pin down between
+  // Drizzle's timestamp_ms serialization and D1's strftime handling).
   //
-  // The strftime expression is inlined into both groupBy + orderBy rather
-  // than referring to the SELECT alias `day`, because D1 rejected the
-  // alias ("D1_ERROR: no such column: day"). SQLite is supposed to resolve
-  // SELECT-list aliases in GROUP BY, but D1's driver doesn't always.
-  const dayExpr = sql<string>`strftime('%Y-%m-%d', ${usageEvents.createdAt} / 1000, 'unixepoch')`;
-  const rows = await db
+  // Doing the grouping in JS sidesteps both. For realistic traffic a
+  // 14-day window is a few hundred events at most; moving that over
+  // the D1 wire is trivial, and the JS aggregation is straightforward
+  // to reason about and test.
+  //
+  // Use `gte(col, Date)` for the date filter (not raw `sql\`col >=
+  // ${ms}\``) — matches the exact pattern `getUsageSummary.rollup`
+  // uses to filter "last 7 days" / "last 30 days", which is verified
+  // to work against D1's timestamp_ms columns.
+  const since = new Date(sinceMs);
+  const events = await db
     .select({
-      day: dayExpr,
-      words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
-      cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
+      createdAt: usageEvents.createdAt,
+      wordCount: usageEvents.wordCount,
+      costMillicents: usageEvents.costMillicents,
     })
     .from(usageEvents)
     .where(
       and(
         eq(usageEvents.orgId, orgId),
-        gte(usageEvents.createdAt, new Date(sinceMs))
+        gte(usageEvents.createdAt, since)
       )
-    )
-    .groupBy(dayExpr)
-    .orderBy(dayExpr);
+    );
+
+  // Diagnostic — visible via `wrangler tail`. Shows whether the
+  // SELECT actually returned rows and what their createdAt values
+  // look like. Remove once the chart is verified working in prod.
+  console.log("[usage:byDay]", {
+    orgId,
+    sinceMs,
+    since: since.toISOString(),
+    eventCount: events.length,
+    sample: events.slice(0, 3).map((e) => ({
+      createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : String(e.createdAt),
+      wordCount: e.wordCount,
+    })),
+  });
+
+  const byDay = new Map<string, { words: number; cost: number }>();
+  for (const e of events) {
+    // Drizzle unboxes timestamp_ms to Date on read; guard against
+    // a raw number just in case a future driver revision changes that.
+    const d = e.createdAt instanceof Date ? e.createdAt : new Date(Number(e.createdAt));
+    const key = d.toISOString().slice(0, 10);
+    const prev = byDay.get(key) ?? { words: 0, cost: 0 };
+    byDay.set(key, {
+      words: prev.words + Number(e.wordCount ?? 0),
+      cost: prev.cost + Number(e.costMillicents ?? 0),
+    });
+  }
 
   // Fill in missing days so the chart doesn't have gaps.
-  const byDay = new Map(rows.map((r) => [r.day, r]));
   const out: DayPoint[] = [];
   const todayUtcMidnight = new Date();
   todayUtcMidnight.setUTCHours(0, 0, 0, 0);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(todayUtcMidnight.getTime() - i * 24 * 60 * 60 * 1000);
     const key = d.toISOString().slice(0, 10);
-    const row = byDay.get(key);
+    const bucket = byDay.get(key);
     out.push({
       day: key,
-      words: row ? Number(row.words) : 0,
-      costMillicents: row ? Number(row.cost) : 0,
+      words: bucket?.words ?? 0,
+      costMillicents: bucket?.cost ?? 0,
     });
   }
   return out;
