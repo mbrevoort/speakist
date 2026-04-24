@@ -1,6 +1,13 @@
 import Foundation
 import Combine
+
+#if canImport(AppKit)
 import AppKit
+#endif
+
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Owns the Mac app's Speakist account state. Single source of truth for:
 ///   * the bearer refresh token (stored in Keychain as `.refreshToken`)
@@ -43,13 +50,25 @@ final class SpeakistAccountManager: ObservableObject {
     @Published private(set) var lastError: String?
 
     private let keychain: KeychainStore
+    #if canImport(AppKit)
     /// Preferences is optional so the manager can be constructed before the
     /// full app graph is wired; call `bind(preferences:)` to enable the
     /// /api/me polish-cache sync. If unbound, refreshIdentity still
-    /// updates `state` but skips the Preferences write.
+    /// updates `state` but skips the Preferences write. iOS target doesn't
+    /// reuse Preferences (the Mac Settings model isn't ported), so this
+    /// slot is macOS-only.
     private var preferences: Preferences?
+    #endif
     private var client: SpeakistAPIClient?
     private var pollTask: Task<Void, Never>?
+
+    /// Snapshot of the active device-code pair so `pollNow()` can fire a
+    /// single off-cycle poll when the app comes foreground after the user
+    /// approved in Safari. Without this we'd wait up to `interval` seconds
+    /// for the next scheduled sleep to expire — and on iOS a suspended
+    /// background app pauses Task.sleep, so that window can be arbitrarily
+    /// long.
+    private var activeDeviceCode: (code: String, expiresAt: Date)?
 
     init(keychain: KeychainStore) {
         self.keychain = keychain
@@ -72,12 +91,14 @@ final class SpeakistAccountManager: ObservableObject {
         }
     }
 
+    #if canImport(AppKit)
     /// Inject Preferences so the /api/me polish block writes back to the
     /// local Settings cache. Called by AppEnvironment after both objects
-    /// exist.
+    /// exist. macOS only — iOS doesn't use the Mac Preferences type.
     func bind(preferences: Preferences) {
         self.preferences = preferences
     }
+    #endif
 
     /// Current bearer token, if any. Callable from any task via the @MainActor
     /// closure SpeakistAPIClient holds.
@@ -85,8 +106,12 @@ final class SpeakistAccountManager: ObservableObject {
         keychain.get(.refreshToken)
     }
 
-    var isSignedIn: Bool {
-        keychain.hasKey(.refreshToken)
+    nonisolated var isSignedIn: Bool {
+        // Safe to read the keychain from any actor — SecItemCopyMatching
+        // is thread-safe and the UserDefaults fallback on iOS is too.
+        // Declared `nonisolated` so SwiftUI can read it in view builders
+        // without an implicit `await`.
+        MainActor.assumeIsolated { keychain.hasKey(.refreshToken) }
     }
 
     // MARK: - Device-code sign-in
@@ -122,7 +147,11 @@ final class SpeakistAccountManager: ObservableObject {
             }
 
             self.state = .signingIn(userCode: resp.userCode, verificationURL: url, expiresAt: expiresAt)
+            #if canImport(AppKit)
             NSWorkspace.shared.open(url)
+            #elseif canImport(UIKit)
+            await UIApplication.shared.open(url)
+            #endif
             startPolling(deviceCode: resp.deviceCode, interval: max(1, resp.interval), expiresAt: expiresAt)
         } catch {
             Logger.shared.warn("startSignIn failed: \(String(describing: error))")
@@ -132,6 +161,8 @@ final class SpeakistAccountManager: ObservableObject {
 
     private func startPolling(deviceCode: String, interval: Int, expiresAt: Date) {
         pollTask?.cancel()
+        activeDeviceCode = (code: deviceCode, expiresAt: expiresAt)
+        Logger.shared.info("device-code polling started (interval=\(interval)s, expires in \(Int(expiresAt.timeIntervalSinceNow))s)")
         pollTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
@@ -146,31 +177,62 @@ final class SpeakistAccountManager: ObservableObject {
                 } catch { return }  // cancellation
 
                 if Task.isCancelled { return }
-
-                guard let client = await self.client else { return }
-
-                do {
-                    let token = try await client.pollDeviceAuth(deviceCode: deviceCode)
-                    await self.completeSignIn(token: token)
-                    return
-                } catch SpeakistAPIClient.Error.devicePending {
-                    continue
-                } catch SpeakistAPIClient.Error.deviceExpired {
-                    await self.handleSignInFailure(.deviceExpired)
-                    return
-                } catch {
-                    Logger.shared.warn("device poll failed: \(String(describing: error))")
-                    // Transient — keep polling until expiry.
+                if await self.attemptPollOnce(deviceCode: deviceCode) {
+                    return  // authorized or fatal — polling loop exits
                 }
             }
         }
     }
 
+    /// Single-shot poll used by both the scheduled loop and `pollNow()`.
+    /// Returns `true` if the loop should stop (authorized or fatal error),
+    /// `false` if the caller should keep looping.
+    private func attemptPollOnce(deviceCode: String) async -> Bool {
+        guard let client = self.client else { return true }
+        do {
+            let token = try await client.pollDeviceAuth(deviceCode: deviceCode)
+            Logger.shared.info("device poll returned authorized")
+            self.completeSignIn(token: token)
+            return true
+        } catch SpeakistAPIClient.Error.devicePending {
+            return false
+        } catch SpeakistAPIClient.Error.deviceExpired {
+            Logger.shared.warn("device poll returned expired")
+            self.handleSignInFailure(.deviceExpired)
+            return true
+        } catch {
+            Logger.shared.warn("device poll failed: \(String(describing: error))")
+            return false
+        }
+    }
+
+    /// Fire a single off-cycle poll, useful when the app just came
+    /// foreground after the user approved in Safari. Safe to call in any
+    /// state — it no-ops outside `.signingIn`. Runs *alongside* the
+    /// scheduled `pollTask`; whichever resolves first wins (they both
+    /// exit on `.signedIn` transition via the Keychain write + state
+    /// assignment guard in `completeSignIn`).
+    func pollNow() {
+        guard case .signingIn = state, let info = activeDeviceCode else { return }
+        Logger.shared.info("pollNow triggered (foreground refresh)")
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.attemptPollOnce(deviceCode: info.code)
+        }
+    }
+
     private func completeSignIn(token: String) {
+        // Idempotent guard: if another poll already succeeded and flipped
+        // us to `.signedIn`, don't rewrite state (could cause a duplicate
+        // /api/me fetch at best, a transient UI flicker at worst).
+        if case .signedIn = state { return }
+
         keychain.set(token, for: .refreshToken)
         state = .signedIn(identity: nil)
         lastError = nil
+        pollTask?.cancel()
         pollTask = nil
+        activeDeviceCode = nil
         Logger.shared.info("signed in; token stored in keychain")
 
         // Fetch identity so the Settings view can show email + org right
@@ -197,6 +259,7 @@ final class SpeakistAccountManager: ObservableObject {
                 balanceMillicents: me.org?.balanceMillicents
             )
             state = .signedIn(identity: identity)
+            #if canImport(AppKit)
             // Hydrate the local polish cache so Settings renders accurate
             // state on launch without a separate /api/me/polish call.
             if let polish = me.polish {
@@ -207,6 +270,7 @@ final class SpeakistAccountManager: ObservableObject {
                     defaultPrompt: polish.defaultPrompt
                 )
             }
+            #endif
         } catch SpeakistAPIClient.Error.notSignedIn {
             // Server says our token is no good. Treat as signed out.
             signOut()
@@ -220,6 +284,7 @@ final class SpeakistAccountManager: ObservableObject {
         state = .signedOut
         lastError = err.description
         pollTask = nil
+        activeDeviceCode = nil
     }
 
     // MARK: - Sign out
@@ -227,6 +292,7 @@ final class SpeakistAccountManager: ObservableObject {
     func signOut() {
         pollTask?.cancel()
         pollTask = nil
+        activeDeviceCode = nil
         keychain.set(nil, for: .refreshToken)
         state = .signedOut
         lastError = nil
@@ -240,10 +306,15 @@ final class SpeakistAccountManager: ObservableObject {
     // MARK: - Helpers
 
     private func deviceNameForMac() -> String {
-        // "Mike's MacBook Pro" → gives the user something readable when they
-        // manage their sessions from the web.
-        let host = Host.current().localizedName ?? "Mac"
-        return host
+        // Readable per-device label shown in /dashboard/sessions when the
+        // user wants to revoke a device.
+        #if canImport(AppKit)
+        return Host.current().localizedName ?? "Mac"
+        #elseif canImport(UIKit)
+        return UIDevice.current.name   // "iPhone" in iOS 16+ unless entitled
+        #else
+        return "Speakist Device"
+        #endif
     }
 
     private func humanErrorMessage(_ err: Swift.Error) -> String {

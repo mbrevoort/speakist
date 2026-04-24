@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.brevoort-studio
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
   createIntermediateGroups: true
   generateEmptyDirectories: true
   xcodeVersion: "15.0"
@@ -12,6 +13,7 @@ settings:
   base:
     SWIFT_VERSION: "5.10"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
@@ -143,6 +145,217 @@ targets:
         # "Speakist Local". Spaces in paths are fine here; Xcode quotes.
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Speakist Local.app/Contents/MacOS/Speakist Local"
 
+  # --------------------------------------------------------------------
+  # iOS app + keyboard extension
+  #
+  # Architecture recap (see docs/ios-architecture.md): the containing app
+  # holds the microphone session because iOS forbids app extensions from
+  # AVAudioSession recording. The keyboard extension ships inside the
+  # app's .app bundle (`PlugIns/SpeakistKeyboard.appex`) and talks back
+  # to the app via the App Group + Darwin notifications + URL scheme.
+  # --------------------------------------------------------------------
+
+  SpeakistiOS:
+    type: application
+    platform: iOS
+    preBuildScripts:
+      # Stamp the binary with a build timestamp every time xcodebuild
+      # runs. Surfaces in the Home view's Status section so you can
+      # eyeball whether the code on your phone is the code you just
+      # built — invaluable when iOS occasionally caches a stale .app
+      # across device re-installs. Writes into Info.plist via a custom
+      # key the Swift side reads on launch.
+      - name: Stamp build timestamp
+        script: |
+          STAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          /usr/libexec/PlistBuddy -c "Set :SpeakistBuildTimestamp $STAMP" \
+            "$SRCROOT/SpeakistiOS/Info.plist" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :SpeakistBuildTimestamp string $STAMP" \
+                 "$SRCROOT/SpeakistiOS/Info.plist"
+        basedOnDependencyAnalysis: false
+    sources:
+      - path: SpeakistiOS
+      - path: Shared
+      # Cross-compiled portable files from the Mac target. Adding them
+      # as explicit file paths here (not the whole Speakist/ directory)
+      # keeps the iOS target small and the Mac target untouched — both
+      # compile the same source, but neither knows the other exists.
+      - path: Speakist/App/AppIdentity.swift
+      - path: Speakist/Logging/Logger.swift
+      - path: Speakist/Resources/Brand.swift
+      - path: Speakist/Account/SpeakistAPIClient.swift
+      - path: Speakist/Account/SpeakistAccountManager.swift
+      - path: Speakist/Transcription/TranscriptionTypes.swift
+      - path: Speakist/Corrections/DiffEngine.swift
+      - path: Speakist/Settings/KeychainStore.swift
+    info:
+      path: SpeakistiOS/Info.plist
+      properties:
+        CFBundleName: Speakist
+        CFBundleDisplayName: Speakist
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        LSRequiresIPhoneOS: true
+        MinimumOSVersion: $(IPHONEOS_DEPLOYMENT_TARGET)
+        SpeakistChannel: $(SPEAKIST_CHANNEL)
+        SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
+        # Placeholder overwritten by the preBuildScripts "Stamp build
+        # timestamp" step on every build. Surfaced in the Home view
+        # so "is my phone running the build I just pushed?" is one
+        # glance instead of three rebuild-and-retry rounds.
+        SpeakistBuildTimestamp: "0"
+        NSHumanReadableCopyright: "© 2026 Mike Brevoort. All rights reserved."
+        # Mic permission — containing app holds the session. Extension never asks.
+        NSMicrophoneUsageDescription: "Speakist listens when you start a Speak Session and transcribes what you say."
+        # Required to reach the dev Next.js server over Tailscale — the
+        # tailnet IP range (100.64.0.0/10, CGNAT/RFC-6598) triggers iOS
+        # Local Network gating. Without this declaration, iOS silently
+        # refuses connections to 100.x.x.x with a generic "could not
+        # connect" error even though Safari (system app, bypasses the
+        # gate) can reach the same host. Release builds talking to
+        # speakist.ai don't need this but the declaration is harmless.
+        NSLocalNetworkUsageDescription: "Speakist connects to your Tailscale-accessible dev server during development."
+        # Background audio keeps the mic hot after the user swipes back
+        # to the target app. Without this, iOS suspends recording when
+        # the user switches away from Speakist and the session dies.
+        UIBackgroundModes:
+          - audio
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UILaunchScreen: {}
+        # URL scheme so the keyboard can bring us foreground. All four
+        # channel schemes registered; resolver in URLSchemeBridge picks
+        # the one matching the current build.
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes:
+              - speakist
+              - speakistbeta
+              - speakistdev
+              - speakistlocal
+        # Document the "I sometimes hand off to the Settings app" flow —
+        # iOS doesn't really require this, but it's harmless.
+        LSApplicationQueriesSchemes:
+          - app-settings
+    entitlements:
+      # XcodeGen regenerates this file every run — edit via properties: below.
+      path: SpeakistiOS/SpeakistiOS.entitlements
+      properties:
+        # App Group shared with the keyboard extension. One group ID per
+        # channel so dev/beta/stable side-by-side installs don't share
+        # state. Extensions that want to talk to us must carry the same
+        # ID in their own entitlements.
+        com.apple.security.application-groups:
+          - group.com.brevoort-studio.speakist.local
+    settings:
+      base:
+        PRODUCT_NAME: Speakist
+        # "1" = iPhone only. iPad support is a follow-up; the keyboard
+        # extension UI needs different sizing.
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.local
+          SPEAKIST_CHANNEL: local
+          # Points at the deployed dev backend so device builds work
+          # without any LAN / Tailscale plumbing. The Mac app's own
+          # dev channel uses the same URL. For simulator work against
+          # a local Next.js server, swap to `http://localhost:3000`
+          # — the simulator shares the host's network stack.
+          SPEAKIST_API_BASE_URL: "https://speakist-dev.brevoortstudio.com"
+          # SDK-scoped signing: ad-hoc for simulator, real Apple
+          # Developer signing for device. The simulator case needs
+          # ad-hoc because there's no provisioning profile installed
+          # and unsigned apps lose their entitlements (App Group,
+          # etc.). Device builds MUST use the team-signed identity so
+          # the entitlements are honored by the real iOS kernel.
+          "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+          "AD_HOC_CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
+          "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": YES
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios
+          SPEAKIST_CHANNEL: stable
+          SPEAKIST_API_BASE_URL: "https://speakist.ai"
+    dependencies:
+      - target: SpeakistKeyboard
+
+  SpeakistKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: SpeakistKeyboard
+      - path: Shared
+      - path: Speakist/App/AppIdentity.swift
+      - path: Speakist/Logging/Logger.swift
+      - path: Speakist/Resources/Brand.swift
+    info:
+      path: SpeakistKeyboard/Info.plist
+      properties:
+        CFBundleDisplayName: Speakist
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        MinimumOSVersion: $(IPHONEOS_DEPLOYMENT_TARGET)
+        SpeakistChannel: $(SPEAKIST_CHANNEL)
+        # NSExtension wiring for a custom keyboard. `RequestsOpenAccess`
+        # is mandatory for:
+        #   * network (the keyboard can read small state from defaults,
+        #     but the main app does the actual network work)
+        #   * shared App Group (no Full Access = no shared container)
+        #   * extensionContext.open(url) to bring main app foreground
+        # The user has to turn on Full Access in Settings → General →
+        # Keyboard → Speakist. We surface a "how to" in the app.
+        NSExtension:
+          NSExtensionAttributes:
+            IsASCIICapable: false
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            RequestsOpenAccess: true
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+        # iOS 14+ enforces LSApplicationQueriesSchemes for extensions
+        # calling `extensionContext.open(url:)` — without the scheme
+        # listed here, iOS silently returns `opened=false` and the
+        # keyboard surfaces "Couldn't open Speakist" to the user. All
+        # four channel schemes are listed so a single extension build
+        # works regardless of the current channel.
+        LSApplicationQueriesSchemes:
+          - speakist
+          - speakistbeta
+          - speakistdev
+          - speakistlocal
+    entitlements:
+      path: SpeakistKeyboard/SpeakistKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.brevoort-studio.speakist.local
+    settings:
+      base:
+        PRODUCT_NAME: SpeakistKeyboard
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_HARDENED_RUNTIME: NO
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.local.Keyboard
+          SPEAKIST_CHANNEL: local
+          # Match the main-app target's SDK-scoped signing so the
+          # embedded .appex is signed with the same identity on device.
+          # Previous unscoped ad-hoc config left the keyboard unsigned
+          # on device builds, which tripped the parent/child sign-
+          # identity validation at link time.
+          "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+          "AD_HOC_CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
+          "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": YES
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.Keyboard
+          SPEAKIST_CHANNEL: stable
+
 schemes:
   Speakist:
     build:
@@ -155,6 +368,20 @@ schemes:
       config: Debug
       targets:
         - SpeakistTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
+  SpeakistiOS:
+    build:
+      targets:
+        SpeakistiOS: all
+        SpeakistKeyboard: all
+    run:
+      config: Debug
     profile:
       config: Release
     analyze:

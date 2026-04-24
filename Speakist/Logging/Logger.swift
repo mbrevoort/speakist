@@ -1,6 +1,9 @@
 import Foundation
 import OSLog
+
+#if canImport(AppKit)
 import AppKit
+#endif
 
 /// A small façade over os.Logger + a rotating file sink at
 /// `~/Library/Logs/{CFBundleName}/speakist.log`. Per-channel builds land
@@ -55,9 +58,11 @@ final class Logger {
         #endif
     }
 
+    #if canImport(AppKit)
     func revealInFinder() {
         NSWorkspace.shared.selectFile(logFile.path, inFileViewerRootedAtPath: logDirectory.path)
     }
+    #endif
 
     // MARK: - File sink
 

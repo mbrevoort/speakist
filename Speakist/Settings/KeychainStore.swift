@@ -9,37 +9,77 @@ enum KeychainAccount: String, CaseIterable {
     case refreshToken
 }
 
-/// Keychain wrapper for Speakist credentials.
-/// Service: "{bundleID}.apikeys"; account = slot rawValue.
-/// The service name is derived from AppIdentity so each release channel
-/// (stable / beta / dev / debug) gets its own Keychain partition — tokens
-/// don't bleed between channels when multiple builds are installed.
-/// Prior versions stored a Deepgram API key here directly; that slot is
-/// gone now — Deepgram keys are minted short-lived by the server per
-/// transcription, never persisted on the Mac.
+/// Bearer-token store. On macOS we store in the real Keychain (Generic
+/// Password, per-channel service name). On iOS we store in the App Group
+/// shared UserDefaults — the keychain on iOS requires `keychain-access-
+/// groups` entitlements and signed builds, neither of which are available
+/// in the unsigned simulator scaffold (write attempts fail with
+/// `errSecMissingEntitlement` / -34018). App Group UserDefaults isn't as
+/// secure as the Keychain, but:
+///
+///   * the container is sandbox-scoped to this app + its extension
+///   * the bearer token is a refresh-token-class credential the server
+///     can revoke any time
+///   * we can upgrade to a shared Keychain access group once the Apple
+///     Developer provisioning is set up for production builds
+///
+/// The class name stays `KeychainStore` so the Mac app's call sites don't
+/// change; the iOS impl just takes a different path internally.
 @MainActor
 final class KeychainStore: ObservableObject {
     private let service = "\(AppIdentity.bundleID).apikeys"
 
     func set(_ value: String?, for account: KeychainAccount) {
+        #if canImport(UIKit)
+        setAppGroup(value: value, account: account.rawValue)
+        #else
         if let value, !value.isEmpty {
             upsert(value: value, account: account.rawValue)
         } else {
             delete(account: account.rawValue)
         }
+        #endif
         objectWillChange.send()
     }
 
     func get(_ account: KeychainAccount) -> String? {
-        read(account: account.rawValue)
+        #if canImport(UIKit)
+        return readAppGroup(account: account.rawValue)
+        #else
+        return read(account: account.rawValue)
+        #endif
     }
 
     func hasKey(_ account: KeychainAccount) -> Bool {
-        guard let v = read(account: account.rawValue) else { return false }
+        guard let v = get(account) else { return false }
         return !v.isEmpty
     }
 
-    // MARK: - Raw
+    #if canImport(UIKit)
+    // MARK: - iOS: App Group UserDefaults
+
+    private func appGroupKey(_ account: String) -> String {
+        "speakist.token.\(account)"
+    }
+
+    private func setAppGroup(value: String?, account: String) {
+        guard let defaults = AppGroupBridge.defaults else {
+            Logger.shared.warn("App Group UserDefaults unavailable — token not persisted")
+            return
+        }
+        if let value, !value.isEmpty {
+            defaults.set(value, forKey: appGroupKey(account))
+        } else {
+            defaults.removeObject(forKey: appGroupKey(account))
+        }
+    }
+
+    private func readAppGroup(account: String) -> String? {
+        AppGroupBridge.defaults?.string(forKey: appGroupKey(account))
+    }
+    #endif
+
+    // MARK: - macOS: real Keychain
 
     private func upsert(value: String, account: String) {
         let query: [String: Any] = [
