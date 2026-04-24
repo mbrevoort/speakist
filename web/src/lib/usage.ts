@@ -96,16 +96,20 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
     );
 
   // Diagnostic — visible via `wrangler tail`. Shows whether the
-  // SELECT actually returned rows and what their createdAt values
-  // look like. Remove once the chart is verified working in prod.
+  // SELECT actually returned rows AND what runtime type Drizzle is
+  // handing back for the timestamp_ms column. The previous log
+  // pre-converted to ISO strings so we couldn't tell Date-vs-string.
   console.log("[usage:byDay]", {
     orgId,
     sinceMs,
     since: since.toISOString(),
     eventCount: events.length,
     sample: events.slice(0, 3).map((e) => ({
-      createdAt: e.createdAt instanceof Date ? e.createdAt.toISOString() : String(e.createdAt),
+      createdAtType: typeof e.createdAt,
+      createdAtIsDate: e.createdAt instanceof Date,
+      createdAtRaw: e.createdAt,
       wordCount: e.wordCount,
+      wordCountType: typeof e.wordCount,
     })),
   });
 
@@ -136,6 +140,14 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
       costMillicents: bucket?.cost ?? 0,
     });
   }
+
+  console.log("[usage:byDay:out]", {
+    bucketKeys: Array.from(byDay.keys()),
+    bucketTotals: Array.from(byDay.entries()).map(([k, v]) => ({ k, w: v.words })),
+    outNonZero: out.filter((p) => p.words > 0),
+    outFirstAndLast: { first: out[0], last: out[out.length - 1] },
+  });
+
   return out;
 }
 
