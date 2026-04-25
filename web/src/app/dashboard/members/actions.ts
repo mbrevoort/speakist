@@ -20,7 +20,7 @@ import {
   users,
   type OrgRole,
 } from "@/lib/db/schema";
-import { requireOrgAdmin, requireOrgMember } from "@/lib/authz";
+import { requireOrgAdmin } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { sendInvitationEmail } from "@/lib/email/invitation";
 
@@ -253,6 +253,3 @@ function randomHexToken(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Keep `requireOrgMember` imported so we can switch a read-only action to
-// it later without re-adding the import.
-export const __unused = { requireOrgMember };
