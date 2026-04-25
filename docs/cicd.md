@@ -14,8 +14,8 @@ GitHub Releases-triggered prod workflow is a future addition.
 | Job   | Runner          | What it does | Approximate time |
 |-------|-----------------|--------------|------------------|
 | `web` | `ubuntu-latest` | `pnpm install` → `pnpm db:migrate:dev` → `pnpm deploy:dev` | 3 min |
-| `mac` | `macos-14`      | xcodegen → archive → notarize → DMG → Sparkle-sign → R2 upload → publish API | 12-15 min |
-| `ios` | `macos-14`      | xcodegen → archive → export → upload to TestFlight (Internal Testing) | 8-10 min |
+| `mac` | `macos-15`      | xcodegen → archive → notarize → DMG → Sparkle-sign → R2 upload → publish API | 12-15 min |
+| `ios` | `macos-15`      | xcodegen → archive → export → upload to TestFlight (Internal Testing) | 8-10 min |
 
 Jobs run independently (no `needs:` dependencies). One job's failure
 doesn't block the others. Concurrency `cancel-in-progress: false`

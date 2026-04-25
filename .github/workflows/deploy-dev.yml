@@ -52,7 +52,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -80,7 +80,7 @@ jobs:
   # ---------------------------------------------------------------------------
   mac:
     name: Build + ship Mac dev DMG
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -155,7 +155,7 @@ jobs:
   # ---------------------------------------------------------------------------
   ios:
     name: Build + ship iOS Dev to TestFlight
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     permissions:
       contents: read
