@@ -80,7 +80,7 @@ jobs:
   # ---------------------------------------------------------------------------
   mac:
     name: Build + ship Mac dev DMG
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     permissions:
       contents: read
@@ -155,7 +155,7 @@ jobs:
   # ---------------------------------------------------------------------------
   ios:
     name: Build + ship iOS Dev to TestFlight
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     permissions:
       contents: read
