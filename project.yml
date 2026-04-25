@@ -130,12 +130,25 @@ targets:
           SPEAKIST_FEED_URL: ""
         # Release: stable-channel defaults. release.sh rewrites these five
         # lines in-place before xcodegen generate when building beta/dev.
+        # CODE_SIGN_STYLE override: only the main Speakist target uses
+        # Manual + Developer ID Application — base setting (Automatic)
+        # would require an Apple-ID-logged-in Xcode session to fetch a
+        # development cert, which doesn't exist on a CI runner. Scoping
+        # the override here (vs. on the xcodebuild command line) leaves
+        # SPM dependency targets like KeyboardShortcuts and GRDB on
+        # their default automatic signing — otherwise their resource
+        # bundles error out demanding a DEVELOPMENT_TEAM they don't
+        # have. Identity is prefix-matched so the local keychain's
+        # full "Developer ID Application: Mike Brevoort (Q5T8FJNX57)"
+        # entry and CI's imported cert both resolve.
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
         # Dev: placeholder, never built directly. release.sh always
         # operates on Release, regardless of which channel it's
         # producing — this block exists only so xcodegen doesn't
@@ -149,6 +162,8 @@ targets:
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB

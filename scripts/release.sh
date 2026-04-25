@@ -244,24 +244,11 @@ xcodegen generate
 
 echo "==> xcodebuild archive (Release)"
 rm -rf "$ARCHIVE_PATH"
-# Force manual signing with the Developer ID Application identity for the
-# archive build. project.yml's CODE_SIGN_STYLE=Automatic is convenient for
-# Debug runs from inside Xcode (where you're signed into an Apple ID), but
-# `xcodebuild archive` from the command line then asks for a "Mac
-# Development" cert it can't find — automatic signing requires a logged-in
-# Xcode session to fetch one. Manual + Developer ID is what we ultimately
-# want for the archived bundle anyway, since this is a Developer ID
-# (notarized) distribution, not an App Store submission. Identity is
-# matched by prefix so the local keychain's full
-# "Developer ID Application: Mike Brevoort (Q5T8FJNX57)" entry and CI's
-# imported cert both resolve correctly.
 xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
     -scheme "${PROJECT_NAME}" \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
     -destination 'generic/platform=macOS' \
-    CODE_SIGN_STYLE=Manual \
-    CODE_SIGN_IDENTITY="Developer ID Application" \
     archive
 
 echo "==> xcodebuild -exportArchive"
