@@ -23,8 +23,16 @@ enum HUDState: Equatable {
 final class HUDController: ObservableObject {
     @Published var state: HUDState = .hidden
     @Published var elapsed: TimeInterval = 0
-    /// 12-sample ring of recent RMS levels (0...1) for the waveform view.
+    /// 12-sample ring of recent RMS levels (0...1) — kept around for
+    /// any future need (e.g., a history graph in the dashboard) but
+    /// no longer drives the HUD waveform directly.
     @Published var levels: [Float] = Array(repeating: 0, count: 12)
+    /// Smoothed + amplified mic level (0...1) used to drive the
+    /// HUD's vertical bar heights. Asymmetric attack/release curve
+    /// applied in `push(level:)` so bars feel snappy on rising
+    /// peaks but decay gracefully between syllables instead of
+    /// flickering.
+    @Published var smoothedDisplayLevel: Double = 0
 
     private let preferences: Preferences
     private var panel: HUDPanel?
@@ -57,6 +65,7 @@ final class HUDController: ObservableObject {
         elapsed = 0
         startTime = nil
         levels = Array(repeating: 0, count: 12)
+        smoothedDisplayLevel = 0
         panel?.presentAnchoredToFocusedField()
     }
 
@@ -75,6 +84,7 @@ final class HUDController: ObservableObject {
         elapsed = 0
         startTime = Date()
         levels = Array(repeating: 0, count: 12)
+        smoothedDisplayLevel = 0
         startTimer()
     }
 
@@ -99,9 +109,28 @@ final class HUDController: ObservableObject {
 
     // MARK: - Internal
 
+    /// Display gain applied on top of `AudioRecorder.rms`'s already-
+    /// curved value. Bumps normal speech into the upper-mid bar
+    /// range so quiet conversational levels still drive visible
+    /// bar movement.
+    private let displayGain: Double = 1.7
+    /// Attack weight — how aggressively the smoothed level chases a
+    /// rising input. 0.85 means bars track 85% toward a new peak on
+    /// each frame, making them feel instantly reactive.
+    private let attackWeight: Double = 0.85
+    /// Release weight — how aggressively the smoothed level decays
+    /// toward zero when input drops. Lower than attack so bars don't
+    /// drop to silence the instant a syllable ends.
+    private let releaseWeight: Double = 0.30
+
     private func push(level: Float) {
         levels.removeFirst()
         levels.append(level)
+
+        // VU-meter envelope: amplify, clamp, then asymmetric smooth.
+        let target = min(1.0, Double(level) * displayGain)
+        let weight = target > smoothedDisplayLevel ? attackWeight : releaseWeight
+        smoothedDisplayLevel = smoothedDisplayLevel * (1 - weight) + target * weight
     }
 
     private func startTimer() {
@@ -119,8 +148,14 @@ final class HUDController: ObservableObject {
 /// field if Accessibility lets us read its bounds; falls back to the
 /// mouse cursor otherwise.
 final class HUDPanel: NSPanel {
+    /// Compact panel size. Was 360×72 when the layout had a brand
+    /// icon + waveform strip + timer; now that the icon is gone and
+    /// the waveform shares the activity slot with the transcribing
+    /// dots, the panel collapses to a much smaller footprint.
+    static let panelSize = NSSize(width: 200, height: 64)
+
     init<Content: View>(contentView: Content) {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 360, height: 72),
+        super.init(contentRect: NSRect(origin: .zero, size: HUDPanel.panelSize),
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered,
                    defer: false)
@@ -135,7 +170,7 @@ final class HUDPanel: NSPanel {
         self.ignoresMouseEvents = true
 
         let hosting = NSHostingView(rootView: contentView)
-        hosting.frame = NSRect(x: 0, y: 0, width: 360, height: 72)
+        hosting.frame = NSRect(origin: .zero, size: HUDPanel.panelSize)
         self.contentView = hosting
     }
 
@@ -309,61 +344,40 @@ private struct HUDView: View {
     @ObservedObject var controller: HUDController
 
     var body: some View {
-        HStack(spacing: 12) {
-            leading
-                .frame(width: 20, height: 20)
-            content
+        HStack(spacing: 14) {
+            activity
                 .frame(maxWidth: .infinity)
-                .frame(height: 32)
+                .frame(height: 36)
             timeLabel
-                .frame(width: 60, alignment: .trailing)
+                .frame(width: 56, alignment: .trailing)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5)
         )
         .padding(4)
     }
 
-    @ViewBuilder private var leading: some View {
-        switch controller.state {
-        case .preparing, .recording:
-            // Brand mark on the leading edge, breathing subtly so the
-            // HUD doesn't feel static. Replaces the previous generic
-            // peach pulsing dot with the actual Speakist logo.
-            SpeakistMark()
-        case .transcribing:
-            // Empty placeholder during transcribing — the wave-dot
-            // animation in the content slot is the activity signal,
-            // and a competing spinner here would be visual noise. The
-            // 20×20 frame from the parent HStack keeps the column
-            // width stable so the layout doesn't shift.
-            Color.clear
-        case .hidden:
-            EmptyView()
-        }
-    }
-
-    @ViewBuilder private var content: some View {
+    /// Single content slot — the waveform during recording, the
+    /// transcribing wave-dots after the user releases the shortcut.
+    /// The brand icon and the leading-edge column it used to live in
+    /// are gone; the recording state is just bars and the elapsed
+    /// time, nothing else.
+    @ViewBuilder private var activity: some View {
         switch controller.state {
         case .preparing:
-            // Quiet placeholder while engine warms up — matches the
-            // waveform's vertical footprint so the panel doesn't
-            // resize when it flips to .recording.
-            HStack(spacing: 6) {
-                Text("Get ready…")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
+            // Empty bars at rest height so the panel doesn't reflow
+            // on the first level update. Conveys "ready, not yet
+            // capturing" without text.
+            VoiceLevelBars(level: 0, isActive: false)
         case .recording:
-            WaveformView(levels: controller.levels, accentColor: Color.speakistPeach)
+            VoiceLevelBars(level: controller.smoothedDisplayLevel, isActive: true)
         case .transcribing:
             TranscribingIndicator()
         case .hidden:
@@ -374,18 +388,17 @@ private struct HUDView: View {
     @ViewBuilder private var timeLabel: some View {
         switch controller.state {
         case .preparing:
-            // Show "0:00" while preparing so the field is the same
-            // width and the layout doesn't jump on flip.
+            // "0:00" placeholder so the digit column doesn't shift
+            // width on the first tick.
             Text("0:00")
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
         case .recording, .transcribing:
-            // Frozen on `.transcribing` (timer was invalidated in
-            // `setTranscribing`) but kept at full primary contrast so
-            // the user can still read how long they spoke. Greying it
-            // out would read as "this number is no longer valid".
+            // Frozen on `.transcribing` (timer invalidated in
+            // `setTranscribing`) but kept at full primary contrast
+            // so the user can still read how long they spoke.
             Text(formatTime(controller.elapsed))
-                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .font(.system(size: 16, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.primary)
         case .hidden:
             EmptyView()
@@ -398,97 +411,11 @@ private struct HUDView: View {
     }
 }
 
-/// Mini Speakist mark — speech-bubble-with-waveform in peach gradient,
-/// matching the SVG used on the marketing site (`web/src/components/
-/// brand/logo.tsx`) and the design source (`design/Speakist.svg`).
-/// Drawn in 64-unit space so the same coordinates from the SVG can be
-/// used verbatim. Includes a gentle breathing animation so the HUD
-/// feels alive without being distracting.
-private struct SpeakistMark: View {
-    @State private var pulsing = false
-
-    var body: some View {
-        ZStack {
-            BubbleWithTailShape()
-                .fill(
-                    LinearGradient(
-                        // Two-stop peach gradient — same #FFA98A → #FF7547
-                        // pair the SVG uses, so the mark on Mac is
-                        // pixel-recognizable next to the marketing site.
-                        colors: [
-                            Color(red: 1.0, green: 0.663, blue: 0.541),
-                            Color(red: 1.0, green: 0.459, blue: 0.278),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            BubbleBars()
-        }
-        .scaleEffect(pulsing ? 1.04 : 0.96)
-        .animation(
-            .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
-            value: pulsing
-        )
-        .onAppear { pulsing = true }
-    }
-}
-
-/// The speech-bubble silhouette: rounded body + small angled tail at
-/// the lower-left. Tail coordinates traced from the SVG's path data so
-/// the proportions match.
-private struct BubbleWithTailShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let s = rect.width / 64.0
-        var p = Path()
-        // Rounded body — close enough to the SVG's arc-corner-rect at
-        // the sizes we render (16–32pt). The SVG arcs use radius 8 in
-        // 64-unit space; matched here.
-        p.addRoundedRect(
-            in: CGRect(x: 8 * s, y: 10 * s, width: 50 * s, height: 38 * s),
-            cornerSize: CGSize(width: 8 * s, height: 8 * s)
-        )
-        // Tail — three points forming the triangular pointer below
-        // the body. SVG path: line to (26, 54.5), curve to (~24.3,
-        // 53.8), line up to (24.3, 48). We approximate the tiny
-        // bezier with a straight line; at the small render sizes the
-        // difference is sub-pixel.
-        p.move(to: CGPoint(x: 33 * s, y: 48 * s))
-        p.addLine(to: CGPoint(x: 26 * s, y: 54.5 * s))
-        p.addLine(to: CGPoint(x: 24.3 * s, y: 48 * s))
-        p.closeSubpath()
-        return p
-    }
-}
-
-/// Five centered waveform bars inside the bubble. Heights asymmetric
-/// (8–20–8) so the silhouette reads as "voice", not "equalizer". Center
-/// bar is fully opaque; outer bars fade slightly for visual depth.
-private struct BubbleBars: View {
-    private struct Bar { let x: Double; let y: Double; let h: Double; let opacity: Double }
-    private let bars: [Bar] = [
-        Bar(x: 18.5, y: 25, h: 8,  opacity: 0.85),
-        Bar(x: 24,   y: 22, h: 14, opacity: 0.90),
-        Bar(x: 29.5, y: 19, h: 20, opacity: 1.00),
-        Bar(x: 35,   y: 22, h: 14, opacity: 0.90),
-        Bar(x: 40.5, y: 25, h: 8,  opacity: 0.85),
-    ]
-
-    var body: some View {
-        GeometryReader { geo in
-            let s = geo.size.width / 64.0
-            ForEach(0..<bars.count, id: \.self) { i in
-                Capsule()
-                    .fill(Color.white.opacity(bars[i].opacity))
-                    .frame(width: 3 * s, height: bars[i].h * s)
-                    .position(
-                        x: (bars[i].x + 1.5) * s,
-                        y: (bars[i].y + bars[i].h / 2) * s
-                    )
-            }
-        }
-    }
-}
+// The Speakist brand mark + bubble shape + bars inside the bubble
+// that previously occupied the HUD's leading slot are gone — the HUD
+// is now just the level bars + timer. Brand mark lives in the menu
+// bar icon, the dashboard, and onboarding; we don't need it competing
+// with the live waveform during a quick dictation.
 
 /// Five peach dots bobbing up and down with phase offsets, producing
 /// a left-to-right traveling wave that feels alive without competing
@@ -537,28 +464,62 @@ private struct TranscribingIndicator: View {
     }
 }
 
-private struct WaveformView: View {
-    let levels: [Float]
-    let accentColor: Color
+/// Voice-level bars that animate vertically — each bar's height
+/// rises from a bottom baseline as the input level climbs, instead
+/// of the previous "ring buffer slides right-to-left" history view.
+///
+/// All seven bars react to the same smoothed level (driven by
+/// `HUDController.smoothedDisplayLevel`) but with per-bar weights
+/// that taper toward the edges, producing a voice-shaped envelope
+/// that grows and shrinks vertically as you speak. Bars never
+/// completely collapse — a 12% baseline keeps them visible during
+/// silence so the HUD doesn't look broken between phrases.
+///
+/// The "low to high" motion you'd expect from a real meter is the
+/// shape itself: bars sit near the bottom when quiet and grow
+/// upward when loud, anchored at the baseline. There's no
+/// horizontal animation — the only thing changing is height.
+private struct VoiceLevelBars: View {
+    /// Already-amplified level in 0…1 (caller does smoothing + gain).
+    let level: Double
+    /// `false` while preparing/idle — bars hold at the silence
+    /// baseline so the panel layout matches the recording state.
+    let isActive: Bool
+
+    private let barCount = 7
+    /// Per-bar amplitude weights. Tapered so the silhouette peaks
+    /// in the middle like a voice envelope rather than a flat row.
+    private let weights: [Double] = [0.45, 0.65, 0.85, 1.0, 0.85, 0.65, 0.45]
+    /// Floor on bar height so silence still shows a visible row of
+    /// dashes — without this the panel would look empty between
+    /// utterances, which reads as "not listening."
+    private let baseline: Double = 0.12
+    /// Per-bar phase offsets used purely to add a tiny visual
+    /// shimmer so the bars don't feel like a single rigid envelope.
+    /// Combined with smoothedDisplayLevel they give the wave a
+    /// little life without losing the "rises with my voice" feel.
+    private let shimmer: [Double] = [0.0, 0.07, 0.04, 0.0, 0.04, 0.07, 0.0]
 
     var body: some View {
         GeometryReader { geo in
-            let barCount = max(levels.count, 1)
-            let spacing: CGFloat = 3
-            let barWidth = max((geo.size.width - CGFloat(barCount - 1) * spacing) / CGFloat(barCount), 3)
-            HStack(spacing: spacing) {
-                ForEach(levels.indices, id: \.self) { i in
-                    // Keep a small resting height so the bars look like a waveform
-                    // baseline even during silent moments.
-                    let level = CGFloat(levels[i])
-                    let h = max(level * geo.size.height, 4)
+            let totalSpacing = CGFloat(barCount - 1) * 4
+            let barWidth = max(4, (geo.size.width - totalSpacing) / CGFloat(barCount))
+            HStack(alignment: .bottom, spacing: 4) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let amplitude = max(baseline, level * weights[i] - shimmer[i] * 0.05)
+                    let h = CGFloat(amplitude) * geo.size.height
                     Capsule(style: .continuous)
-                        .fill(accentColor)
-                        .frame(width: barWidth, height: h)
-                        .animation(.easeOut(duration: 0.12), value: levels[i])
+                        .fill(Color.speakistPeach)
+                        .frame(width: barWidth, height: max(h, 4))
+                        .opacity(isActive ? 1.0 : 0.45)
+                        // Snappy attack, gentler release — same
+                        // envelope a hardware VU meter uses, makes
+                        // the bars feel responsive to peaks but not
+                        // jittery at the noise floor.
+                        .animation(.easeOut(duration: 0.08), value: amplitude)
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
         }
     }
 }
