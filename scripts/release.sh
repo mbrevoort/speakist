@@ -405,8 +405,17 @@ echo "==> Sparkle sign_update"
 # the bare base64 signature in D1 — `dmgSizeBytes` is the sole source of
 # `length=` in the appcast enclosure, which keeps the XML valid (duplicate
 # attributes cause Sparkle to fail feed parsing).
+#
+# Sparkle 2.6+ deprecated the `-s <key>` flag (warns + exits non-zero) so
+# write the key to a temp file and pass `--ed-key-file <path>` instead.
+# Trapping cleanup of the temp file on script exit avoids leaving the
+# private key on disk in the runner workspace.
 if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
-  SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" -s "$SPARKLE_PRIVATE_KEY" "$DMG_PATH")
+  SPARKLE_KEY_FILE=$(mktemp -t sparkle-ed)
+  trap 'rm -f "$SPARKLE_KEY_FILE"; mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
+  printf '%s' "$SPARKLE_PRIVATE_KEY" > "$SPARKLE_KEY_FILE"
+  chmod 600 "$SPARKLE_KEY_FILE"
+  SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" --ed-key-file "$SPARKLE_KEY_FILE" "$DMG_PATH")
 else
   SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
 fi
