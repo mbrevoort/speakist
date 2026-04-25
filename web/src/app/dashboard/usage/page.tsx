@@ -21,18 +21,30 @@ export default async function UsagePage() {
   const user = await requireUser();
   const org = (await getCurrentOrgForUser(user.id))!;
 
+  // Member-level users see only their own activity; owners/admins see
+  // the whole org. This feeds into three places:
+  //   1. The `userId` filter passed to each query.
+  //   2. Whether the "Top users" section is rendered (org-wide only).
+  //   3. Copy on the page header ("your" vs "your team's").
+  const isAdmin = org.role === "owner" || org.role === "admin";
+  const scopedUserId = isAdmin ? undefined : user.id;
+
   const [summary, points, topUsers, recent] = await Promise.all([
-    getUsageSummary(org.id),
-    getUsageByDay(org.id, 14),
-    getTopUsers(org.id, 10),
-    getRecentEvents(org.id, 20),
+    getUsageSummary(org.id, scopedUserId),
+    getUsageByDay(org.id, 14, scopedUserId),
+    isAdmin ? getTopUsers(org.id, 10) : Promise.resolve([]),
+    getRecentEvents(org.id, 20, scopedUserId),
   ]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-10">
       <PageHeader
         title="Usage"
-        description="See how your team's using their transcription credit."
+        description={
+          isAdmin
+            ? "See how your team's using their transcription credit."
+            : "Your transcription activity."
+        }
       />
 
       {/* Summary tiles */}
@@ -66,7 +78,10 @@ export default async function UsagePage() {
         <UsageChart points={points} metric="words" />
       </section>
 
-      {/* Top users */}
+      {/* Top users — org-wide view only; hidden for member-level users
+          who are looking at just their own stats and would see a table
+          with a single row (themselves). */}
+      {isAdmin && (
       <section>
         <h2 className="text-lg font-semibold tracking-tight mb-3">
           Top users
@@ -113,6 +128,7 @@ export default async function UsagePage() {
           </div>
         )}
       </section>
+      )}
 
       {/* Recent events */}
       <section>
@@ -132,7 +148,7 @@ export default async function UsagePage() {
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">When</th>
-                  <th className="px-5 py-3 font-medium">Member</th>
+                  {isAdmin && <th className="px-5 py-3 font-medium">Member</th>}
                   <th className="px-5 py-3 font-medium text-right">Words</th>
                   <th className="px-5 py-3 font-medium text-right">Audio</th>
                   <th
@@ -150,9 +166,11 @@ export default async function UsagePage() {
                     <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
                       {e.createdAt.toLocaleString()}
                     </td>
-                    <td className="px-5 py-3">
-                      {e.userDisplayName ?? e.userEmail.split("@")[0]}
-                    </td>
+                    {isAdmin && (
+                      <td className="px-5 py-3">
+                        {e.userDisplayName ?? e.userEmail.split("@")[0]}
+                      </td>
+                    )}
                     <td className="px-5 py-3 text-right tabular-nums">
                       {e.wordCount.toLocaleString()}
                     </td>

@@ -16,7 +16,15 @@ export interface UsageSummary {
   allTime: { events: number; words: number; costMillicents: number };
 }
 
-export async function getUsageSummary(orgId: string): Promise<UsageSummary> {
+/**
+ * Summary-tile rollup for an org. Pass `userId` to scope to a single
+ * user's activity — used on the member's self-view of /dashboard/usage.
+ * Without it, the rollup sums the whole org (admin view).
+ */
+export async function getUsageSummary(
+  orgId: string,
+  userId?: string
+): Promise<UsageSummary> {
   const db = getDb();
 
   const now = Date.now();
@@ -24,9 +32,9 @@ export async function getUsageSummary(orgId: string): Promise<UsageSummary> {
   const since30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
   async function rollup(since?: Date) {
-    const where = since
-      ? and(eq(usageEvents.orgId, orgId), gte(usageEvents.createdAt, since))
-      : eq(usageEvents.orgId, orgId);
+    const conds = [eq(usageEvents.orgId, orgId)];
+    if (since) conds.push(gte(usageEvents.createdAt, since));
+    if (userId) conds.push(eq(usageEvents.userId, userId));
     const [row] = await db
       .select({
         events: sql<number>`COUNT(*)`,
@@ -34,7 +42,7 @@ export async function getUsageSummary(orgId: string): Promise<UsageSummary> {
         cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
       })
       .from(usageEvents)
-      .where(where);
+      .where(and(...conds));
     return {
       events: Number(row?.events ?? 0),
       words: Number(row?.words ?? 0),
@@ -59,8 +67,13 @@ export interface DayPoint {
   costMillicents: number;
 }
 
-/** Word+cost totals for each of the last N days (including today). */
-export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[]> {
+/** Word+cost totals for each of the last N days (including today).
+ *  Pass `userId` to scope to a single member's activity. */
+export async function getUsageByDay(
+  orgId: string,
+  days = 14,
+  userId?: string
+): Promise<DayPoint[]> {
   const db = getDb();
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
 
@@ -81,6 +94,11 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
   // uses to filter "last 7 days" / "last 30 days", which is verified
   // to work against D1's timestamp_ms columns.
   const since = new Date(sinceMs);
+  const conds = [
+    eq(usageEvents.orgId, orgId),
+    gte(usageEvents.createdAt, since),
+  ];
+  if (userId) conds.push(eq(usageEvents.userId, userId));
   const events = await db
     .select({
       createdAt: usageEvents.createdAt,
@@ -88,12 +106,7 @@ export async function getUsageByDay(orgId: string, days = 14): Promise<DayPoint[
       costMillicents: usageEvents.costMillicents,
     })
     .from(usageEvents)
-    .where(
-      and(
-        eq(usageEvents.orgId, orgId),
-        gte(usageEvents.createdAt, since)
-      )
-    );
+    .where(and(...conds));
 
 
   const byDay = new Map<string, { words: number; cost: number }>();
@@ -183,8 +196,14 @@ export interface RecentEvent {
   createdAt: Date;
 }
 
-export async function getRecentEvents(orgId: string, limit = 20): Promise<RecentEvent[]> {
+export async function getRecentEvents(
+  orgId: string,
+  limit = 20,
+  userId?: string
+): Promise<RecentEvent[]> {
   const db = getDb();
+  const conds = [eq(usageEvents.orgId, orgId)];
+  if (userId) conds.push(eq(usageEvents.userId, userId));
   const rows = await db
     .select({
       id: usageEvents.id,
@@ -201,7 +220,7 @@ export async function getRecentEvents(orgId: string, limit = 20): Promise<Recent
     })
     .from(usageEvents)
     .innerJoin(users, eq(users.id, usageEvents.userId))
-    .where(eq(usageEvents.orgId, orgId))
+    .where(and(...conds))
     .orderBy(desc(usageEvents.createdAt))
     .limit(limit);
   return rows.map((r) => ({

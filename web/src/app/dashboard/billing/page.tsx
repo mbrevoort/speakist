@@ -7,6 +7,7 @@
 // the billing-client.
 
 import { eq } from "drizzle-orm";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
@@ -26,6 +27,12 @@ export default async function BillingPage({
   const user = await requireUser();
   const org = (await getCurrentOrgForUser(user.id))!;
   const sp = await searchParams;
+
+  // Member-level users shouldn't see org-level billing. Sidebar hides
+  // the entry; direct URL hits bounce to Overview.
+  if (org.role !== "owner" && org.role !== "admin") {
+    redirect("/dashboard");
+  }
 
   const db = getDb();
 
