@@ -169,9 +169,23 @@ command -v hdiutil    >/dev/null || { echo "hdiutil not found (comes with macOS)
 command -v jq         >/dev/null || { echo "brew install jq"; exit 1; }
 command -v curl       >/dev/null || { echo "curl not found"; exit 1; }
 [ -x "${SPARKLE_TOOLS}/sign_update" ] || { echo "Sparkle sign_update missing at ${SPARKLE_TOOLS}/sign_update"; exit 1; }
-xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || {
-  echo "notarytool keychain profile '${NOTARY_PROFILE}' not configured."; exit 1
-}
+# CI uses an App Store Connect API key (.p8) for notarization instead
+# of a keychain credential profile. When NOTARY_API_KEY_PATH is set,
+# the corresponding KEY_ID + ISSUER must be too — failure is loud.
+# Otherwise fall through to the keychain-profile path used on the
+# developer's laptop.
+if [ -n "${NOTARY_API_KEY_PATH:-}" ]; then
+  [ -f "$NOTARY_API_KEY_PATH" ] || { echo "NOTARY_API_KEY_PATH is set but file not found: $NOTARY_API_KEY_PATH"; exit 1; }
+  [ -n "${NOTARY_API_KEY_ID:-}" ] || { echo "NOTARY_API_KEY_PATH set without NOTARY_API_KEY_ID"; exit 1; }
+  [ -n "${NOTARY_API_ISSUER:-}" ] || { echo "NOTARY_API_KEY_PATH set without NOTARY_API_ISSUER"; exit 1; }
+  xcrun notarytool history --key "$NOTARY_API_KEY_PATH" --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER" >/dev/null 2>&1 || {
+    echo "notarytool API key auth failed. Verify key, key-id, issuer."; exit 1
+  }
+else
+  xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || {
+    echo "notarytool keychain profile '${NOTARY_PROFILE}' not configured."; exit 1
+  }
+fi
 (cd web && pnpm exec wrangler whoami >/dev/null 2>&1) || {
   echo "wrangler not logged in. cd web && pnpm exec wrangler login"; exit 1
 }
@@ -275,7 +289,16 @@ rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
 echo "==> notarytool submit (this can take a few minutes)"
-xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+# Mirror the preflight branch: API key in CI, keychain profile locally.
+if [ -n "${NOTARY_API_KEY_PATH:-}" ]; then
+  xcrun notarytool submit "$ZIP_PATH" \
+    --key "$NOTARY_API_KEY_PATH" \
+    --key-id "$NOTARY_API_KEY_ID" \
+    --issuer "$NOTARY_API_ISSUER" \
+    --wait
+else
+  xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
+fi
 
 echo "==> stapling ticket"
 xcrun stapler staple "$APP_PATH"
@@ -375,11 +398,18 @@ trap 'mv project.yml.release-bak project.yml 2>/dev/null || true' EXIT
 # ---- Sparkle sign -------------------------------------------------------
 
 echo "==> Sparkle sign_update"
+# CI passes the EdDSA private key directly via SPARKLE_PRIVATE_KEY
+# (env var) so the runner doesn't need a populated Keychain. Locally,
+# `sign_update` reads from the user's Keychain transparently.
 # sign_update emits `sparkle:edSignature="abc==" length="123"`. We store only
 # the bare base64 signature in D1 — `dmgSizeBytes` is the sole source of
 # `length=` in the appcast enclosure, which keeps the XML valid (duplicate
 # attributes cause Sparkle to fail feed parsing).
-SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
+if [ -n "${SPARKLE_PRIVATE_KEY:-}" ]; then
+  SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" -s "$SPARKLE_PRIVATE_KEY" "$DMG_PATH")
+else
+  SPARKLE_RAW=$("${SPARKLE_TOOLS}/sign_update" "$DMG_PATH")
+fi
 SPARKLE_SIG=$(echo "$SPARKLE_RAW" | sed -E 's/.*sparkle:edSignature="([^"]+)".*/\1/')
 if [ -z "$SPARKLE_SIG" ] || [ "$SPARKLE_SIG" = "$SPARKLE_RAW" ]; then
   echo "Could not parse sparkle:edSignature from sign_update output:"
