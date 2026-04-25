@@ -248,6 +248,14 @@ targets:
         # actool generates the device-specific icon variants from the
         # single 1024×1024 marketing icon at build time.
         CFBundleIconName: AppIcon
+        # Pre-answer Apple's export-compliance prompt so every TestFlight
+        # build auto-distributes instead of blocking on a manual click.
+        # `false` = the app does not use non-exempt encryption. Speakist
+        # only uses HTTPS via URLSession (system-provided TLS), which is
+        # exempt under the standard cryptography category. If we ever
+        # add custom crypto (e.g., E2EE messaging), this becomes `true`
+        # and Apple will require an annual self-classification report.
+        ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
         MinimumOSVersion: $(IPHONEOS_DEPLOYMENT_TARGET)
         SpeakistChannel: $(SPEAKIST_CHANNEL)
