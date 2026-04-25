@@ -232,8 +232,20 @@ sed -i '' -E "s/(MARKETING_VERSION: +\")[^\"]+(\")/\1${VERSION}\2/" project.yml
 sed -i '' -E "s/(MARKETING_VERSION: +\")[^\"]+(\")/\1${VERSION}\2/" project.yml.release-bak
 
 CURRENT_BUILD=$(grep -E 'CURRENT_PROJECT_VERSION:' project.yml | head -n1 | sed -E 's/.*"([0-9]+)".*/\1/')
-NEW_BUILD=$((CURRENT_BUILD + 1))
-echo "==> Bumping CURRENT_PROJECT_VERSION $CURRENT_BUILD → $NEW_BUILD"
+# Two modes:
+#   * Default: bump the file's value by 1 (local-laptop flow where the
+#     bumped value gets committed back to git).
+#   * RELEASE_BUILD_NUMBER set: use it verbatim. CI sets this to
+#     `100000 + GITHUB_RUN_NUMBER` so every run produces a monotonic,
+#     never-colliding CFBundleVersion regardless of project.yml's
+#     persisted value (CI never commits the bump back).
+if [ -n "${RELEASE_BUILD_NUMBER:-}" ]; then
+  NEW_BUILD="$RELEASE_BUILD_NUMBER"
+  echo "==> Setting CURRENT_PROJECT_VERSION ← $NEW_BUILD (from RELEASE_BUILD_NUMBER env)"
+else
+  NEW_BUILD=$((CURRENT_BUILD + 1))
+  echo "==> Bumping CURRENT_PROJECT_VERSION $CURRENT_BUILD → $NEW_BUILD"
+fi
 sed -i '' -E "s/(CURRENT_PROJECT_VERSION: +\")[0-9]+(\")/\1${NEW_BUILD}\2/" project.yml
 sed -i '' -E "s/(CURRENT_PROJECT_VERSION: +\")[0-9]+(\")/\1${NEW_BUILD}\2/" project.yml.release-bak
 

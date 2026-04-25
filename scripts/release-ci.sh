@@ -56,20 +56,28 @@ export NOTARY_API_ISSUER="$APP_STORE_CONNECT_ISSUER_ID"
 # we map the workflow's RELEASE_PUBLISH_TOKEN onto the dev-channel slot.
 export SPEAKIST_PUBLISH_TOKEN_DEV="$RELEASE_PUBLISH_TOKEN"
 
-# Compute a marketing version with a CI build-meta suffix. Sparkle's
-# version comparator follows SemVer 2.0 and ignores `+`-suffixes when
-# ordering, so "0.1.10+dev.78" sorts equivalent to "0.1.10" — but the
-# suffix lets the user eyeball "which dev build am I on" in About.
+# Compute a marketing version with a CI build-meta suffix. The suffix
+# is purely cosmetic — Sparkle compares CFBundleVersion (the integer
+# build number) for ordering, not the marketing version. The "+dev.N"
+# is here so a user reading the About panel can eyeball which CI build
+# they're on.
 PROJECT_VERSION=$(awk '/^[[:space:]]*MARKETING_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' project.yml)
 [ -n "$PROJECT_VERSION" ] || { echo "FATAL: couldn't read MARKETING_VERSION from project.yml" >&2; exit 1; }
 VERSION="${PROJECT_VERSION}+dev.${GITHUB_RUN_NUMBER}"
 
-# Note: release.sh's existing `+1` increment on CURRENT_PROJECT_VERSION
-# is preserved (it bumps whatever the file currently says by 1). The
-# value in project.yml is the historical-laptop counter; CI runs don't
-# overwrite the file in git (release.sh restores from .release-bak),
-# so this just produces a monotonically-increasing CFBundleVersion
-# per CI run for as long as the file's persisted value stays put.
+# Override CFBundleVersion to a monotonically-increasing per-CI-run
+# number. release.sh's default behavior is "+1 on the file's persisted
+# value", which means every CI run produces the same number (since CI
+# never commits the bump back) — every Sparkle item ended up with the
+# same `<sparkle:version>`, so the appcast looked identical to clients
+# and Check-for-Updates always reported "you're up to date" regardless
+# of how many builds had shipped.
+#
+# `100000 + GITHUB_RUN_NUMBER` mirrors the iOS CFBundleVersion strategy
+# in scripts/release-ios-ci.sh — large headroom (you'd need 100k runs to
+# collide with anything plausible) and monotonic by GitHub's contract
+# on run numbers (only ever increment, even on force-pushes).
+export RELEASE_BUILD_NUMBER=$((100000 + GITHUB_RUN_NUMBER))
 
 # Short notes for the publish-API row.
 SHORT_SHA=${GITHUB_SHA:0:7}
