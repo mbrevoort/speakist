@@ -112,16 +112,27 @@ final class ShortcutManager {
     // MARK: - Lifecycle
 
     private func beginRecording() {
+        // Show the HUD FIRST, before we touch the audio engine. Engine
+        // startup is fast on Mac but not free, and the user pressed
+        // their shortcut to get a UI response — so flash the panel up
+        // in the same frame as the key event and hide engine warmup
+        // behind the preparing state.
+        env.hudController.showPreparing()
+
         do {
             try env.audioRecorder.start()
         } catch {
             Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
+            env.hudController.hide()
             env.notifier.transcriptionFailed(error.localizedDescription)
             return
         }
+        // Engine is now actually running and producing samples — flip
+        // the HUD into its recording state, which kicks off the timer
+        // and starts animating the waveform from real RMS values.
         recordingStartedAt = Date()
         didHitMaxDuration = false
-        env.hudController.showRecording()
+        env.hudController.activateRecording()
         playStartSound()
         scheduleMaxDurationCutoff()
     }

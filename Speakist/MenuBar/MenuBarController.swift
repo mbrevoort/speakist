@@ -148,7 +148,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private func currentState() -> IconState {
         if env.preferences.shortcutPaused { return .paused }
         switch env.hudController.state {
-        case .recording: return .recording
+        case .preparing, .recording: return .recording
         case .transcribing: return .transcribing
         case .hidden:
             return env.audioRecorder.isRecording ? .recording : .idle
