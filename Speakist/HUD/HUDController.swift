@@ -334,12 +334,17 @@ private struct HUDView: View {
     @ViewBuilder private var leading: some View {
         switch controller.state {
         case .preparing, .recording:
-            PulsingDot()
+            // Brand mark on the leading edge, breathing subtly so the
+            // HUD doesn't feel static. Replaces the previous generic
+            // peach pulsing dot with the actual Speakist logo.
+            SpeakistMark()
         case .transcribing:
-            // Same dimensions as PulsingDot so the layout doesn't
-            // shift when state flips. Spinner is meaningful — it
-            // tells the user something is in flight.
-            ProgressView().controlSize(.small)
+            // Empty placeholder during transcribing — the wave-dot
+            // animation in the content slot is the activity signal,
+            // and a competing spinner here would be visual noise. The
+            // 20×20 frame from the parent HStack keeps the column
+            // width stable so the layout doesn't shift.
+            Color.clear
         case .hidden:
             EmptyView()
         }
@@ -393,15 +398,95 @@ private struct HUDView: View {
     }
 }
 
-private struct PulsingDot: View {
-    @State private var phase = false
+/// Mini Speakist mark — speech-bubble-with-waveform in peach gradient,
+/// matching the SVG used on the marketing site (`web/src/components/
+/// brand/logo.tsx`) and the design source (`design/Speakist.svg`).
+/// Drawn in 64-unit space so the same coordinates from the SVG can be
+/// used verbatim. Includes a gentle breathing animation so the HUD
+/// feels alive without being distracting.
+private struct SpeakistMark: View {
+    @State private var pulsing = false
+
     var body: some View {
-        Circle()
-            .fill(Color.speakistPeach)
-            .scaleEffect(phase ? 1.0 : 0.7)
-            .opacity(phase ? 1.0 : 0.6)
-            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: phase)
-            .onAppear { phase = true }
+        ZStack {
+            BubbleWithTailShape()
+                .fill(
+                    LinearGradient(
+                        // Two-stop peach gradient — same #FFA98A → #FF7547
+                        // pair the SVG uses, so the mark on Mac is
+                        // pixel-recognizable next to the marketing site.
+                        colors: [
+                            Color(red: 1.0, green: 0.663, blue: 0.541),
+                            Color(red: 1.0, green: 0.459, blue: 0.278),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            BubbleBars()
+        }
+        .scaleEffect(pulsing ? 1.04 : 0.96)
+        .animation(
+            .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
+            value: pulsing
+        )
+        .onAppear { pulsing = true }
+    }
+}
+
+/// The speech-bubble silhouette: rounded body + small angled tail at
+/// the lower-left. Tail coordinates traced from the SVG's path data so
+/// the proportions match.
+private struct BubbleWithTailShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = rect.width / 64.0
+        var p = Path()
+        // Rounded body — close enough to the SVG's arc-corner-rect at
+        // the sizes we render (16–32pt). The SVG arcs use radius 8 in
+        // 64-unit space; matched here.
+        p.addRoundedRect(
+            in: CGRect(x: 8 * s, y: 10 * s, width: 50 * s, height: 38 * s),
+            cornerSize: CGSize(width: 8 * s, height: 8 * s)
+        )
+        // Tail — three points forming the triangular pointer below
+        // the body. SVG path: line to (26, 54.5), curve to (~24.3,
+        // 53.8), line up to (24.3, 48). We approximate the tiny
+        // bezier with a straight line; at the small render sizes the
+        // difference is sub-pixel.
+        p.move(to: CGPoint(x: 33 * s, y: 48 * s))
+        p.addLine(to: CGPoint(x: 26 * s, y: 54.5 * s))
+        p.addLine(to: CGPoint(x: 24.3 * s, y: 48 * s))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Five centered waveform bars inside the bubble. Heights asymmetric
+/// (8–20–8) so the silhouette reads as "voice", not "equalizer". Center
+/// bar is fully opaque; outer bars fade slightly for visual depth.
+private struct BubbleBars: View {
+    private struct Bar { let x: Double; let y: Double; let h: Double; let opacity: Double }
+    private let bars: [Bar] = [
+        Bar(x: 18.5, y: 25, h: 8,  opacity: 0.85),
+        Bar(x: 24,   y: 22, h: 14, opacity: 0.90),
+        Bar(x: 29.5, y: 19, h: 20, opacity: 1.00),
+        Bar(x: 35,   y: 22, h: 14, opacity: 0.90),
+        Bar(x: 40.5, y: 25, h: 8,  opacity: 0.85),
+    ]
+
+    var body: some View {
+        GeometryReader { geo in
+            let s = geo.size.width / 64.0
+            ForEach(0..<bars.count, id: \.self) { i in
+                Capsule()
+                    .fill(Color.white.opacity(bars[i].opacity))
+                    .frame(width: 3 * s, height: bars[i].h * s)
+                    .position(
+                        x: (bars[i].x + 1.5) * s,
+                        y: (bars[i].y + bars[i].h / 2) * s
+                    )
+            }
+        }
     }
 }
 
