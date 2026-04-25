@@ -157,7 +157,11 @@ final class TranscriptionService {
         }
 
         // 4. Paste.
-        let outcome = await cursorInserter.insert(text: rawText, hasEditableFocus: focus.hasEditableFocus)
+        let outcome = await cursorInserter.insert(
+            text: rawText,
+            hasEditableFocus: focus.hasEditableFocus,
+            bundleID: focus.bundleID
+        )
         let pasteStatus: String
         switch outcome {
         case .pasted: pasteStatus = "pasted"

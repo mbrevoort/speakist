@@ -12,9 +12,24 @@ enum PasteOutcome: Equatable {
 final class CursorInserter {
 
     /// Clipboard + synthetic ⌘V paste, with clipboard restore on completion.
-    /// If `hasEditableFocus` is false, we leave the transcript on the clipboard and do NOT
-    /// restore the old contents — the transcript is the useful payload.
-    func insert(text: String, hasEditableFocus: Bool) async -> PasteOutcome {
+    ///
+    /// `hasEditableFocus` is the FocusedFieldProbe's best guess based on
+    /// AX role / value-settable / selected-text-attribute heuristics. It
+    /// reliably says `true` for native AppKit text fields and views; it
+    /// often says `false` for custom-renderer apps (Ghostty, Warp, some
+    /// Electron apps, anything that doesn't expose standard AX text
+    /// roles for its input area). Originally we treated `false` as a
+    /// hard "skip the paste" signal — that broke pasting into Claude
+    /// Code running inside Ghostty/Warp because their terminal views
+    /// don't advertise AXTextArea.
+    ///
+    /// Now we treat `false` as just a hint: still attempt the synthetic
+    /// ⌘V if AX is trusted. Worst case the paste lands somewhere
+    /// unexpected (the user just deliberately invoked Speakist, so they
+    /// were focused on a target) and the clipboard contents are still
+    /// available for a manual ⌘V. Best case the paste actually works
+    /// in the apps the heuristic mis-classifies.
+    func insert(text: String, hasEditableFocus: Bool, bundleID: String?) async -> PasteOutcome {
         guard !text.isEmpty else { return .failed("Empty transcript") }
 
         let pasteboard = NSPasteboard.general
@@ -24,17 +39,18 @@ final class CursorInserter {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        guard hasEditableFocus else {
-            return .clipboardOnly
-        }
-
+        // Hard requirement: without AX trust we can't synthesize key
+        // events. Surface as clipboard-only so the user knows to ⌘V.
         guard AXIsProcessTrusted() else {
+            Logger.shared.info("paste skipped (AX not trusted) bundle=\(bundleID ?? "?") hasEditableFocus=\(hasEditableFocus)")
             return .clipboardOnly
         }
 
+        Logger.shared.info("paste attempt bundle=\(bundleID ?? "?") hasEditableFocus=\(hasEditableFocus)")
         Self.postCommandV()
 
-        // Give the target app a beat to process the paste before restoring the clipboard.
+        // Give the target app a beat to process the paste before
+        // restoring the clipboard.
         try? await Task.sleep(nanoseconds: 120_000_000)
 
         // If the user copied something in the meantime, leave it alone.
@@ -42,7 +58,13 @@ final class CursorInserter {
             Self.restore(snapshot: snapshot, on: pasteboard)
         }
 
-        return .pasted
+        // Reflect uncertainty: if the focus probe couldn't confirm an
+        // editable target, label the outcome `clipboardOnly` even
+        // though we attempted a paste. The notifier won't show a
+        // success toast for those cases — better than falsely
+        // claiming success in apps where the probe is consistently
+        // wrong.
+        return hasEditableFocus ? .pasted : .clipboardOnly
     }
 
     // MARK: - Clipboard snapshot / restore
@@ -80,20 +102,31 @@ final class CursorInserter {
 
     // MARK: - Synthetic Cmd+V
 
+    /// Post a ⌘V key sequence via Quartz. Synthesizes ONLY the V key-
+    /// down and key-up events with the `.maskCommand` flag set —
+    /// dropping the previous separate cmd-down / cmd-up events.
+    ///
+    /// Why the simpler pattern: with explicit cmd-down / cmd-up
+    /// events, some apps (notably terminal hosts like Ghostty and
+    /// Warp that read input via raw keystroke pipelines) saw the
+    /// cmd-down without `.maskCommand` on the same event and
+    /// interpreted the modifier state as inconsistent — the ⌘V then
+    /// arrived as a plain "v" or got dropped entirely. Setting the
+    /// flag on the V event itself is what every other production
+    /// paste utility (Raycast, BetterTouchTool, KeyboardCowboy)
+    /// does, and it works in all the apps that previously worked
+    /// with the longer pattern.
     private static func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
         let vKey: CGKeyCode = 9 // "v"
-        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Command), keyDown: true)
+
         let vDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true)
         vDown?.flags = .maskCommand
         let vUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false)
         vUp?.flags = .maskCommand
-        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Command), keyDown: false)
 
         let tap = CGEventTapLocation.cghidEventTap
-        cmdDown?.post(tap: tap)
         vDown?.post(tap: tap)
         vUp?.post(tap: tap)
-        cmdUp?.post(tap: tap)
     }
 }
