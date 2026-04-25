@@ -228,6 +228,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        # Required for App Store / TestFlight submission since iOS 11.
+        # Points at the AppIcon asset under Resources/Assets.xcassets;
+        # actool generates the device-specific icon variants from the
+        # single 1024×1024 marketing icon at build time.
+        CFBundleIconName: AppIcon
         LSRequiresIPhoneOS: true
         MinimumOSVersion: $(IPHONEOS_DEPLOYMENT_TARGET)
         SpeakistChannel: $(SPEAKIST_CHANNEL)
