@@ -4,6 +4,7 @@
 
 import { redirect } from "next/navigation";
 import { AdminSidebar } from "@/components/admin/sidebar";
+import { AdminMobileNav } from "@/components/admin/mobile-nav";
 import { Topbar } from "@/components/dashboard/topbar";
 import { AuthzError, requireUser } from "@/lib/authz";
 import { getAuth } from "@/lib/auth";
@@ -41,6 +42,7 @@ export default async function AdminLayout({
           userDisplayName={user.displayName}
           isSuperAdmin={user.isSuperAdmin}
           signOutAction={signOutAction}
+          mobileNav={<AdminMobileNav />}
         />
         <main className="flex-1 px-6 py-8 sm:px-10 sm:py-10 overflow-y-auto">
           {children}

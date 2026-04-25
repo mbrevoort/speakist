@@ -1,15 +1,23 @@
 # Dev environment CI/CD — runs on every push to main.
 #
-# Three parallel jobs:
+# Four jobs total:
+#   * changes — diff the push to figure out which targets need rebuilding
 #   * web — deploy Cloudflare Worker (Next.js + D1 migrations) to dev
 #   * mac — build, sign, notarize, DMG, Sparkle-sign, R2 upload, publish
 #   * ios — build Dev archive, upload to TestFlight (Internal group)
 #
-# No `needs:` between them so one job's failure doesn't block the
-# others. Concurrency `cancel-in-progress: false` queues runs serially
-# so a back-to-back push doesn't kill an in-flight notarization (which
-# wastes 5+ minutes of Apple's notary queue and leaves zombie
-# submission UUIDs).
+# `web`/`mac`/`ios` each `needs: changes` and gate via `if:` on the
+# matching output. A docs-only commit, for example, runs `changes`
+# (~10s on ubuntu) and then skips all three build jobs — no Mac runner
+# minutes, no iOS, no Cloudflare deploy. `workflow_dispatch` runs
+# everything regardless, so manual triggers are still a "kick all
+# pipelines" button.
+#
+# No `needs:` between web/mac/ios so one job's failure doesn't block
+# the others. Concurrency `cancel-in-progress: false` queues runs
+# serially so a back-to-back push doesn't kill an in-flight
+# notarization (which wastes 5+ minutes of Apple's notary queue and
+# leaves zombie submission UUIDs).
 #
 # Security note: this workflow only consumes `secrets.*` (encrypted)
 # and the GitHub-managed integer/hash variables `github.run_number`
@@ -36,10 +44,78 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # changes → which build targets are affected by this push
+  # ---------------------------------------------------------------------------
+  # Filters are deliberately conservative — when in doubt, build. Path
+  # rules to remember:
+  #   * `Speakist/**` is mostly Mac-only, but a handful of files are
+  #     cross-compiled into the iOS target (see project.yml's
+  #     `SpeakistiOS:` source list). Those specific paths appear in
+  #     both the `mac:` and `ios:` filters so editing one of them
+  #     retriggers both targets. Keep this list in sync with
+  #     project.yml — `awk '/SpeakistiOS:/,/info:/' project.yml |
+  #     grep 'path: Speakist/'` regenerates the canonical list.
+  #   * `Shared/**` is genuinely shared and triggers both Apple jobs.
+  #   * `project.yml`, `.github/actions/setup-apple-signing/**`, and
+  #     this workflow file all touch both Apple jobs.
+  #   * `web/**` only ever affects the web job.
+  changes:
+    name: Detect changed targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      mac: ${{ steps.filter.outputs.mac }}
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'web/**'
+              - '.github/workflows/deploy-dev.yml'
+            mac:
+              - 'Speakist/**'
+              - 'Shared/**'
+              - 'project.yml'
+              - 'scripts/release.sh'
+              - 'scripts/release-ci.sh'
+              - 'scripts/exportOptions.plist'
+              - '.github/actions/setup-apple-signing/**'
+              - '.github/workflows/deploy-dev.yml'
+            ios:
+              - 'SpeakistiOS/**'
+              - 'SpeakistKeyboard/**'
+              - 'Shared/**'
+              # Cross-compiled into the iOS target via project.yml's
+              # SpeakistiOS sources list. Keep in sync if you add or
+              # remove entries there.
+              - 'Speakist/App/AppIdentity.swift'
+              - 'Speakist/Logging/Logger.swift'
+              - 'Speakist/Resources/Brand.swift'
+              - 'Speakist/Account/SpeakistAPIClient.swift'
+              - 'Speakist/Account/SpeakistAccountManager.swift'
+              - 'Speakist/Transcription/TranscriptionTypes.swift'
+              - 'Speakist/Corrections/DiffEngine.swift'
+              - 'Speakist/Settings/KeychainStore.swift'
+              - 'project.yml'
+              - 'scripts/release-ios-ci.sh'
+              - 'scripts/exportOptions-ios.plist'
+              - '.github/actions/setup-apple-signing/**'
+              - '.github/workflows/deploy-dev.yml'
+
+  # ---------------------------------------------------------------------------
   # Web → Cloudflare Worker (speakist-web-dev)
   # ---------------------------------------------------------------------------
   web:
     name: Deploy web to dev
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -80,6 +156,8 @@ jobs:
   # ---------------------------------------------------------------------------
   mac:
     name: Build + ship Mac dev DMG
+    needs: changes
+    if: ${{ needs.changes.outputs.mac == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -155,6 +233,8 @@ jobs:
   # ---------------------------------------------------------------------------
   ios:
     name: Build + ship iOS Dev to TestFlight
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: macos-26
     timeout-minutes: 30
     permissions:

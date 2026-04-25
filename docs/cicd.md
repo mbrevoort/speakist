@@ -9,18 +9,46 @@ GitHub Releases-triggered prod workflow is a future addition.
 
 ## Overview
 
-`.github/workflows/deploy-dev.yml` defines three parallel jobs:
+`.github/workflows/deploy-dev.yml` defines four jobs:
 
-| Job   | Runner          | What it does | Approximate time |
-|-------|-----------------|--------------|------------------|
-| `web` | `ubuntu-latest` | `pnpm install` → `pnpm db:migrate:dev` → `pnpm deploy:dev` | 3 min |
-| `mac` | `macos-26`      | xcodegen → archive → notarize → DMG → Sparkle-sign → R2 upload → publish API | 12-15 min |
-| `ios` | `macos-26`      | xcodegen → archive → export → upload to TestFlight (Internal Testing) | 8-10 min |
+| Job       | Runner          | What it does | Approximate time |
+|-----------|-----------------|--------------|------------------|
+| `changes` | `ubuntu-latest` | `dorny/paths-filter` against the push diff; emits `web` / `mac` / `ios` flags | <30 s |
+| `web`     | `ubuntu-latest` | `pnpm install` → `pnpm db:migrate:dev` → `pnpm deploy:dev` | 3 min |
+| `mac`     | `macos-26`      | xcodegen → archive → notarize → DMG → Sparkle-sign → R2 upload → publish API | 3-15 min (cache-warm vs cold) |
+| `ios`     | `macos-26`      | xcodegen → archive → export → upload to TestFlight (Internal Testing) | 1-8 min |
 
-Jobs run independently (no `needs:` dependencies). One job's failure
-doesn't block the others. Concurrency `cancel-in-progress: false`
-queues runs serially so a back-to-back push doesn't kill an in-flight
-notarization.
+`web` / `mac` / `ios` each `needs: changes` and gate via `if:` on the
+matching output, so a docs-only push runs `changes` (~10 s) and skips
+the three build jobs entirely — no Mac runner minutes, no iOS, no
+Cloudflare deploy. `workflow_dispatch` runs everything regardless, so
+the **Run workflow** button is still a "kick all pipelines" override.
+
+Beyond `changes`, the build jobs run independently (no `needs:`
+between web/mac/ios) so one job's failure doesn't block the others.
+Concurrency `cancel-in-progress: false` queues runs serially so a
+back-to-back push doesn't kill an in-flight notarization.
+
+### Path-to-target mapping
+
+The `changes` job's filter rules in the workflow file are the
+canonical source — edit there, not here. Quick summary:
+
+* **`web`** → `web/**`, the workflow itself.
+* **`mac`** → all of `Speakist/**`, `Shared/**`, `project.yml`,
+  `scripts/release.sh`, `scripts/release-ci.sh`,
+  `scripts/exportOptions.plist`, the Apple-signing composite action.
+* **`ios`** → `SpeakistiOS/**`, `SpeakistKeyboard/**`, `Shared/**`,
+  the 8 specific Speakist/* files cross-compiled into the iOS target
+  via project.yml (regenerate the list with
+  `awk '/SpeakistiOS:/,/info:/' project.yml | grep 'path: Speakist/'`),
+  `scripts/release-ios-ci.sh`, `scripts/exportOptions-ios.plist`,
+  the Apple-signing composite action.
+
+A change in `Shared/` triggers both Apple jobs. A change in any of
+the 8 cross-compiled `Speakist/<file>.swift` paths triggers both
+Apple jobs. Edit `project.yml` and the workflow file and you trigger
+all three.
 
 The Mac job reuses `scripts/release.sh` (the same script used for
 local-laptop releases) via a thin `scripts/release-ci.sh` wrapper that

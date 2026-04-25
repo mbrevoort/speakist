@@ -16,22 +16,18 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MobileNav } from "@/components/dashboard/mobile-nav";
-import type { DashboardRole } from "@/components/dashboard/nav-items";
-
 interface TopbarProps {
   userEmail: string;
   userDisplayName: string | null;
   isSuperAdmin: boolean;
   signOutAction: () => Promise<void>;
-  /** Org name + role drive the mobile nav drawer (which mirrors the
-   *  desktop dashboard Sidebar). On md+ the drawer never opens, so
-   *  these are only used on small viewports. Omitted by the admin
-   *  layout, which has its own sidebar and no org/role context — when
-   *  absent we render a spacer instead so the avatar stays right-
-   *  aligned via justify-between. */
-  orgName?: string;
-  role?: DashboardRole;
+  /** Slot rendered on the left of the topbar — typically a hamburger
+   *  trigger that opens a mobile nav drawer (md:hidden). Each layout
+   *  supplies its own variant: dashboard layout passes <MobileNav>,
+   *  admin layout passes <AdminMobileNav>. Omit when no left-side
+   *  surface is needed; a spacer keeps the avatar right-aligned via
+   *  justify-between. */
+  mobileNav?: React.ReactNode;
 }
 
 export function Topbar({
@@ -39,14 +35,13 @@ export function Topbar({
   userDisplayName,
   isSuperAdmin,
   signOutAction,
-  orgName,
-  role,
+  mobileNav,
 }: TopbarProps) {
   const initial = (userDisplayName?.[0] ?? userEmail[0] ?? "?").toUpperCase();
 
   return (
     <header className="h-16 shrink-0 border-b border-border/70 bg-background/70 backdrop-blur flex items-center justify-between gap-3 px-4 sm:px-6">
-      {orgName && role ? <MobileNav orgName={orgName} role={role} /> : <span />}
+      {mobileNav ?? <span />}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

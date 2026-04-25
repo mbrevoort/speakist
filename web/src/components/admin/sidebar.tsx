@@ -1,28 +1,18 @@
-// Super-admin sidebar. Parallel to the dashboard sidebar but with a
-// distinct palette (plum-tinted header) so the operator never forgets
-// they're in an elevated context.
+// Super-admin sidebar (md+ only). Below md, AdminMobileNav renders an
+// equivalent drawer from the topbar's hamburger. NAV list + active-link
+// logic live in nav-items.ts so both surfaces stay in sync.
+//
+// Distinct plum palette (vs. the dashboard's peach) so the operator
+// never forgets they're in an elevated context.
 
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Building2, DollarSign, Home, Server, Shield, Users } from "lucide-react";
+import { ArrowLeft, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/brand/logo";
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-}
-
-const NAV: NavItem[] = [
-  { label: "Overview", href: "/admin", icon: Home },
-  { label: "Organizations", href: "/admin/orgs", icon: Building2 },
-  { label: "Users", href: "/admin/users", icon: Users },
-  { label: "Pricing", href: "/admin/pricing", icon: DollarSign },
-  { label: "System", href: "/admin/system", icon: Server },
-];
+import { ADMIN_NAV, isAdminNavActive } from "@/components/admin/nav-items";
 
 export function AdminSidebar() {
   const pathname = usePathname();
@@ -47,11 +37,8 @@ export function AdminSidebar() {
       </div>
 
       <nav className="flex-1 px-3 py-3 space-y-0.5" aria-label="Admin navigation">
-        {NAV.map((item) => {
-          const active =
-            item.href === "/admin"
-              ? pathname === "/admin"
-              : pathname.startsWith(item.href);
+        {ADMIN_NAV.map((item) => {
+          const active = isAdminNavActive(item.href, pathname);
           const Icon = item.icon;
           return (
             <Link
