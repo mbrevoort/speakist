@@ -1,21 +1,24 @@
 // Per-(org, provider) API key resolution.
 //
-// Lookup order:
-//   1. Org-specific override (encrypted in the DB).
-//      For Phase A only Deepgram has an override column — we reuse the
-//      existing `organizations.deepgramKeyOverrideEncrypted`. Phase B adds
-//      a `providerKeysEncrypted` JSON envelope column covering all providers.
-//   2. Env secret, read from the Cloudflare context env FIRST (authoritative
-//      in deployed Workers + bindings shape), then falling back to
-//      `process.env` (how `pnpm dev` surfaces `.env.local` values —
-//      Cloudflare's local dev env only carries wrangler-declared bindings,
-//      not arbitrary local env-file keys). Existing `deepgram.ts` uses
-//      `process.env` for the same reason.
-//   3. Throw — admin hasn't configured this provider yet.
+// Lookup order (in this order — first hit wins):
+//   1. Org-specific override (encrypted in `organizations.<provider>_key_override_encrypted`).
+//      Per-org override always trumps system defaults; lets a customer
+//      bring their own provider account so usage hits their billing,
+//      not ours.
+//   2. System-wide key (encrypted in `app_settings.system_<provider>_key_encrypted`).
+//      Configured by super admin at /admin/system. This is what most
+//      orgs use — Groq is the default provider for new orgs, so the
+//      system Groq key is load-bearing.
+//   3. Env secret, read from the Cloudflare context env FIRST (deployed
+//      Worker secrets land there), then process.env (`pnpm dev` reads
+//      `.env.local` into process.env only). Mostly a local-dev fallback
+//      so contributors don't need to run a system-key migration before
+//      their first `pnpm dev`.
+//   4. Throw — provider isn't configured at any level.
 
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { organizations } from "@/lib/db/schema";
+import { appSettings, organizations } from "@/lib/db/schema";
 import { decryptSecret } from "@/lib/crypto";
 import { TranscriptionDispatchError, type ProviderId } from "./types";
 
@@ -43,12 +46,13 @@ export async function resolveProviderKey(
   orgId: string,
   providerId: ProviderId
 ): Promise<string> {
-  // 1. Org override. We select both override columns in one query; cheaper
-  //    than a conditional round-trip, and keeps the future "one more
-  //    provider" work to a single .select() line.
+  // 1. Org override + 2. system key — single round-trip joining
+  //    organizations and app_settings. We need both for both providers
+  //    (deepgram + groq), so one query is cheaper than two conditionals.
   if (providerId === "deepgram" || providerId === "groq") {
     const db = getDb();
-    const [row] = await db
+
+    const [orgRow] = await db
       .select({
         deepgram: organizations.deepgramKeyOverrideEncrypted,
         groq: organizations.groqKeyOverrideEncrypted,
@@ -56,24 +60,39 @@ export async function resolveProviderKey(
       .from(organizations)
       .where(eq(organizations.id, orgId))
       .limit(1);
-    const envelope = providerId === "deepgram" ? row?.deepgram : row?.groq;
-    if (envelope) {
-      return decryptSecret(envelope);
+
+    const orgOverride =
+      providerId === "deepgram" ? orgRow?.deepgram : orgRow?.groq;
+    if (orgOverride) {
+      return decryptSecret(orgOverride);
+    }
+
+    const [systemRow] = await db
+      .select({
+        deepgram: appSettings.systemDeepgramKeyEncrypted,
+        groq: appSettings.systemGroqKeyEncrypted,
+      })
+      .from(appSettings)
+      .where(eq(appSettings.id, 1))
+      .limit(1);
+
+    const systemKey =
+      providerId === "deepgram" ? systemRow?.deepgram : systemRow?.groq;
+    if (systemKey) {
+      return decryptSecret(systemKey);
     }
   }
 
-  // 2. Environment secret. Cloudflare context env first (deployed Worker
-  //    secrets land there), then process.env (local `pnpm dev` reads
-  //    `.env.local` into process.env only).
+  // 3. Environment secret. Local-dev fallback for contributors who
+  //    haven't run the migration to populate the system key yet.
   const fieldName = ENV_KEY_FIELD[providerId];
   const envKey = env[fieldName] ?? process.env[fieldName];
   if (envKey && envKey.length > 0) return envKey;
 
-  // 3. Not configured.
+  // 4. Not configured.
   throw new TranscriptionDispatchError(
     "no_key_configured",
-    `No ${providerId} API key. For deployed Worker: ` +
-      `\`wrangler secret put ${fieldName} --env <dev|production>\`. ` +
-      `For local pnpm dev: add ${fieldName}=... to web/.env.local.`
+    `No ${providerId} API key. Set the system key at /admin/system, ` +
+      `or for local dev add ${fieldName}=... to web/.env.local.`
   );
 }

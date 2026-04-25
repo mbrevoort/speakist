@@ -14,11 +14,31 @@ import { encryptSecret } from "@/lib/crypto";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
-// --- Deepgram system key --------------------------------------------------
+// --- System provider keys -------------------------------------------------
+//
+// Both providers go through the same shape — encrypt + write or null +
+// write — so a single helper keeps the two server actions structurally
+// identical. The differences are: which schema column to update, what
+// "looks like a valid key" check to apply, and the user-facing copy in
+// success/error messages.
 
 const schema = z.object({ key: z.string().trim() });
 
-export async function setSystemDeepgramKey(formData: FormData): Promise<ActionResult> {
+interface ProviderKeySpec {
+  /** Drizzle column setter — receives `{ [col]: encrypted }` or `{ [col]: null }`. */
+  setColumn: (value: string | null) => Record<string, string | null>;
+  /** Lightweight format check ("does this look like the right shape?"). */
+  isValidFormat: (key: string) => boolean;
+  /** "That doesn't look like a..." error returned when isValidFormat fails. */
+  formatError: string;
+  /** Human-readable label for log messages. */
+  label: string;
+}
+
+async function setSystemProviderKey(
+  formData: FormData,
+  spec: ProviderKeySpec
+): Promise<ActionResult> {
   try {
     await requireSuperAdmin();
     const parsed = schema.safeParse({ key: formData.get("key") || "" });
@@ -29,26 +49,26 @@ export async function setSystemDeepgramKey(formData: FormData): Promise<ActionRe
     if (parsed.data.key === "") {
       await db
         .update(appSettings)
-        .set({ systemDeepgramKeyEncrypted: null })
+        .set(spec.setColumn(null))
         .where(eq(appSettings.id, 1));
       revalidatePath("/admin/system");
       return { ok: true, message: "System key cleared." };
     }
 
-    if (!/^[A-Za-z0-9_-]{20,}$/.test(parsed.data.key)) {
-      return { ok: false, error: "That doesn't look like a Deepgram key." };
+    if (!spec.isValidFormat(parsed.data.key)) {
+      return { ok: false, error: spec.formatError };
     }
 
     const encrypted = await encryptSecret(parsed.data.key);
     await db
       .update(appSettings)
-      .set({ systemDeepgramKeyEncrypted: encrypted })
+      .set(spec.setColumn(encrypted))
       .where(eq(appSettings.id, 1));
 
     revalidatePath("/admin/system");
     return { ok: true, message: "System key saved." };
   } catch (err) {
-    console.error("setSystemDeepgramKey failed:", err);
+    console.error(`setSystem${spec.label}Key failed:`, err);
     if (String(err).includes("APP_ENCRYPTION_KEY")) {
       return {
         ok: false,
@@ -57,6 +77,28 @@ export async function setSystemDeepgramKey(formData: FormData): Promise<ActionRe
     }
     return { ok: false, error: "Couldn't save." };
   }
+}
+
+export async function setSystemDeepgramKey(formData: FormData): Promise<ActionResult> {
+  return setSystemProviderKey(formData, {
+    setColumn: (v) => ({ systemDeepgramKeyEncrypted: v }),
+    // Deepgram project keys are base64ish 40-char strings.
+    isValidFormat: (k) => /^[A-Za-z0-9_-]{20,}$/.test(k),
+    formatError: "That doesn't look like a Deepgram key.",
+    label: "Deepgram",
+  });
+}
+
+export async function setSystemGroqKey(formData: FormData): Promise<ActionResult> {
+  return setSystemProviderKey(formData, {
+    setColumn: (v) => ({ systemGroqKeyEncrypted: v }),
+    // Groq keys are prefixed `gsk_` followed by ~50 alphanumeric chars.
+    // Accept either the prefixed form or a raw token long enough to plausibly
+    // be a key — letting us paste a new format without a code change.
+    isValidFormat: (k) => /^(gsk_)?[A-Za-z0-9_-]{30,}$/.test(k),
+    formatError: "That doesn't look like a Groq key (expected gsk_…).",
+    label: "Groq",
+  });
 }
 
 // --- allow_public_org_creation toggle -------------------------------------

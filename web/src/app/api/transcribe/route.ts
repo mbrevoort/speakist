@@ -1,30 +1,40 @@
-// POST /api/transcribe — Phase A of the Worker-proxied transcription rollout.
+// POST /api/transcribe — Worker-proxied transcription endpoint.
 //
-// Replaces the old (mint Deepgram token → Mac POSTs to Deepgram → separate
-// /api/usage call) flow. The Mac now:
-//   1. POSTs audio bytes directly to this endpoint
-//   2. We forward to the chosen provider (Phase A: Deepgram only)
-//   3. We debit credits inline from the provider-reported audio duration
-//   4. We return { text, audioSeconds, usageEventId, newBalanceMillicents }
+// Mac and iOS clients:
+//   1. POST audio bytes here
+//   2. Worker resolves (provider, model) from the user's language and
+//      the org's allowed-models list (super admin → Org page)
+//   3. Worker forwards to the chosen provider
+//   4. Worker debits credits from the provider-reported audio duration
+//   5. Worker returns { text, audioSeconds, usageEventId, newBalanceMillicents }
+//
+// Routing rules (no client knobs):
+//   * English (X-Language ~ /^en/) → Groq Whisper Turbo
+//   * anything else → Groq Whisper Large (multilingual)
+//   * org's `allowed_models_json` whitelist overrides: if it's set and
+//     the language default isn't in it, the first allowed entry wins.
+//     Super admins use this to pin specific orgs to Deepgram.
 //
 // Request:
 //   POST /api/transcribe
-//   Authorization: Bearer <mac-session-token>
+//   Authorization: Bearer <session-token>
 //   Content-Type: audio/wav   (or audio/mpeg / audio/ogg — passed through
 //                              to the provider verbatim)
 //   X-Transcription-Id: <uuid>         required — dedup key
-//   X-Provider-Hint: deepgram          Phase A: only "deepgram" allowed
-//   X-Model-Hint: nova-3 | nova-2      default "nova-3"
-//   X-Language: en                     optional (ISO code)
+//   X-Language: en                     optional (ISO code, drives routing)
+//   X-Detect-Language: true|false      optional, treated as "non-English"
+//                                       so multilingual model is picked
 //   X-Keyterms: term1,term2            optional, comma-separated
 //   X-Replace: find1:rep1;find2:rep2   optional, semicolon-separated pairs
 //   X-Dictation: true|false
 //   X-Filler-Words: true|false
 //   X-Measurements: true|false
 //   X-Profanity-Filter: true|false
-//   X-Detect-Language: true|false
 //   X-Audio-Ms: 2345                   Mac-side duration hint, fallback only
 //   Body: raw audio bytes
+//
+// Headers `X-Provider-Hint` / `X-Model-Hint` from older clients are
+// silently ignored — left in place for tolerance, not honored.
 //
 // Response (JSON):
 //   200 { text, audioSeconds, provider, model, usageEventId, newBalanceMillicents, autoTopupTriggered }
@@ -49,8 +59,8 @@ import { users } from "@/lib/db/schema";
 import { dispatch, TranscriptionDispatchError } from "@/lib/transcription";
 import { logTranscriptionEvent } from "@/lib/transcription/analytics";
 import { runPolish } from "@/lib/transcription/polish";
-import { checkOrgModelAccess } from "@/lib/transcription/orgAccess";
-import { isProviderId, type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
+import { resolveProviderForOrg } from "@/lib/transcription/orgAccess";
+import { type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
 
 /** Workers' default request-body cap is generous; we enforce a sensible
  *  one to keep audio from blowing past reasonable batch-transcription
@@ -63,9 +73,12 @@ export async function POST(req: Request): Promise<Response> {
   const { env } = await getCloudflareContext({ async: true });
 
   // Defaults for the analytics log so we always emit one event per request.
+  // Routing is decided server-side now (was: client X-Provider-Hint
+  // headers), so we initialize to the most common default — English →
+  // Groq Whisper Turbo. Reassigned post-resolution before any real work.
   let orgId = "unknown";
-  let providerId: ProviderId = "deepgram";
-  let model = "nova-3";
+  let providerId: ProviderId = "groq";
+  let model = "whisper-large-v3-turbo";
   let audioMs = 0;
   let upstreamMc = 0;
   let retailMc = 0;
@@ -110,33 +123,29 @@ export async function POST(req: Request): Promise<Response> {
     return finish("invalid_input", json({ error: "missing_or_short_X-Transcription-Id" }, 400));
   }
 
-  const providerHint = (req.headers.get("X-Provider-Hint") ?? "deepgram").toLowerCase();
-  if (!isProviderId(providerHint)) {
-    return finish(
-      "invalid_input",
-      json({ error: "bad_provider", allowed: ["deepgram", "groq"] }, 400)
-    );
-  }
-  providerId = providerHint;
-
-  model = (req.headers.get("X-Model-Hint") ?? "nova-3").trim();
-  if (model.length === 0) model = "nova-3";
-
-  // ---- org allowed-models gate -------------------------------------------
-  const access = await checkOrgModelAccess(org.id, providerId, model);
-  if (!access.allowed) {
-    return finish(
-      "invalid_input",
-      json(
-        {
-          error: "model_not_allowed",
-          detail: access.reason,
-          allowed: access.allowedSlugs ?? [],
-        },
-        403
-      )
-    );
-  }
+  // ---- provider/model resolution -----------------------------------------
+  // Server picks the (provider, model) — the Mac/iOS clients only send
+  // the user's chosen language. Routing rules:
+  //
+  //   1. Default by language: English → Groq Whisper Turbo (fastest);
+  //      anything else → Groq Whisper Large (multilingual). Auto-detect
+  //      counts as "anything else" since the actual language is unknown.
+  //   2. Org's `allowed_models_json` whitelist (super admin → Org page)
+  //      acts as both a guard and an override knob: if non-empty and the
+  //      language default isn't in it, we use the first allowed entry
+  //      instead. This is how a super admin pins a specific org to e.g.
+  //      DeepGram nova-3 even though the language-based default is Groq.
+  //
+  // X-Provider-Hint / X-Model-Hint headers from older client builds are
+  // intentionally ignored — clients no longer choose, the server does.
+  const language = req.headers.get("X-Language");
+  const detectLanguage = boolHeader(req.headers.get("X-Detect-Language"));
+  const resolved = await resolveProviderForOrg(org.id, {
+    language,
+    detectLanguage,
+  });
+  providerId = resolved.providerId;
+  model = resolved.model;
 
   // ---- balance gate (comped orgs bypass) ---------------------------------
   if (!org.isComped) {
@@ -174,14 +183,14 @@ export async function POST(req: Request): Promise<Response> {
     audioBody,
     audioContentType: req.headers.get("Content-Type") ?? "audio/wav",
     transcriptionClientId,
-    language: req.headers.get("X-Language") ?? undefined,
+    language: language ?? undefined,
     keyterms: splitCsv(req.headers.get("X-Keyterms")),
     replaceRules: splitReplace(req.headers.get("X-Replace")),
     dictation: boolHeader(req.headers.get("X-Dictation")),
     fillerWords: boolHeader(req.headers.get("X-Filler-Words")),
     measurements: boolHeader(req.headers.get("X-Measurements")),
     profanityFilter: boolHeader(req.headers.get("X-Profanity-Filter")),
-    detectLanguage: boolHeader(req.headers.get("X-Detect-Language")),
+    detectLanguage,
     audioMsHint: parseInt(req.headers.get("X-Audio-Ms") ?? "0", 10) || undefined,
   };
 

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   setAllowPublicOrgCreation,
   setSystemDeepgramKey,
+  setSystemGroqKey,
   type ActionResult,
 } from "./actions";
 
@@ -21,7 +22,37 @@ import {
 // three-way flex squeeze we had before where the description column
 // collapsed into a one-word-wide column when the result message showed up.
 
-export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
+interface SystemProviderKeyProps {
+  /** Human-readable provider name shown in copy ("Deepgram", "Groq"). */
+  providerLabel: string;
+  /** Whether a system key is currently set on this provider. */
+  hasKey: boolean;
+  /** Server action that persists the key (or clears it when "" is passed). */
+  saveAction: (formData: FormData) => Promise<ActionResult>;
+  /** When-not-set explanation rendered above the action row. Provider-
+   *  specific because the consequence of "no key" differs per provider:
+   *  Groq is the default for new orgs, Deepgram is opt-in via super admin. */
+  emptyStateExplainer: string;
+  /** Confirm-prompt text shown in window.confirm() before clearing. */
+  clearConfirmPrompt: string;
+  /** Placeholder text inside the password input. */
+  placeholder: string;
+}
+
+/**
+ * Generic "system-wide encrypted API key" widget. The DeepGram and Groq
+ * cards are thin wrappers passing provider-specific copy + the matching
+ * server action. Single component avoids the two-cards-go-out-of-sync
+ * failure mode where one provider's UX gets a tweak the other doesn't.
+ */
+function SystemProviderKey({
+  providerLabel,
+  hasKey,
+  saveAction,
+  emptyStateExplainer,
+  clearConfirmPrompt,
+  placeholder,
+}: SystemProviderKeyProps) {
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
   const [mode, setMode] = useState<"view" | "edit">("view");
@@ -40,8 +71,8 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
           </p>
           <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
             {hasKey
-              ? "Stored encrypted. We can't show it back; to rotate, paste a fresh one. Orgs without their own override use this key."
-              : "Without a system key, orgs without overrides can't transcribe. Set one before inviting production users."}
+              ? `Stored encrypted. We can't show it back; to rotate, paste a fresh one. Orgs without their own ${providerLabel} override use this key.`
+              : emptyStateExplainer}
           </p>
         </div>
 
@@ -52,11 +83,11 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
           {hasKey && (
             <form
               action={async (fd) => {
-                if (!window.confirm("Clear the system Deepgram key? Transcription will break for orgs without their own override.")) {
+                if (!window.confirm(clearConfirmPrompt)) {
                   return;
                 }
                 fd.set("key", "");
-                startTransition(async () => setResult(await setSystemDeepgramKey(fd)));
+                startTransition(async () => setResult(await saveAction(fd)));
               }}
             >
               <Button type="submit" variant="outline" size="sm" disabled={pending}>
@@ -75,7 +106,7 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
       action={(fd) => {
         setResult(null);
         startTransition(async () => {
-          const r = await setSystemDeepgramKey(fd);
+          const r = await saveAction(fd);
           setResult(r);
           if (r.ok) setMode("view");
         });
@@ -87,7 +118,7 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
         name="key"
         autoComplete="off"
         required
-        placeholder="Deepgram API key"
+        placeholder={placeholder}
         className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
       />
       <div className="flex flex-wrap items-center gap-3">
@@ -105,6 +136,32 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
         {result && <InlineResult result={result} />}
       </div>
     </form>
+  );
+}
+
+export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
+  return (
+    <SystemProviderKey
+      providerLabel="Deepgram"
+      hasKey={hasKey}
+      saveAction={setSystemDeepgramKey}
+      emptyStateExplainer="Without a Deepgram system key, only orgs with their own per-org override can use Deepgram models. Default-routed orgs use Groq, so this is optional unless a super admin specifically points an org at Deepgram via the allowed-models list."
+      clearConfirmPrompt="Clear the system Deepgram key? Any org routed to Deepgram without its own override will fail to transcribe."
+      placeholder="Deepgram API key"
+    />
+  );
+}
+
+export function SystemGroqKey({ hasKey }: { hasKey: boolean }) {
+  return (
+    <SystemProviderKey
+      providerLabel="Groq"
+      hasKey={hasKey}
+      saveAction={setSystemGroqKey}
+      emptyStateExplainer="Without a Groq system key, every org without its own Groq override will fail to transcribe. Groq is the default provider for new orgs, so set this before inviting production users."
+      clearConfirmPrompt="Clear the system Groq key? Default-routed orgs (English → Groq Whisper Turbo, other languages → Groq Whisper Large) will fail to transcribe until you set it again."
+      placeholder="Groq API key (gsk_...)"
+    />
   );
 }
 
@@ -141,7 +198,7 @@ export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: b
         <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
           {enabled
             ? "Anyone who signs in gets a workspace auto-created and $5 in signup credit. This is the production default."
-            : "New signups without an invitation or matching auto-join domain won\u2019t get a workspace; they land on an \u201Cawaiting invitation\u201D screen. Existing orgs can still invite members and auto-join by email domain."}
+            : "New signups without an invitation or matching auto-join domain won’t get a workspace; they land on an “awaiting invitation” screen. Existing orgs can still invite members and auto-join by email domain."}
         </p>
       </div>
 

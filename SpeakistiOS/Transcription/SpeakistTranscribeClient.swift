@@ -21,24 +21,13 @@ struct SpeakistTranscribeClient {
     /// Opaque ID the client generates per-recording. Server dedupes on
     /// retries so a dropped connection + retry doesn't double-bill.
     let transcriptionClientId: String
-    /// Provider hint sent to the server ("deepgram" or "groq"). The
-    /// server overrides this per-org policy so clients don't need to
-    /// know org-level restrictions — we pass our default and let the
-    /// server sort it out.
-    let provider: String
-    /// Model hint for the chosen provider. Same override semantics.
-    let model: String
 
     init(apiBaseURL: URL,
          bearerToken: String,
-         transcriptionClientId: String = UUID().uuidString,
-         provider: String = "deepgram",
-         model: String = "nova-3") {
+         transcriptionClientId: String = UUID().uuidString) {
         self.apiBaseURL = apiBaseURL
         self.bearerToken = bearerToken
         self.transcriptionClientId = transcriptionClientId
-        self.provider = provider
-        self.model = model
     }
 
     nonisolated func transcribe(audioURL: URL, language: String? = nil) async throws -> TranscriptionResult {
@@ -54,9 +43,11 @@ struct SpeakistTranscribeClient {
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.setValue(transcriptionClientId, forHTTPHeaderField: "X-Transcription-Id")
-        request.setValue(provider, forHTTPHeaderField: "X-Provider-Hint")
-        request.setValue(model, forHTTPHeaderField: "X-Model-Hint")
         request.setValue(String(audioMs), forHTTPHeaderField: "X-Audio-Ms")
+        // X-Provider-Hint / X-Model-Hint are not sent — the Worker picks
+        // provider+model from the org's allowed-models list (configured
+        // by super admin) and the X-Language hint below. English →
+        // Groq Whisper Turbo by default; other languages → Whisper Large.
         if let language, !language.isEmpty {
             request.setValue(language, forHTTPHeaderField: "X-Language")
         }

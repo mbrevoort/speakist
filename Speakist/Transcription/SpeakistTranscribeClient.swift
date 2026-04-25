@@ -25,8 +25,6 @@ import Foundation
 struct SpeakistTranscribeClient: TranscriptionClient {
     let apiBaseURL: URL
     let bearerToken: String
-    let provider: String
-    let model: String
     let transcriptionClientId: String
 
     // Deepgram-specific options — forwarded to the server as X-* headers.
@@ -39,8 +37,15 @@ struct SpeakistTranscribeClient: TranscriptionClient {
     let detectLanguage: Bool
     let replaceRules: [ReplaceRule]
 
-    nonisolated var providerLabel: String { provider }
-    nonisolated var modelLabel: String { model }
+    // Provider + model are no longer chosen client-side — the Worker picks
+    // based on the user's chosen language and the org's super-admin-set
+    // allowed-models list. Pre-call labels report "auto" so audit rows
+    // capture "we asked the server to decide"; post-call, the actual
+    // (provider, model) the server picked is returned in
+    // `TranscriptionResult.providerModelLabel` and is what gets recorded
+    // in usage_events server-side.
+    nonisolated var providerLabel: String { "auto" }
+    nonisolated var modelLabel: String { "auto" }
 
     nonisolated func transcribe(audioURL: URL, keyterms: [String], language: String?) async throws -> TranscriptionResult {
         let audioMs = (try? FileManager.default.attributesOfItem(atPath: audioURL.path)[.size] as? Int)
@@ -60,9 +65,12 @@ struct SpeakistTranscribeClient: TranscriptionClient {
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.setValue(transcriptionClientId, forHTTPHeaderField: "X-Transcription-Id")
-        request.setValue(provider, forHTTPHeaderField: "X-Provider-Hint")
-        request.setValue(model, forHTTPHeaderField: "X-Model-Hint")
         request.setValue(String(audioMs), forHTTPHeaderField: "X-Audio-Ms")
+        // Note: X-Provider-Hint / X-Model-Hint are intentionally NOT sent.
+        // The server picks provider+model from X-Language and the org's
+        // super-admin-configured allowed-models whitelist. Older builds
+        // that send the hint headers are tolerated by the server (which
+        // ignores them) so a forced upgrade isn't required.
 
         if let lang = language, !lang.isEmpty {
             request.setValue(lang, forHTTPHeaderField: "X-Language")

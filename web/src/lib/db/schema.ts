@@ -355,6 +355,13 @@ export const pricingConfig = sqliteTable("pricing_config", {
 export const appSettings = sqliteTable("app_settings", {
   id: integer("id").primaryKey().default(1),
   systemDeepgramKeyEncrypted: text("system_deepgram_key_encrypted"),
+  // System-wide Groq API key, encrypted at rest with APP_ENCRYPTION_KEY.
+  // Used as the default for any org without its own groq_key_override.
+  // Configured via the super admin /admin/system page. Default routing
+  // is now Groq-first (English → Whisper Turbo, else → Whisper Large)
+  // so this key is actually load-bearing — without it the transcribe
+  // path 500s for every org that hasn't set its own override.
+  systemGroqKeyEncrypted: text("system_groq_key_encrypted"),
   // When false, provisionNewUser stops auto-creating a workspace for
   // brand-new signups that don't match an existing org's auto_join_domain.
   // Used to lock down dev/staging to invite-only access. Production stays

@@ -429,83 +429,24 @@ struct TranscriptionSettingsView: View {
 
     var body: some View {
         Form {
+            // Provider + model selection lives in the super admin org page now.
+            // English defaults to Groq Whisper Turbo (fastest); other languages
+            // default to Groq Whisper Large (most accurate multilingual).
+            // A super admin can override per-org via the allowed-models list.
+            // The Mac side just sends the chosen language and lets the Worker
+            // resolve which model to call.
             Section {
-                // Two-level picker — provider first, then model within that
-                // provider. Changing provider auto-resets the model to the
-                // provider's default (handled in Preferences setter) so the
-                // UI never shows an invalid combo.
-                Picker("Provider", selection: Binding(
-                    get: { prefs.transcriptionProvider },
-                    set: { prefs.transcriptionProvider = $0 })) {
-                    ForEach(TranscriptionProvider.allCases) { p in
-                        Text(p.displayName).tag(p)
-                    }
-                }
-
-                Picker("Model", selection: Binding(
-                    get: { prefs.transcriptionModel },
-                    set: { prefs.transcriptionModel = $0 })) {
-                    ForEach(prefs.transcriptionProvider.models, id: \.self) { slug in
-                        Text(prefs.transcriptionProvider.modelDisplayName(slug)).tag(slug)
-                    }
-                }
-
-                Text(providerBlurb(for: prefs.transcriptionProvider))
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("Transcription engine")
-            }
-
-            Section("Language") {
                 Picker("Language", selection: Binding(
                     get: { prefs.language },
                     set: { prefs.language = $0 })) {
                     Text("English").tag("en")
                     Text("Auto-detect").tag("")
                 }
-            }
-
-            // Deepgram-specific knobs. Whisper (Groq) doesn't expose these
-            // as explicit parameters — its steering is prompt-based — so
-            // showing them with no effect would be misleading. Hide the
-            // whole section when a non-Deepgram provider is selected.
-            if prefs.transcriptionProvider == .deepgram {
-                Section {
-                    Toggle("Voice commands for punctuation", isOn: Binding(
-                        get: { prefs.dictationMode },
-                        set: { prefs.dictationMode = $0 }))
-                    Text("When on, say \u{201C}period\u{201D}, \u{201C}comma\u{201D}, \u{201C}question mark\u{201D}, \u{201C}new line\u{201D}, \u{201C}new paragraph\u{201D} and they\u{2019}re converted to the matching characters. Trade-off: Deepgram stops inferring punctuation from pauses, so you need to say commands explicitly. Leave off for natural, automatically-punctuated speech.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    Toggle("Include filler words (\u{201C}um\u{201D}, \u{201C}uh\u{201D})", isOn: Binding(
-                        get: { prefs.includeFillerWords },
-                        set: { prefs.includeFillerWords = $0 }))
-                    Text("Off by default so dictation reads cleanly. Turn on for verbatim capture.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    Toggle("Convert measurements (\u{201C}milligram\u{201D} \u{2192} \u{201C}mg\u{201D})", isOn: Binding(
-                        get: { prefs.convertMeasurements },
-                        set: { prefs.convertMeasurements = $0 }))
-
-                    Toggle("Mask profanity", isOn: Binding(
-                        get: { prefs.maskProfanity },
-                        set: { prefs.maskProfanity = $0 }))
-                    Text("Replaces profanity with asterisks.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    Toggle("Auto-detect language", isOn: Binding(
-                        get: { prefs.autoDetectLanguage },
-                        set: { prefs.autoDetectLanguage = $0 }))
-                    Text("Overrides the language setting above. Useful if you dictate in multiple languages; slight accuracy cost on single-language clips.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                } header: {
-                    Text("Deepgram formatting")
-                }
+                Text("English uses the fastest Whisper model. Other languages and Auto-detect use the multilingual Whisper Large model.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Language")
             }
 
             Section("Diagnostics") {
@@ -522,17 +463,6 @@ struct TranscriptionSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-    }
-
-    /// Short tooltip under the model picker, explaining the characteristic
-    /// trade-offs of each provider at a glance.
-    private func providerBlurb(for p: TranscriptionProvider) -> String {
-        switch p {
-        case .deepgram:
-            return "Highest accuracy for dictation-style English speech. Supports keyterms, measurements, profanity filter, and \u{201C}say period, new line\u{201D} voice commands."
-        case .groq:
-            return "Whisper v3 on Groq hardware — very fast, much cheaper per minute than Deepgram. Fewer knobs (no voice commands, no measurement conversion), but strong multilingual accuracy."
-        }
     }
 
     private func runTestRecording() async {
@@ -574,8 +504,6 @@ struct TranscriptionSettingsView: View {
                 let client = SpeakistTranscribeClient(
                     apiBaseURL: prefs.apiBaseURL,
                     bearerToken: token,
-                    provider: prefs.transcriptionProvider.rawValue,
-                    model: prefs.transcriptionModel,
                     transcriptionClientId: UUID().uuidString,
                     dictation: prefs.dictationMode,
                     fillerWords: prefs.includeFillerWords,
