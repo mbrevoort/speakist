@@ -13,17 +13,32 @@ struct HistoryView: View {
             if history.entries.isEmpty {
                 emptyState
             } else {
-                ForEach(history.entries) { entry in
-                    NavigationLink {
-                        HistoryDetailView(entry: entry)
-                    } label: {
-                        HistoryRow(entry: entry)
+                Section {
+                    ForEach(history.entries) { entry in
+                        NavigationLink {
+                            HistoryDetailView(entry: entry)
+                        } label: {
+                            HistoryRow(entry: entry)
+                        }
                     }
-                }
-                .onDelete { indexSet in
-                    for i in indexSet {
-                        history.delete(id: history.entries[i].id)
+                    .onDelete { indexSet in
+                        for i in indexSet {
+                            history.delete(id: history.entries[i].id)
+                        }
                     }
+                } footer: {
+                    // Reinforce on-device storage at the bottom of the list
+                    // too — users who land here without reading the home
+                    // screen footer still get the privacy story. iCloud-
+                    // sounding terms ("Synced", "All your devices") are
+                    // deliberately avoided since none of that's true.
+                    Label(
+                        "Stored only on this device. Speakist does not upload your dictation history.",
+                        systemImage: "lock.shield"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
                 }
             }
         }
@@ -54,6 +69,13 @@ struct HistoryView: View {
                 .font(.footnote)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
+            // Same on-device messaging that the populated list shows in
+            // its footer — keeps the privacy assurance visible even
+            // before the user has any history to look at.
+            Label("Stored only on this device", systemImage: "lock.shield")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

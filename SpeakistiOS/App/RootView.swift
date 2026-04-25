@@ -58,6 +58,9 @@ struct HomeView: View {
 
                 Section("Account") {
                     AccountRow()
+                    if account.isSignedIn {
+                        DashboardLink()
+                    }
                 }
 
                 Section {
@@ -76,7 +79,13 @@ struct HomeView: View {
                 } header: {
                     Text("Dictations")
                 } footer: {
-                    Text("Every Quick Dictate and keyboard transcript is saved here.")
+                    // Storage location is privacy-relevant — call it out so
+                    // users don't assume their transcripts are sitting in
+                    // some cloud account they can't see. The HistoryStore
+                    // writes to the App Group container on this device only;
+                    // nothing about the transcript text leaves the phone
+                    // after the transcribe API returns it.
+                    Text("Saved on this device only — never uploaded.")
                 }
 
                 Section("Status") {
@@ -190,6 +199,29 @@ private struct QuickDictateCTA: View {
         .disabled(!isSignedIn)
         .padding(.horizontal)
         .padding(.vertical, 8)
+    }
+}
+
+/// External-link row that opens the web dashboard in Safari (or the
+/// in-app SFSafariViewController, but UIApplication.open keeps things
+/// simple — Safari already has the user's session cookie if they signed
+/// in via the device-code flow). URL is channel-aware so dev builds open
+/// `speakist-dev.brevoortstudio.com`, stable builds open `speakist.ai`.
+private struct DashboardLink: View {
+    var body: some View {
+        Button {
+            let base = SpeakistChannel.current.defaultAPIBaseURL
+            if let url = URL(string: "/dashboard", relativeTo: base) {
+                UIApplication.shared.open(url)
+            }
+        } label: {
+            HStack {
+                Label("Open Dashboard", systemImage: "safari")
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
