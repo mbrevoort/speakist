@@ -1,44 +1,30 @@
-// Dashboard left sidebar. Static links; active state derived from
-// pathname. Minimal on purpose — the nav will grow with Phase 4 (billing,
-// usage) and Phase 5 (super admin), but Phase 3 just has three entries.
+// Dashboard left sidebar (md+ only). On smaller viewports MobileNav
+// renders an equivalent drawer that's opened from a hamburger button
+// in the topbar. Active-state logic and the NAV list itself live in
+// nav-items.ts so both surfaces stay in sync.
 
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BarChart3, CreditCard, Home, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/brand/logo";
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-  disabled?: boolean;
-  disabledReason?: string;
-  /** When true, only render this entry for owners/admins. */
-  adminOnly?: boolean;
-}
-
-const NAV: NavItem[] = [
-  { label: "Overview", href: "/dashboard", icon: Home },
-  { label: "Usage", href: "/dashboard/usage", icon: BarChart3 },
-  { label: "Billing", href: "/dashboard/billing", icon: CreditCard, adminOnly: true },
-  { label: "Members", href: "/dashboard/members", icon: Users },
-  { label: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: true },
-];
+import {
+  isNavActive,
+  visibleNavItems,
+  type DashboardRole,
+} from "@/components/dashboard/nav-items";
 
 interface SidebarProps {
   orgName: string;
   /** Current user's role within `orgName`. Drives which nav entries
    *  render — member-level users don't see Billing or Settings. */
-  role: "owner" | "admin" | "member";
+  role: DashboardRole;
 }
 
 export function Sidebar({ orgName, role }: SidebarProps) {
   const pathname = usePathname();
-  const isAdmin = role === "owner" || role === "admin";
-  const visible = NAV.filter((item) => isAdmin || !item.adminOnly);
+  const visible = visibleNavItems(role);
 
   return (
     <aside className="hidden md:flex flex-col w-64 shrink-0 border-r border-border/70 bg-white/40">
@@ -58,10 +44,7 @@ export function Sidebar({ orgName, role }: SidebarProps) {
 
       <nav className="flex-1 px-3 space-y-0.5" aria-label="Dashboard navigation">
         {visible.map((item) => {
-          const active =
-            item.href === "/dashboard"
-              ? pathname === "/dashboard"
-              : pathname.startsWith(item.href);
+          const active = isNavActive(item.href, pathname);
 
           const base =
             "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors";

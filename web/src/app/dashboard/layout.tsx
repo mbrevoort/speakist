@@ -85,6 +85,8 @@ export default async function DashboardLayout({
           userDisplayName={user.displayName}
           isSuperAdmin={user.isSuperAdmin}
           signOutAction={signOutAction}
+          orgName={org.name}
+          role={org.role}
         />
         <main className="flex-1 px-6 py-8 sm:px-10 sm:py-10 overflow-y-auto">
           {children}

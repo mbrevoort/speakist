@@ -1,7 +1,8 @@
-// Dashboard top bar. Empty on the left (breadcrumbs land in Phase 5 for
-// super admin), user avatar + menu on the right. `signOutAction` is passed
-// in so the component can stay a pure-presentation client component and
-// the actual sign-out runs as a server action on the server.
+// Dashboard top bar. Hamburger + mobile nav drawer on the left (visible
+// only below md, where the permanent sidebar is hidden), user avatar +
+// menu on the right. `signOutAction` is passed in so the component can
+// stay a pure-presentation client component and the actual sign-out
+// runs as a server action on the server.
 
 "use client";
 
@@ -15,12 +16,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MobileNav } from "@/components/dashboard/mobile-nav";
+import type { DashboardRole } from "@/components/dashboard/nav-items";
 
 interface TopbarProps {
   userEmail: string;
   userDisplayName: string | null;
   isSuperAdmin: boolean;
   signOutAction: () => Promise<void>;
+  /** Org name + role drive the mobile nav drawer (which mirrors the
+   *  desktop dashboard Sidebar). On md+ the drawer never opens, so
+   *  these are only used on small viewports. Omitted by the admin
+   *  layout, which has its own sidebar and no org/role context — when
+   *  absent we render a spacer instead so the avatar stays right-
+   *  aligned via justify-between. */
+  orgName?: string;
+  role?: DashboardRole;
 }
 
 export function Topbar({
@@ -28,11 +39,15 @@ export function Topbar({
   userDisplayName,
   isSuperAdmin,
   signOutAction,
+  orgName,
+  role,
 }: TopbarProps) {
   const initial = (userDisplayName?.[0] ?? userEmail[0] ?? "?").toUpperCase();
 
   return (
-    <header className="h-16 shrink-0 border-b border-border/70 bg-background/70 backdrop-blur flex items-center justify-end px-6">
+    <header className="h-16 shrink-0 border-b border-border/70 bg-background/70 backdrop-blur flex items-center justify-between gap-3 px-4 sm:px-6">
+      {orgName && role ? <MobileNav orgName={orgName} role={role} /> : <span />}
+
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
