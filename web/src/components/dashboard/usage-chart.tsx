@@ -28,7 +28,13 @@ export function UsageChart({ points, metric, className }: Props) {
           return (
             <div
               key={p.day}
-              className="flex-1 group relative flex items-end"
+              // `h-full` is load-bearing: parent has h-40 + items-end,
+              // which prevents flex children from stretching to fill
+              // the cross-axis. Without h-full the wrapper collapses
+              // to content-height (the bar), and the bar's `height: %`
+              // resolves against itself → 0, so bars never render.
+              // h-full restores an explicit 160px so the % math works.
+              className="flex-1 h-full group relative flex items-end"
               title={`${dateFmt.format(new Date(p.day))}: ${
                 metric === "words"
                   ? `${p.words.toLocaleString()} words`
