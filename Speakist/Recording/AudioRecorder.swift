@@ -193,9 +193,17 @@ final class AudioRecorder: ObservableObject {
             sum += v * v
         }
         let rms = sqrt(sum / Float(n))
-        // Speech RMS usually lives in the 0.02–0.15 range.  Apply a sqrt curve
-        // so quiet speech lifts the bars visibly and loud speech still caps at 1.
-        let curved = sqrt(min(rms * 4.0, 1.0))
+        // Two-stage curve tuned for HUD sensitivity:
+        //   * 6× pre-gain so quiet speech actually shows up — typical
+        //     conversational RMS lives around 0.05–0.15, which the
+        //     previous 4× gain compressed into the lower-mid bar range.
+        //   * pow(0.4) (steeper than sqrt's 0.5) lifts the low end
+        //     more aggressively, so a whisper at 0.02 RMS still
+        //     pushes bars to ~40% rather than vanishing.
+        // Loud speech still saturates at 1.0 cleanly because the
+        // pre-gain * cap clamps before the curve.
+        let boosted = min(rms * 6.0, 1.0)
+        let curved = pow(boosted, 0.4)
         return min(max(curved, 0), 1)
     }
 
