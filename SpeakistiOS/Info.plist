@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Speakist</string>
+	<string>$(SPEAKIST_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Speakist</string>
+	<string>$(SPEAKIST_DISPLAY_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -51,7 +51,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Speakist listens when you start a Speak Session and transcribes what you say.</string>
 	<key>SpeakistBuildTimestamp</key>
-	<string>0</string>
+	<string>2026-04-25T17:15:21Z</string>
 	<key>SpeakistChannel</key>
 	<string>$(SPEAKIST_CHANNEL)</string>
 	<key>SpeakistDefaultAPIBaseURL</key>

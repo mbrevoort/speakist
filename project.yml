@@ -9,6 +9,20 @@ options:
   xcodeVersion: "15.0"
   groupSortPosition: top
 
+# Three Xcode configurations. Debug = local-channel work (developer's
+# laptop); Dev = TestFlight + dev-Sparkle-feed builds shipped by CI;
+# Release = stable App Store / Mac Store builds. Mac targets only
+# differ in CFBundleVersion + signing between Dev and Release at build
+# time — `scripts/release.sh` still channel-injects the Release block
+# at runtime, so the Mac Dev: blocks below are placeholders that exist
+# purely to satisfy xcodegen's "every target needs every config"
+# requirement. iOS Dev is a real first-class channel with its own
+# bundle ID, App Group, and TestFlight record.
+configs:
+  Debug: debug
+  Dev: release
+  Release: release
+
 settings:
   base:
     SWIFT_VERSION: "5.10"
@@ -122,6 +136,19 @@ targets:
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+        # Dev: placeholder, never built directly. release.sh always
+        # operates on Release, regardless of which channel it's
+        # producing — this block exists only so xcodegen doesn't
+        # complain about the Mac target missing the Dev configuration
+        # declared at the project root. If you ever build Dev locally
+        # for the Mac (you shouldn't — use `make release CHANNEL=dev`)
+        # you'd get a Release-shaped binary with the same defaults.
+        Dev:
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
+          SPEAKIST_DISPLAY_NAME: "Speakist"
+          SPEAKIST_CHANNEL: stable
+          SPEAKIST_API_BASE_URL: "https://speakist.ai"
+          SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
     dependencies:
       - package: KeyboardShortcuts
       - package: GRDB
@@ -191,8 +218,13 @@ targets:
     info:
       path: SpeakistiOS/Info.plist
       properties:
-        CFBundleName: Speakist
-        CFBundleDisplayName: Speakist
+        # User-facing label on the iOS home screen + Spotlight. Reads
+        # SPEAKIST_DISPLAY_NAME from the per-config build settings so
+        # Local / Dev / Release each get their own visual identity
+        # ("Speakist Local" / "Speakist Dev" / "Speakist") and don't
+        # collide when the user has multiple channels installed.
+        CFBundleName: $(SPEAKIST_DISPLAY_NAME)
+        CFBundleDisplayName: $(SPEAKIST_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
@@ -245,12 +277,14 @@ targets:
       # XcodeGen regenerates this file every run — edit via properties: below.
       path: SpeakistiOS/SpeakistiOS.entitlements
       properties:
-        # App Group shared with the keyboard extension. One group ID per
-        # channel so dev/beta/stable side-by-side installs don't share
-        # state. Extensions that want to talk to us must carry the same
-        # ID in their own entitlements.
+        # App Group shared with the keyboard extension. The string is
+        # a `$(VAR)` substitution that Xcode resolves at code-sign
+        # time, so each Xcode configuration (Debug/Dev/Release) gets
+        # its own group ID via the per-config SPEAKIST_APP_GROUP
+        # setting below. Lets all three channels coexist on a single
+        # device without sharing state.
         com.apple.security.application-groups:
-          - group.com.brevoort-studio.speakist.local
+          - $(SPEAKIST_APP_GROUP)
     settings:
       base:
         PRODUCT_NAME: Speakist
@@ -263,6 +297,8 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.local
           SPEAKIST_CHANNEL: local
+          SPEAKIST_DISPLAY_NAME: "Speakist Local"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.local
           # Points at the deployed dev backend so device builds work
           # without any LAN / Tailscale plumbing. The Mac app's own
           # dev channel uses the same URL. For simulator work against
@@ -278,9 +314,26 @@ targets:
           "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
           "AD_HOC_CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
           "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": YES
+        Dev:
+          # First-class channel for TestFlight dev builds shipped by
+          # CI. Each piece (bundle ID, App Group, channel tag, display
+          # name) coordinates with the Apple Developer portal record:
+          # `com.brevoort-studio.speakist.ios.dev` is registered with
+          # the App Groups capability tied to
+          # `group.com.brevoort-studio.speakist.dev`. Runtime channel
+          # resolution in `Shared/SpeakistChannel.swift` keys off
+          # SPEAKIST_CHANNEL=dev to pick the matching App Group +
+          # URL scheme.
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.dev
+          SPEAKIST_CHANNEL: dev
+          SPEAKIST_DISPLAY_NAME: "Speakist Dev"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
+          SPEAKIST_API_BASE_URL: "https://speakist-dev.brevoortstudio.com"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios
           SPEAKIST_CHANNEL: stable
+          SPEAKIST_DISPLAY_NAME: "Speakist"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
     dependencies:
       - target: SpeakistKeyboard
@@ -297,7 +350,11 @@ targets:
     info:
       path: SpeakistKeyboard/Info.plist
       properties:
-        CFBundleDisplayName: Speakist
+        # Match the parent app's display name so the keyboard shows
+        # under the right channel in iOS Settings → Keyboards. SPEAKIST_
+        # DISPLAY_NAME lives in the per-config block alongside the
+        # bundle ID and App Group.
+        CFBundleDisplayName: $(SPEAKIST_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
@@ -333,8 +390,11 @@ targets:
     entitlements:
       path: SpeakistKeyboard/SpeakistKeyboard.entitlements
       properties:
+        # MUST match the parent app's App Group for IPC to work — the
+        # SPEAKIST_APP_GROUP build setting is set identically on both
+        # targets in each per-config block.
         com.apple.security.application-groups:
-          - group.com.brevoort-studio.speakist.local
+          - $(SPEAKIST_APP_GROUP)
     settings:
       base:
         PRODUCT_NAME: SpeakistKeyboard
@@ -344,6 +404,8 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.local.Keyboard
           SPEAKIST_CHANNEL: local
+          SPEAKIST_DISPLAY_NAME: "Speakist Local"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.local
           # Match the main-app target's SDK-scoped signing so the
           # embedded .appex is signed with the same identity on device.
           # Previous unscoped ad-hoc config left the keyboard unsigned
@@ -352,9 +414,20 @@ targets:
           "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
           "AD_HOC_CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
           "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": YES
+        Dev:
+          # Bundle ID + App Group MUST line up with the parent app's
+          # Dev block above. Apple validates parent/child bundle ID
+          # prefix at sign time — `…ios.dev.Keyboard` must extend
+          # `…ios.dev`.
+          PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.dev.Keyboard
+          SPEAKIST_CHANNEL: dev
+          SPEAKIST_DISPLAY_NAME: "Speakist Dev"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.Keyboard
           SPEAKIST_CHANNEL: stable
+          SPEAKIST_DISPLAY_NAME: "Speakist"
+          SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
 
 schemes:
   Speakist:
@@ -388,3 +461,25 @@ schemes:
       config: Debug
     archive:
       config: Release
+
+  # CI uses this scheme to archive + upload TestFlight builds. Local
+  # developers can also pick it from Xcode's scheme dropdown to build
+  # the dev channel against a real cert + provisioning profile (handy
+  # for testing the dev-bundle App Group + URL scheme registration on
+  # device without going through CI). The archive action is the only
+  # one that meaningfully differs from the default scheme — `xcodebuild
+  # -scheme "SpeakistiOS Dev" archive` is what `release-ios-ci.sh`
+  # invokes.
+  SpeakistiOS Dev:
+    build:
+      targets:
+        SpeakistiOS: all
+        SpeakistKeyboard: all
+    run:
+      config: Dev
+    profile:
+      config: Dev
+    analyze:
+      config: Dev
+    archive:
+      config: Dev
