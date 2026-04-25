@@ -2,13 +2,14 @@
 //
 // Must only be callable by an authenticated user. The invitation row is
 // matched on token; we then verify the signed-in user's email matches the
-// invitation's email (case-insensitive), enforce expiry, and create the
-// org_members row + mark the invitation accepted. Idempotent on double-
-// click: already-accepted invitations just redirect to /dashboard.
+// invitation's email (case-insensitive), enforce expiry, create the
+// org_members row, and DELETE the invitation (and any siblings — same
+// email + same org — that were stacked up from re-invites). Idempotent
+// on double-click: a missing invitation just redirects to /dashboard.
 
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { invitations, orgMembers } from "@/lib/db/schema";
@@ -27,10 +28,10 @@ export async function acceptInvitation(formData: FormData): Promise<void> {
     .where(eq(invitations.token, token))
     .limit(1);
 
-  if (!inv) throw new Error("Invitation not found");
-  if (inv.acceptedAt) {
-    // Already accepted previously — send the user to the dashboard so they
-    // end up in the same place as a successful accept.
+  if (!inv) {
+    // Already accepted (and deleted) or never existed. Redirecting is the
+    // friendliest outcome — the user clicked an old link but ended up
+    // signed in, so just put them in the dashboard.
     redirect("/dashboard");
   }
   if (inv.expiresAt.getTime() < Date.now()) {
@@ -55,10 +56,18 @@ export async function acceptInvitation(formData: FormData): Promise<void> {
     });
   }
 
+  // Delete every pending invitation for this email at this org — covers
+  // the case where the same email got invited multiple times before
+  // accepting (each invite reuses the existing row, but defensively we
+  // clean up any duplicates a future bug or admin tool might have left).
   await db
-    .update(invitations)
-    .set({ acceptedAt: new Date() })
-    .where(and(eq(invitations.id, inv.id), isNull(invitations.acceptedAt)));
+    .delete(invitations)
+    .where(
+      and(
+        eq(invitations.orgId, inv.orgId),
+        eq(invitations.email, inv.email)
+      )
+    );
 
   redirect("/dashboard");
 }

@@ -136,6 +136,19 @@ export async function provisionNewUser(userId: string): Promise<ProvisionResult>
         userId,
         role: "member",
       });
+      // Clean up any pending invitations for this email at this org.
+      // The user just joined the same org via domain auto-join — the
+      // invitation served its purpose (or was redundant), so leaving
+      // it in `pending` would mislead admins on the members page into
+      // thinking the user hasn't accepted yet.
+      await db
+        .delete(invitations)
+        .where(
+          and(
+            eq(invitations.orgId, orgId),
+            eq(invitations.email, user.email.toLowerCase())
+          )
+        );
       return { kind: "auto-joined", orgId };
     }
   }
