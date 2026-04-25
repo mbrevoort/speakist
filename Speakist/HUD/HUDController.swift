@@ -142,12 +142,27 @@ final class HUDPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Anchor the HUD just below the focused text field if the
-    /// Accessibility API can give us its on-screen bounds; otherwise
-    /// fall back to the mouse cursor (legacy behavior). Either way,
-    /// clamp to the visible screen so the panel never lands off-edge.
+    /// Anchor the HUD near the user's text caret if the Accessibility
+    /// API can resolve it. Three-tier fallback so we always pick the
+    /// most precise anchor available:
+    ///
+    ///   1. **Caret rect** — `kAXBoundsForRangeParameterizedAttribute`
+    ///      on the focused element's selected text range. This gives
+    ///      the actual cursor position, not the field bounds, so the
+    ///      HUD hugs the typing point even in a tall text editor.
+    ///   2. **Focused field rect** — whole-field bounds. Used when the
+    ///      app doesn't support the parameterized bounds query
+    ///      (Electron apps in particular, sometimes Slack/Notion).
+    ///   3. **Mouse cursor** — last resort if AX is denied or no
+    ///      element is focused.
+    ///
+    /// Either way, we place the HUD just below the anchor with a small
+    /// gap (so it doesn't overlap the text being typed), flip above
+    /// when there isn't room below, and clamp to the visible screen.
     func presentAnchoredToFocusedField() {
-        let anchor = HUDPanel.focusedFieldRect() ?? mouseAnchorRect()
+        let anchor = HUDPanel.focusedCaretRect()
+            ?? HUDPanel.focusedFieldRect()
+            ?? mouseAnchorRect()
         let screen = NSScreen.screens.first(where: {
             NSMouseInRect(NSPoint(x: anchor.midX, y: anchor.midY), $0.frame, false)
         }) ?? NSScreen.main
@@ -199,20 +214,77 @@ final class HUDPanel: NSPanel {
 
     // MARK: - Focused-field bounds via Accessibility
 
+    /// Resolve the system-focused element to an `AXUIElement`, or nil
+    /// if AX is denied / no element is focused. Centralized so the
+    /// caret-rect and field-rect helpers don't duplicate the lookup.
+    private static func focusedAXElement() -> AXUIElement? {
+        guard AXIsProcessTrusted() else { return nil }
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef
+        ) == .success, let focused = focusedRef else { return nil }
+        return (focused as! AXUIElement)
+    }
+
+    /// Convert an AX-flipped rect (origin top-left of primary screen)
+    /// to AppKit bottom-left screen coords. Returns nil if no screen
+    /// is available (impossible in practice but the unwrap is cheap).
+    private static func appKitRect(fromAXRect ax: CGRect) -> NSRect? {
+        guard let primary = NSScreen.screens.first else { return nil }
+        let primaryHeight = primary.frame.height
+        let flippedY = primaryHeight - ax.origin.y - ax.height
+        return NSRect(x: ax.origin.x, y: flippedY, width: ax.width, height: ax.height)
+    }
+
+    /// Read the on-screen rect of the user's text caret via
+    /// `kAXBoundsForRangeParameterizedAttribute` on the focused
+    /// element's selected text range. Most native AppKit text views
+    /// support this; many Electron apps don't (caller falls back to
+    /// `focusedFieldRect`).
+    static func focusedCaretRect() -> NSRect? {
+        guard let element = focusedAXElement() else { return nil }
+
+        // Selected text range is a CFRange — for a caret it's
+        // length=0, for a selection it's the highlighted span.
+        var rangeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &rangeRef
+        ) == .success, let rangeValue = rangeRef else { return nil }
+        var range = CFRange()
+        AXValueGetValue(rangeValue as! AXValue, .cfRange, &range)
+
+        // Some apps (TextEdit, Xcode source editor) return an empty
+        // rect for length=0 queries. Pad to length=1 so we always
+        // hit a real glyph rect — clamping back into the field if
+        // the caret sits at the very end of the document.
+        var queryRange = CFRange(
+            location: range.location > 0 ? range.location - 1 : 0,
+            length: 1
+        )
+        guard let axRange = AXValueCreate(.cfRange, &queryRange) else { return nil }
+
+        var boundsRef: CFTypeRef?
+        let status = AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXBoundsForRangeParameterizedAttribute as CFString,
+            axRange,
+            &boundsRef
+        )
+        guard status == .success, let bounds = boundsRef else { return nil }
+        var rect = CGRect.zero
+        AXValueGetValue(bounds as! AXValue, .cgRect, &rect)
+        if rect.width <= 0 || rect.height <= 0 { return nil }
+        return appKitRect(fromAXRect: rect)
+    }
+
     /// Read the system-wide focused UI element's on-screen rect via
     /// the Accessibility API and convert it to AppKit's bottom-left
     /// coordinate space. Returns nil when AX is denied, no element is
     /// focused, or the focused element doesn't expose position+size
     /// (rare for text fields, common for some Electron apps).
     static func focusedFieldRect() -> NSRect? {
-        guard AXIsProcessTrusted() else { return nil }
-
-        let systemWide = AXUIElementCreateSystemWide()
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef
-        ) == .success, let focused = focusedRef else { return nil }
-        let element = focused as! AXUIElement
+        guard let element = focusedAXElement() else { return nil }
 
         var posRef: CFTypeRef?
         var sizeRef: CFTypeRef?
@@ -227,14 +299,7 @@ final class HUDPanel: NSPanel {
         AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
         if size.width <= 0 || size.height <= 0 { return nil }
 
-        // AX position is in screen-flipped coords (origin top-left of
-        // the primary screen). AppKit windows use bottom-left origin
-        // relative to the screen the point falls on. Convert by
-        // subtracting from the primary screen's height.
-        guard let primary = NSScreen.screens.first else { return nil }
-        let primaryHeight = primary.frame.height
-        let flippedY = primaryHeight - origin.y - size.height
-        return NSRect(x: origin.x, y: flippedY, width: size.width, height: size.height)
+        return appKitRect(fromAXRect: CGRect(origin: origin, size: size))
     }
 }
 
@@ -310,9 +375,13 @@ private struct HUDView: View {
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
         case .recording, .transcribing:
+            // Frozen on `.transcribing` (timer was invalidated in
+            // `setTranscribing`) but kept at full primary contrast so
+            // the user can still read how long they spoke. Greying it
+            // out would read as "this number is no longer valid".
             Text(formatTime(controller.elapsed))
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                .foregroundStyle(controller.state == .transcribing ? .secondary : .primary)
+                .foregroundStyle(.primary)
         case .hidden:
             EmptyView()
         }
@@ -336,27 +405,46 @@ private struct PulsingDot: View {
     }
 }
 
-/// "Transcribing…" with three traveling-shimmer dots that march
-/// left-to-right. Using a TimelineView so the animation runs on a
-/// real clock and looks alive even during a long upload.
+/// Five peach dots bobbing up and down with phase offsets, producing
+/// a left-to-right traveling wave that feels alive without competing
+/// with the recording waveform's reactive shape. Purely decorative —
+/// signals "we're working on it" without taking up the room a
+/// "Transcribing…" label would.
+///
+/// TimelineView drives the animation on a real clock so it stays
+/// smooth even during a long network round-trip.
 private struct TranscribingIndicator: View {
+    /// Number of dots in the wave. Five reads as a "wave" without
+    /// crowding the 250-ish-pt content slot.
+    private let dotCount = 5
+    /// How tall the wave peaks above/below center. Tuned so the wave
+    /// stays inside the 32pt content height.
+    private let bounceAmplitude: CGFloat = 6
+    /// How fast the wave travels (cycles per second).
+    private let waveSpeed: Double = 1.5
+    /// Phase offset between adjacent dots — controls the wavelength.
+    /// 0.32 means each dot is ~1/3 cycle behind its left neighbor,
+    /// giving the impression of one full wave across the row.
+    private let dotPhase: Double = 0.32
+
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 8) {
-                Text("Transcribing")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
-                HStack(spacing: 3) {
-                    ForEach(0..<3, id: \.self) { i in
-                        let phase = (t * 1.4 + Double(i) * 0.22)
-                            .truncatingRemainder(dividingBy: 1.0)
-                        // Triangle wave so each dot fades in then out.
-                        let alpha = 0.25 + 0.75 * (1 - abs(phase - 0.5) * 2)
-                        Circle()
-                            .fill(Color.speakistPeach.opacity(alpha))
-                            .frame(width: 5, height: 5)
-                    }
+            HStack(spacing: 7) {
+                Spacer(minLength: 0)
+                ForEach(0..<dotCount, id: \.self) { i in
+                    let phase = t * waveSpeed - Double(i) * dotPhase
+                    let bounce = sin(phase * 2 * .pi)
+                    Circle()
+                        .fill(Color.speakistPeach)
+                        // Up-only displacement so the wave has a
+                        // resting baseline; sin(...) goes -1…1, we
+                        // map to 0…1 then up.
+                        .offset(y: -CGFloat((bounce + 1) / 2) * bounceAmplitude)
+                        // Slight opacity sway so dots fade as they
+                        // dip — adds depth.
+                        .opacity(0.55 + 0.45 * (bounce + 1) / 2)
+                        .frame(width: 6, height: 6)
                 }
                 Spacer(minLength: 0)
             }
