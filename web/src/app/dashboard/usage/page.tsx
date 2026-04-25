@@ -93,8 +93,8 @@ export default async function UsagePage() {
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-border/70 bg-background overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-2xl border border-border/70 bg-background overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">Member</th>
@@ -143,8 +143,8 @@ export default async function UsagePage() {
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-border/70 bg-background overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-2xl border border-border/70 bg-background overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">When</th>

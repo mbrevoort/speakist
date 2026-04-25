@@ -43,7 +43,7 @@ export function AdminMobileNav() {
 
       <SheetContent
         title="Super admin navigation"
-        className="p-0 border-r-plum/20 bg-plum/5"
+        className="p-0 border-r-plum/20"
       >
         <Link
           href="/"

@@ -118,8 +118,8 @@ export default async function AdminOrgPage({
             <p className="text-sm text-muted-foreground">No ledger activity yet.</p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-border/70 bg-background overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-2xl border border-border/70 bg-background overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">Date</th>
@@ -162,8 +162,8 @@ export default async function AdminOrgPage({
           Members <span className="text-muted-foreground font-normal">({members.length})</span>
         </h2>
         {members.length > 0 && (
-          <div className="rounded-2xl border border-border/70 bg-background overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-2xl border border-border/70 bg-background overflow-x-auto">
+            <table className="w-full text-sm min-w-[640px]">
               <tbody>
                 {members.map((m) => (
                   <tr key={m.userId} className="border-b border-border/40 last:border-0">
