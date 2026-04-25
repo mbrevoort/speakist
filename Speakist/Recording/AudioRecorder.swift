@@ -33,7 +33,15 @@ struct RecordingResult {
 /// in stop() before the properties are cleared, so there is no race.
 final class AudioRecorder: ObservableObject {
     let levels = PassthroughSubject<Float, Never>()
+    /// Per-band magnitudes (low → high voice frequency) emitted on
+    /// every audio tap callback for the HUD's spectrum visualizer.
+    /// Sized to `bandCount` (currently 7); each value is in [0, 1].
+    let bandLevels = PassthroughSubject<[Float], Never>()
     @Published private(set) var isRecording = false
+
+    /// Number of frequency bands published per tap. Matches the
+    /// HUD's bar count so the controller doesn't need to resample.
+    static let bandCount = 7
 
     private let preferences: Preferences
     private let deviceMonitor: DeviceMonitor
@@ -43,6 +51,10 @@ final class AudioRecorder: ObservableObject {
     private var outputFile: AVAudioFile?
     private var outputURL: URL?
     private var startedAt: CFAbsoluteTime = 0
+    /// FFT-based analyzer that turns each tap buffer into voice-band
+    /// magnitudes. Reused across taps so its preallocated buffers
+    /// stay warm; `start()` resets it for a clean ring.
+    private var spectrumAnalyzer = SpectrumAnalyzer(fftSize: 512, sampleRate: 16_000)
 
     private let targetFormat: AVAudioFormat = {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
@@ -90,6 +102,9 @@ final class AudioRecorder: ObservableObject {
 
         startedAt = CFAbsoluteTimeGetCurrent()
         isRecording = true
+        // Fresh analyzer per session — clears the ring so a new
+        // recording doesn't inherit the tail of the previous one.
+        spectrumAnalyzer = SpectrumAnalyzer(fftSize: 512, sampleRate: 16_000)
         Logger.shared.info("Recording started: hw=\(hardwareFormat.sampleRate)Hz ch=\(hardwareFormat.channelCount) → 16kHz mono")
     }
 
@@ -159,6 +174,26 @@ final class AudioRecorder: ObservableObject {
         let subject = levels
         DispatchQueue.main.async {
             subject.send(rms)
+        }
+
+        // Spectrum: feed the converted Float32 buffer into the
+        // FFT analyzer. It accumulates samples internally and only
+        // returns bands once a full FFT window has been collected,
+        // so we can call this every tap without worrying about
+        // buffer-size mismatches between the hardware (~341 frames
+        // at 48→16 kHz) and the FFT length (512).
+        if let outChannel = outBuffer.floatChannelData?[0] {
+            let bands = spectrumAnalyzer.analyze(
+                input: outChannel,
+                frameCount: Int(outBuffer.frameLength),
+                bandCount: Self.bandCount
+            )
+            if let bands {
+                let bandSubject = bandLevels
+                DispatchQueue.main.async {
+                    bandSubject.send(bands)
+                }
+            }
         }
     }
 

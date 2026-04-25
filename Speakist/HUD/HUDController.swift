@@ -27,16 +27,17 @@ final class HUDController: ObservableObject {
     /// any future need (e.g., a history graph in the dashboard) but
     /// no longer drives the HUD waveform directly.
     @Published var levels: [Float] = Array(repeating: 0, count: 12)
-    /// Smoothed + amplified mic level (0...1) used to drive the
-    /// HUD's vertical bar heights. Asymmetric attack/release curve
-    /// applied in `push(level:)` so bars feel snappy on rising
-    /// peaks but decay gracefully between syllables instead of
-    /// flickering.
-    @Published var smoothedDisplayLevel: Double = 0
+    /// Per-band smoothed magnitudes for the HUD's frequency-band
+    /// visualization. Index 0 = lowest band (≈80 Hz), last = highest
+    /// (≈4 kHz). Each value is independently smoothed with an
+    /// asymmetric attack/release envelope so bars feel reactive on
+    /// onsets but don't flicker during sustained vowels.
+    @Published var bandLevels: [Double] = Array(repeating: 0, count: AudioRecorder.bandCount)
 
     private let preferences: Preferences
     private var panel: HUDPanel?
     private var levelSubscription: AnyCancellable?
+    private var bandSubscription: AnyCancellable?
     private var timer: Timer?
     private var startTime: Date?
 
@@ -49,6 +50,11 @@ final class HUDController: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] level in
                 self?.push(level: level)
+            }
+        bandSubscription = recorder.bandLevels
+            .receive(on: RunLoop.main)
+            .sink { [weak self] bands in
+                self?.push(bands: bands)
             }
     }
 
@@ -65,7 +71,7 @@ final class HUDController: ObservableObject {
         elapsed = 0
         startTime = nil
         levels = Array(repeating: 0, count: 12)
-        smoothedDisplayLevel = 0
+        bandLevels = Array(repeating: 0, count: AudioRecorder.bandCount)
         panel?.presentAnchoredToFocusedField()
     }
 
@@ -84,7 +90,7 @@ final class HUDController: ObservableObject {
         elapsed = 0
         startTime = Date()
         levels = Array(repeating: 0, count: 12)
-        smoothedDisplayLevel = 0
+        bandLevels = Array(repeating: 0, count: AudioRecorder.bandCount)
         startTimer()
     }
 
@@ -109,28 +115,37 @@ final class HUDController: ObservableObject {
 
     // MARK: - Internal
 
-    /// Display gain applied on top of `AudioRecorder.rms`'s already-
-    /// curved value. Bumps normal speech into the upper-mid bar
-    /// range so quiet conversational levels still drive visible
-    /// bar movement.
-    private let displayGain: Double = 1.7
-    /// Attack weight — how aggressively the smoothed level chases a
-    /// rising input. 0.85 means bars track 85% toward a new peak on
-    /// each frame, making them feel instantly reactive.
+    /// Display gain applied on top of the analyzer's already-
+    /// normalized band magnitudes. The analyzer normalizes peaks to
+    /// roughly [0.6, 0.8] for typical voice; this gain plus the
+    /// asymmetric smoother below pushes those peaks all the way to
+    /// the bar's top edge.
+    private let displayGain: Double = 1.4
+    /// Attack weight — bars chase rising input fast (85% toward
+    /// the new peak per frame) so the visualization reads as
+    /// reactive on onsets.
     private let attackWeight: Double = 0.85
-    /// Release weight — how aggressively the smoothed level decays
-    /// toward zero when input drops. Lower than attack so bars don't
-    /// drop to silence the instant a syllable ends.
+    /// Release weight — gentler fall so bars don't snap to zero at
+    /// the end of every syllable.
     private let releaseWeight: Double = 0.30
 
     private func push(level: Float) {
         levels.removeFirst()
         levels.append(level)
+    }
 
-        // VU-meter envelope: amplify, clamp, then asymmetric smooth.
-        let target = min(1.0, Double(level) * displayGain)
-        let weight = target > smoothedDisplayLevel ? attackWeight : releaseWeight
-        smoothedDisplayLevel = smoothedDisplayLevel * (1 - weight) + target * weight
+    /// Apply the same VU-style attack/release envelope to each
+    /// band's magnitude independently — so a strong fundamental
+    /// can ride high while sibilants drop out, and vice versa.
+    private func push(bands: [Float]) {
+        guard bands.count == bandLevels.count else { return }
+        var updated = bandLevels
+        for i in 0..<bands.count {
+            let target = min(1.0, Double(bands[i]) * displayGain)
+            let weight = target > updated[i] ? attackWeight : releaseWeight
+            updated[i] = updated[i] * (1 - weight) + target * weight
+        }
+        bandLevels = updated
     }
 
     private func startTimer() {
@@ -375,9 +390,12 @@ private struct HUDView: View {
             // Empty bars at rest height so the panel doesn't reflow
             // on the first level update. Conveys "ready, not yet
             // capturing" without text.
-            VoiceLevelBars(level: 0, isActive: false)
+            VoiceLevelBars(
+                bands: Array(repeating: 0, count: AudioRecorder.bandCount),
+                isActive: false
+            )
         case .recording:
-            VoiceLevelBars(level: controller.smoothedDisplayLevel, isActive: true)
+            VoiceLevelBars(bands: controller.bandLevels, isActive: true)
         case .transcribing:
             TranscribingIndicator()
         case .hidden:
@@ -464,62 +482,61 @@ private struct TranscribingIndicator: View {
     }
 }
 
-/// Voice-level bars that animate vertically — each bar's height
-/// rises from a bottom baseline as the input level climbs, instead
-/// of the previous "ring buffer slides right-to-left" history view.
+/// Voice-frequency-band bars. Each bar represents a log-spaced
+/// slice of the human voice band (≈80 Hz – 4 kHz):
 ///
-/// All seven bars react to the same smoothed level (driven by
-/// `HUDController.smoothedDisplayLevel`) but with per-bar weights
-/// that taper toward the edges, producing a voice-shaped envelope
-/// that grows and shrinks vertically as you speak. Bars never
-/// completely collapse — a 12% baseline keeps them visible during
-/// silence so the HUD doesn't look broken between phrases.
+///   bar 0 → fundamentals + chest resonance
+///   bar 3 → mid-formants
+///   bar 6 → high formants + sibilants
 ///
-/// The "low to high" motion you'd expect from a real meter is the
-/// shape itself: bars sit near the bottom when quiet and grow
-/// upward when loud, anchored at the baseline. There's no
-/// horizontal animation — the only thing changing is height.
+/// Each bar's height reflects the FFT magnitude in its band, so the
+/// silhouette reshapes itself as the user moves between vowels and
+/// consonants — vowels light up the lower-mid bars (formants),
+/// sibilants like "s" / "f" / "sh" light up the rightmost bars,
+/// hum/voiced sounds light up the left bars.
+///
+/// Bars are vertically centered with `alignment: .center` so they
+/// extend equally above and below the row's midline as their
+/// magnitudes grow. A small baseline keeps the panel from looking
+/// empty during silence.
 private struct VoiceLevelBars: View {
-    /// Already-amplified level in 0…1 (caller does smoothing + gain).
-    let level: Double
+    /// Per-band smoothed magnitudes (0…1). Index 0 = lowest
+    /// frequency, last = highest.
+    let bands: [Double]
     /// `false` while preparing/idle — bars hold at the silence
     /// baseline so the panel layout matches the recording state.
     let isActive: Bool
 
-    private let barCount = 7
-    /// Per-bar amplitude weights. Tapered so the silhouette peaks
-    /// in the middle like a voice envelope rather than a flat row.
-    private let weights: [Double] = [0.45, 0.65, 0.85, 1.0, 0.85, 0.65, 0.45]
-    /// Floor on bar height so silence still shows a visible row of
-    /// dashes — without this the panel would look empty between
-    /// utterances, which reads as "not listening."
+    /// Floor on bar amplitude so silence still shows a row of
+    /// short dashes. Without this the HUD looks empty between
+    /// utterances and reads as "not listening".
     private let baseline: Double = 0.12
-    /// Per-bar phase offsets used purely to add a tiny visual
-    /// shimmer so the bars don't feel like a single rigid envelope.
-    /// Combined with smoothedDisplayLevel they give the wave a
-    /// little life without losing the "rises with my voice" feel.
-    private let shimmer: [Double] = [0.0, 0.07, 0.04, 0.0, 0.04, 0.07, 0.0]
 
     var body: some View {
         GeometryReader { geo in
-            let totalSpacing = CGFloat(barCount - 1) * 4
-            let barWidth = max(4, (geo.size.width - totalSpacing) / CGFloat(barCount))
-            HStack(alignment: .bottom, spacing: 4) {
-                ForEach(0..<barCount, id: \.self) { i in
-                    let amplitude = max(baseline, level * weights[i] - shimmer[i] * 0.05)
+            let totalSpacing = CGFloat(bands.count - 1) * 4
+            let barWidth = max(4, (geo.size.width - totalSpacing) / CGFloat(bands.count))
+            HStack(alignment: .center, spacing: 4) {
+                ForEach(0..<bands.count, id: \.self) { i in
+                    let amplitude = max(baseline, bands[i])
                     let h = CGFloat(amplitude) * geo.size.height
                     Capsule(style: .continuous)
                         .fill(Color.speakistPeach)
                         .frame(width: barWidth, height: max(h, 4))
                         .opacity(isActive ? 1.0 : 0.45)
-                        // Snappy attack, gentler release — same
-                        // envelope a hardware VU meter uses, makes
-                        // the bars feel responsive to peaks but not
-                        // jittery at the noise floor.
-                        .animation(.easeOut(duration: 0.08), value: amplitude)
+                        // Snappy attack, gentler release — bars feel
+                        // responsive to peaks but don't jitter at
+                        // the noise floor. Tuning is at the
+                        // controller's smoother; this just damps
+                        // any per-frame visual drift.
+                        .animation(.easeOut(duration: 0.06), value: amplitude)
                 }
             }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
+            // Center alignment makes each bar grow equally above
+            // and below the row's midline rather than from a
+            // bottom baseline. Combined with per-bar magnitudes
+            // this gives the classic "centered FFT" look.
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
         }
     }
 }
