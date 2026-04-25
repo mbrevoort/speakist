@@ -133,7 +133,6 @@ export default async function UsagePage() {
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">When</th>
                   <th className="px-5 py-3 font-medium">Member</th>
-                  <th className="px-5 py-3 font-medium">Provider / Model</th>
                   <th className="px-5 py-3 font-medium text-right">Words</th>
                   <th className="px-5 py-3 font-medium text-right">Audio</th>
                   <th
@@ -153,19 +152,6 @@ export default async function UsagePage() {
                     </td>
                     <td className="px-5 py-3">
                       {e.userDisplayName ?? e.userEmail.split("@")[0]}
-                    </td>
-                    <td className="px-5 py-3 text-muted-foreground font-mono text-xs">
-                      <div className="flex items-center gap-2">
-                        <span>{e.providerId}/{e.model}</span>
-                        {e.polishApplied && (
-                          <span
-                            title="LLM polish pass ran after transcription. Word count reflects the polished text."
-                            className="inline-flex items-center rounded-md bg-peach/15 text-peach-deep font-sans text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5"
-                          >
-                            ✨ Polished
-                          </span>
-                        )}
-                      </div>
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums">
                       {e.wordCount.toLocaleString()}
