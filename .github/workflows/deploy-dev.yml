@@ -1,0 +1,192 @@
+# Dev environment CI/CD — runs on every push to main.
+#
+# Three parallel jobs:
+#   * web — deploy Cloudflare Worker (Next.js + D1 migrations) to dev
+#   * mac — build, sign, notarize, DMG, Sparkle-sign, R2 upload, publish
+#   * ios — build Dev archive, upload to TestFlight (Internal group)
+#
+# No `needs:` between them so one job's failure doesn't block the
+# others. Concurrency `cancel-in-progress: false` queues runs serially
+# so a back-to-back push doesn't kill an in-flight notarization (which
+# wastes 5+ minutes of Apple's notary queue and leaves zombie
+# submission UUIDs).
+#
+# Security note: this workflow only consumes `secrets.*` (encrypted)
+# and the GitHub-managed integer/hash variables `github.run_number`
+# and `github.sha` (passed via env, not interpolated into shell). No
+# untrusted user input (issue titles, PR descriptions, commit
+# messages, head refs) reaches `run:` blocks — all values are either
+# encrypted secrets or platform-controlled metadata.
+#
+# Production releases are NOT handled here — they'll be wired to a
+# separate workflow triggered by GitHub Releases. See docs/cicd.md
+# for the full secrets + Apple Developer portal one-time setup
+# checklist.
+
+name: Deploy Dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Web → Cloudflare Worker (speakist-web-dev)
+  # ---------------------------------------------------------------------------
+  web:
+    name: Deploy web to dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply D1 migrations (dev)
+        # Migrations run BEFORE deploy. If migration fails, GitHub
+        # Actions skips subsequent steps by default — so deploy is
+        # safely gated behind a clean schema.
+        working-directory: web
+        run: pnpm db:migrate:dev
+
+      - name: Deploy Worker (dev)
+        working-directory: web
+        run: pnpm deploy:dev
+
+  # ---------------------------------------------------------------------------
+  # Mac → Sparkle dev feed (downloads-dev.brevoortstudio.com)
+  # ---------------------------------------------------------------------------
+  mac:
+    name: Build + ship Mac dev DMG
+    runs-on: macos-14
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Web side: wrangler R2 upload + publish-API need these.
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN_DEV }}
+      # Apple side: notarytool API auth + Sparkle key.
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        # release.sh shells out to `pnpm exec wrangler r2 …` from the
+        # web/ directory, so we need the web target's deps installed.
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install xcodegen + jq
+        run: brew install xcodegen jq
+
+      - name: Install Sparkle tools
+        # Pin to the same Sparkle version we depend on for the Mac
+        # framework so sign_update output stays compatible. The
+        # binary distribution is small (~1 MB) so no need to cache.
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Library/Developer/Sparkle"
+          curl -fsSL -o /tmp/sparkle.tar.xz \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz
+          tar -xf /tmp/sparkle.tar.xz -C "$HOME/Library/Developer/Sparkle"
+          ls "$HOME/Library/Developer/Sparkle/bin/sign_update"
+
+      - name: Set up Apple signing
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          p12-base64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+
+      - name: Cache Swift packages
+        # SPM resolution (KeyboardShortcuts, GRDB, Sparkle) takes 2-3
+        # minutes per fresh build. Cache the resolved checkouts keyed
+        # on Package.resolved which xcodegen writes alongside the
+        # generated project. Cache miss only on dep upgrade.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
+          key: spm-mac-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-mac-
+
+      - name: Build, notarize, sign, upload
+        run: scripts/release-ci.sh
+
+  # ---------------------------------------------------------------------------
+  # iOS → TestFlight (Internal Testing group)
+  # ---------------------------------------------------------------------------
+  ios:
+    name: Build + ship iOS Dev to TestFlight
+    runs-on: macos-14
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Set up Apple signing
+        # iOS doesn't need a Developer ID P12 — the Distribution cert
+        # is fetched into the temp keychain by `xcodebuild
+        # -allowProvisioningUpdates` against the App Store Connect
+        # API key. Pass empty p12-base64 to skip the P12 import step.
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          p12-base64: ""
+          p12-password: ""
+          api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
+          key: spm-ios-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-ios-
+
+      - name: Build, sign, archive, upload to TestFlight
+        run: scripts/release-ios-ci.sh

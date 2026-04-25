@@ -10,7 +10,7 @@ This doc has five parts:
 2. **Per-release runbook** — every time you ship a new version
 3. **Emergency rollback** — yanking a bad release
 4. **Troubleshooting** — the errors you'll actually hit
-5. **Future: CI automation** — not wired yet
+5. **CI automation** — dev pipeline is live; prod still manual
 
 ---
 
@@ -521,19 +521,22 @@ Keychain item with `security add-generic-password -s "https://sparkle-project.or
 
 ---
 
-## 5. Future: automate via CI
+## 5. CI automation
 
-What's here today is a Mac-only workflow — you run `make release` from your
-own laptop. When you want to move it off your laptop:
+The **dev channel** is fully automated: every push to `main` builds and
+ships the Mac DMG to the dev Sparkle feed (and the iOS dev build to
+TestFlight, and the web Worker to dev). See `docs/cicd.md` for the
+secrets checklist, Apple Developer portal one-time setup, and failure
+modes.
 
-- GitHub Actions runner with a `macos-14` image (even with a private source
-  repo, Actions runners + secrets work normally)
-- Store the notarytool app-specific password + the Sparkle private key as
-  repo secrets (base64-encode the private key)
-- On tag push (`v*`), the action runs `scripts/release.sh`
-- Publish-token secrets stay the same — the workflow sets them as env vars
-  before invoking `scripts/release.sh`
+`scripts/release.sh` reads opt-in env-var hooks
+(`NOTARY_API_KEY_PATH`, `SPARKLE_PRIVATE_KEY`) so the same script
+runs both on a developer's laptop (keychain credentials) and inside
+GitHub Actions (env-var credentials). The CI side wraps it in
+`scripts/release-ci.sh`, invoked by `.github/workflows/deploy-dev.yml`.
 
-This is a meaningful scope of work (credential handling, runner cost,
-pipeline safety), so it's deliberately deferred until the manual flow
-starts to bite.
+**Beta + stable still ship manually** via `make release VERSION=…
+CHANNEL=beta|stable` from a laptop with the keychain set up. A
+prod-flavored workflow triggered by GitHub Releases (`on: release:
+types: [published]`) is the planned next step — it'll reuse the same
+`release-ci.sh` wrapper with `--channel beta` or `--channel stable`.

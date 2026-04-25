@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- "app-store-connect" produces an .ipa suitable for upload to
+         App Store Connect (which feeds TestFlight + the App Store).
+         Distinct from the Mac side's "developer-id" method since iOS
+         can't sideload signed binaries — every iOS build that's not
+         a development install must go through App Store Connect. -->
+    <key>method</key>
+    <string>app-store-connect</string>
+
+    <!-- Matches DEVELOPMENT_TEAM in project.yml. -->
+    <key>teamID</key>
+    <string>Q5T8FJNX57</string>
+
+    <!-- Let xcodebuild + the App Store Connect API key (passed via
+         -authenticationKeyPath) auto-manage the iOS Distribution cert
+         and the per-bundle-ID provisioning profiles. -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- Strip Swift symbols from the production-flavored binary —
+         smaller download for TestFlight users. -->
+    <key>stripSwiftSymbols</key>
+    <true/>
+
+    <!-- Upload symbols so TestFlight crash reports are symbolicated.
+         Different choice from the Mac side (which sets this false
+         because Mac users get unsymbolicated crash reports anyway).
+         For TestFlight + the App Store, having symbols on Apple's
+         servers is the only way to get readable crashes. -->
+    <key>uploadSymbols</key>
+    <true/>
+</dict>
+</plist>
