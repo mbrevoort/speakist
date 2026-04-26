@@ -2,13 +2,16 @@
 #
 # Two pieces are set up:
 #
-#   1. **Temp keychain** with the Developer ID Application cert imported
-#      (Mac side only — for codesigning the .app + DMG). The keychain is
-#      added to the user's keychain search list and unlocked with a
-#      one-shot password generated for this run. Skipped when
-#      `p12-base64` is empty (iOS jobs don't need it because the
-#      Distribution cert is auto-managed by `xcodebuild
-#      -allowProvisioningUpdates` against the App Store Connect API).
+#   1. **Temp keychain** with an optional signing-cert P12 imported. The
+#      keychain is added to the user's keychain search list and unlocked
+#      with a one-shot password generated for this run. The P12 input
+#      is provider-agnostic: pass a Developer ID Application cert for
+#      Mac-side codesign + DMG signing, or an Apple Distribution cert
+#      for iOS App Store builds. Both jobs benefit from importing a
+#      cert because `xcodebuild -allowProvisioningUpdates` reuses an
+#      existing keychain cert instead of minting a new one — which
+#      avoids hitting Apple's per-team 3-cert cap when CI runs
+#      repeatedly. Skipped when `p12-base64` is empty.
 #
 #   2. **App Store Connect API key** decoded to
 #      `~/.appstoreconnect/private_keys/AuthKey_<ID>.p8` — the
@@ -25,7 +28,7 @@ description: Imports Developer ID cert + App Store Connect API key for codesign 
 
 inputs:
   p12-base64:
-    description: Developer ID Application cert P12, base64-encoded. Pass an empty string to skip P12 import (iOS App Store flow doesn't need it).
+    description: Signing cert P12, base64-encoded. Provider-agnostic — Developer ID Application for Mac DMG signing, Apple Distribution for iOS App Store. Pass an empty string to skip the import step.
     required: true
   p12-password:
     description: P12 export password.
@@ -65,7 +68,7 @@ runs:
         echo "KEYCHAIN_PATH=$KC" >> "$GITHUB_ENV"
         echo "KEYCHAIN_PW=$KC_PW" >> "$GITHUB_ENV"
 
-    - name: Import Developer ID P12
+    - name: Import signing P12 into keychain
       if: inputs.p12-base64 != ''
       shell: bash
       env:
@@ -73,7 +76,7 @@ runs:
         P12_PW: ${{ inputs.p12-password }}
       run: |
         set -euo pipefail
-        P12="$RUNNER_TEMP/dev-id.p12"
+        P12="$RUNNER_TEMP/signing-cert.p12"
         echo "$P12_B64" | base64 --decode > "$P12"
         # `-T` flags whitelist tools that can use the imported key
         # without prompting — codesign + security + productsign covers

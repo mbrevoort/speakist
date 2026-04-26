@@ -249,14 +249,20 @@ jobs:
         run: brew install xcodegen
 
       - name: Set up Apple signing
-        # iOS doesn't need a Developer ID P12 — the Distribution cert
-        # is fetched into the temp keychain by `xcodebuild
-        # -allowProvisioningUpdates` against the App Store Connect
-        # API key. Pass empty p12-base64 to skip the P12 import step.
+        # Imports a pre-baked Apple Distribution cert (P12) into the
+        # runner keychain. Without this, every CI run had `xcodebuild
+        # -allowProvisioningUpdates` mint a fresh cert via the App
+        # Store Connect API, eventually hitting Apple's per-team
+        # 3-cert cap and erroring out at archive time with
+        # "Choose a certificate to revoke." With the P12 imported,
+        # `-allowProvisioningUpdates` finds the existing cert in the
+        # keychain and reuses it — provisioning profiles still get
+        # auto-fetched/created, but no new certs ever land at the
+        # portal.
         uses: ./.github/actions/setup-apple-signing
         with:
-          p12-base64: ""
-          p12-password: ""
+          p12-base64: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_PASSWORD }}
           api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
 

@@ -103,8 +103,10 @@ repository secret. Names must match exactly.
 | `CLOUDFLARE_API_TOKEN` | wrangler auth (Workers + D1 + R2 edit) | `dash.cloudflare.com` → My Profile → API Tokens → Create. Use the "Edit Cloudflare Workers" template, then add **D1 Edit** and **Workers R2 Storage Edit** scopes, restrict to your account. |
 | `CLOUDFLARE_ACCOUNT_ID` | wrangler account selector | `dash.cloudflare.com` → right sidebar → Account ID |
 | `RELEASE_PUBLISH_TOKEN_DEV` | bearer token for `/api/admin/releases/publish` | Same value as the `RELEASE_PUBLISH_TOKEN` secret already on the `speakist-web-dev` Worker. If unsure: `openssl rand -base64 32`, then `wrangler secret put RELEASE_PUBLISH_TOKEN --env dev` and paste the same value here. |
-| `APPLE_DEVELOPER_ID_P12_BASE64` | Developer ID Application cert + private key for codesign | Keychain Access → My Certificates → "Developer ID Application: Mike Brevoort (Q5T8FJNX57)" → right-click → Export → save as `.p12` → `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_DEVELOPER_ID_P12_BASE64` | Developer ID Application cert + private key for Mac codesign | Keychain Access → My Certificates → "Developer ID Application: Mike Brevoort (Q5T8FJNX57)" → right-click → Export → save as `.p12` → `base64 -i cert.p12 \| pbcopy` |
 | `APPLE_DEVELOPER_ID_P12_PASSWORD` | Password for the P12 above | The export password you just chose |
+| `APPLE_IOS_DISTRIBUTION_P12_BASE64` | Apple Distribution cert + private key for iOS App Store / TestFlight | Xcode → Settings → Accounts → select Apple ID → Manage Certificates → "+" → **Apple Distribution** (creates a fresh cert with the private key in your local keychain). Then Keychain Access → My Certificates → "Apple Distribution: Mike Brevoort (Q5T8FJNX57)" → right-click → Export → save as `.p12` → `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_IOS_DISTRIBUTION_P12_PASSWORD` | Password for the iOS Distribution P12 | The export password you just chose |
 | `APP_STORE_CONNECT_API_KEY_BASE64` | `.p8` private key for App Store Connect API (notarization + TestFlight upload) | `appstoreconnect.apple.com` → Users and Access → Integrations → App Store Connect API → "+" → name "Speakist CI", role **Admin** (Developer is insufficient for TestFlight upload). Download the `.p8` (one-time only). `base64 -i AuthKey_*.p8 \| pbcopy` |
 | `APP_STORE_CONNECT_KEY_ID` | 10-char alphanumeric Key ID | Visible in the Keys table after creation |
 | `APP_STORE_CONNECT_ISSUER_ID` | Team's Issuer UUID | Top of the Integrations → App Store Connect API page |
@@ -117,11 +119,19 @@ via `altool`). The Admin role is needed because the first iOS upload
 for a new app sometimes triggers app-record metadata writes that
 fail under Developer-role keys.
 
+**Why the iOS Distribution P12 matters**: without it, every CI run had
+`xcodebuild -allowProvisioningUpdates` mint a fresh Apple Distribution
+cert via the App Store Connect API. After ~3 runs (Apple's per-team
+cap on active distribution certs), CI failed at archive time with
+"Choose a certificate to revoke." Importing the P12 puts a single
+cert + private key into the runner's keychain, which
+`-allowProvisioningUpdates` happily reuses — so the cap stops mattering.
+
 ## First-run checklist
 
 After completing the one-time setup above:
 
-1. Verify all 9 secrets are set in repo Settings → Secrets and
+1. Verify all 11 secrets are set in repo Settings → Secrets and
    variables → Actions.
 2. Verify portal items 1-5 are complete — search Identifiers for
    `com.brevoort-studio.speakist.ios.dev`, App Groups for
@@ -148,6 +158,7 @@ End-to-end verification:
 | Mac notarization rejected | Hardened-runtime entitlement missing or signed bundle has unsigned helper | Pull the `notarytool log <uuid>` output (CI surfaces the UUID); fix in `Speakist/Speakist.entitlements` |
 | iOS upload "Invalid bundle version" | CFBundleVersion collision with a previous build | Bump the `100000 + GITHUB_RUN_NUMBER` offset in `scripts/release-ios-ci.sh` higher (e.g., `1000000`); rare in practice |
 | iOS upload "No matching provisioning profile" | Apple Developer portal step 1 or 3 wasn't done | Run the manual setup checklist above; `xcodebuild -allowProvisioningUpdates` will auto-fetch on next run |
+| iOS archive "Choose a certificate to revoke. Your account has reached the maximum number of certificates." | `APPLE_IOS_DISTRIBUTION_P12_BASE64` secret is unset, so `-allowProvisioningUpdates` keeps minting fresh certs each run and hits Apple's per-team 3-cert cap | Revoke 1–2 old iOS Distribution certs at <https://developer.apple.com/account/resources/certificates/list> to free a slot. Then create a fresh **Apple Distribution** cert via Xcode → Settings → Accounts → Manage Certificates → "+" so the private key lives in your local keychain. Export as P12 and set the two `APPLE_IOS_DISTRIBUTION_P12_*` secrets per the table above. Future runs reuse the imported cert and never mint new ones |
 | Mac DMG upload "401 Unauthorized" from publish API | `RELEASE_PUBLISH_TOKEN_DEV` doesn't match the Worker's `RELEASE_PUBLISH_TOKEN` secret | Either re-set both with the same value, or rotate via `wrangler secret put RELEASE_PUBLISH_TOKEN --env dev` and update the GitHub secret |
 
 ## Local debug recipes
