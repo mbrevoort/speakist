@@ -20,7 +20,10 @@ export const DASHBOARD_NAV: DashboardNavItem[] = [
   { label: "Usage", href: "/dashboard/usage", icon: BarChart3 },
   { label: "Billing", href: "/dashboard/billing", icon: CreditCard, adminOnly: true },
   { label: "Members", href: "/dashboard/members", icon: Users },
-  { label: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: true },
+  // Settings is reachable to every member because the polish prompt
+  // editor lives there. Org-admin fields (org name, auto-join domain,
+  // delete) inside the page are gated per-row via the `canAdmin` flag.
+  { label: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 
 export type DashboardRole = "owner" | "admin" | "member";

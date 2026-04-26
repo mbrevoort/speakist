@@ -3,8 +3,8 @@
 
 "use client";
 
-import { useState, useTransition } from "react";
-import { Trash2 } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +12,8 @@ import {
   updateAutoJoinDomain,
   leaveOrg,
   deleteOrg,
+  setPolishEnabled,
+  setPolishPrompt,
   type ActionResult,
 } from "./actions";
 
@@ -22,6 +24,12 @@ interface Props {
   canAdmin: boolean;
   isSoleOwner: boolean;
   role: "owner" | "admin" | "member";
+  /** Polish prefs are per-user; passed from the server so first paint
+   *  has the right values without a client-side fetch. */
+  polishEnabled: boolean;
+  polishPrompt: string;
+  polishIsCustom: boolean;
+  polishDefaultPrompt: string;
 }
 
 export function SettingsClient({
@@ -31,9 +39,20 @@ export function SettingsClient({
   canAdmin,
   isSoleOwner,
   role,
+  polishEnabled,
+  polishPrompt,
+  polishIsCustom,
+  polishDefaultPrompt,
 }: Props) {
   return (
     <div className="space-y-10">
+      <PolishCard
+        enabled={polishEnabled}
+        prompt={polishPrompt}
+        isCustom={polishIsCustom}
+        defaultPrompt={polishDefaultPrompt}
+      />
+
       <Card title="Organization name" description="Shown in the sidebar and on invitation emails.">
         <TextFieldForm
           name="name"
@@ -197,6 +216,179 @@ function LeaveButton({ disabled }: { disabled: boolean }) {
     >
       {pending ? "Leaving…" : "Leave organization"}
     </Button>
+  );
+}
+
+// --- polish ---------------------------------------------------------------
+
+function PolishCard({
+  enabled: serverEnabled,
+  prompt: serverPrompt,
+  isCustom: serverIsCustom,
+  defaultPrompt,
+}: {
+  enabled: boolean;
+  prompt: string;
+  isCustom: boolean;
+  defaultPrompt: string;
+}) {
+  // Local mirrors of the server state so toggle / save / reset can show
+  // optimistic feedback without re-rendering the whole page from the RSC
+  // tree. Each successful action mutates these in-place.
+  const [enabled, setEnabled] = useState(serverEnabled);
+  const [isCustom, setIsCustom] = useState(serverIsCustom);
+  const [draft, setDraft] = useState(serverPrompt);
+  const [savedPrompt, setSavedPrompt] = useState(serverPrompt);
+
+  const [toggleResult, setToggleResult] = useState<ActionResult | null>(null);
+  const [promptResult, setPromptResult] = useState<ActionResult | null>(null);
+  const [togglePending, startToggleTransition] = useTransition();
+  const [promptPending, startPromptTransition] = useTransition();
+
+  // If the page is re-rendered server-side (e.g. revalidatePath), pick up
+  // the new server values. Without this, the second save in a row would
+  // get the stale server state if React decided to re-mount.
+  useEffect(() => {
+    setEnabled(serverEnabled);
+    setIsCustom(serverIsCustom);
+    setSavedPrompt(serverPrompt);
+    // Only stomp the editor when the user hasn't started a fresh edit;
+    // otherwise we'd lose in-flight changes on every revalidate.
+    setDraft((current) =>
+      current === savedPrompt ? serverPrompt : current
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverEnabled, serverIsCustom, serverPrompt]);
+
+  const draftIsDirty = draft !== savedPrompt;
+  const draftIsBlank = draft.trim().length === 0;
+
+  function handleToggle() {
+    const next = !enabled;
+    const fd = new FormData();
+    fd.set("enabled", next ? "on" : "off");
+    setToggleResult(null);
+    startToggleTransition(async () => {
+      const r = await setPolishEnabled(fd);
+      setToggleResult(r);
+      if (r.ok) setEnabled(next);
+    });
+  }
+
+  function handleSave() {
+    const fd = new FormData();
+    fd.set("prompt", draft);
+    setPromptResult(null);
+    startPromptTransition(async () => {
+      const r = await setPolishPrompt(fd);
+      setPromptResult(r);
+      if (r.ok) {
+        setSavedPrompt(draft);
+        setIsCustom(true);
+      }
+    });
+  }
+
+  function handleReset() {
+    if (!isCustom) return;
+    if (!window.confirm("Reset to the default polish prompt? Your customizations will be lost.")) {
+      return;
+    }
+    const fd = new FormData();
+    fd.set("prompt", "");
+    setPromptResult(null);
+    startPromptTransition(async () => {
+      const r = await setPolishPrompt(fd);
+      setPromptResult(r);
+      if (r.ok) {
+        setDraft(defaultPrompt);
+        setSavedPrompt(defaultPrompt);
+        setIsCustom(false);
+      }
+    });
+  }
+
+  return (
+    <Card
+      title="Polish prompt"
+      description="Routes every transcription through a small LLM to add punctuation, fix obvious slips, and apply explicit self-corrections (“I mean…”, “scratch that…”). The prompt below tells the LLM what to do; you can customize it or revert to the server default."
+    >
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            variant={enabled ? "outline" : "default"}
+            disabled={togglePending}
+            onClick={handleToggle}
+          >
+            {togglePending ? "Saving…" : enabled ? "Polish is ON · Turn off" : "Polish is OFF · Turn on"}
+          </Button>
+          {toggleResult && (
+            <p
+              className={cn(
+                "text-sm",
+                toggleResult.ok ? "text-sage" : "text-destructive"
+              )}
+              role="status"
+            >
+              {toggleResult.ok ? toggleResult.message : toggleResult.error}
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="text-sm font-medium" htmlFor="polish-prompt">
+            System prompt
+          </label>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isCustom
+              ? "You're using a custom prompt. Reset below to go back to the server default."
+              : "You're using the server default. Edit and save below to override."}
+          </p>
+          <textarea
+            id="polish-prompt"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            disabled={!enabled || promptPending}
+            rows={14}
+            className={cn(
+              "mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-mono leading-relaxed",
+              "outline-none focus:ring-2 focus:ring-ring",
+              "disabled:opacity-60"
+            )}
+            spellCheck={false}
+          />
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              onClick={handleSave}
+              disabled={!enabled || promptPending || !draftIsDirty || draftIsBlank}
+            >
+              {promptPending ? "Saving…" : "Save prompt"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleReset}
+              disabled={!isCustom || promptPending}
+            >
+              <RotateCcw className="h-4 w-4" />
+              Reset to default
+            </Button>
+            {promptResult && (
+              <p
+                className={cn(
+                  "text-sm",
+                  promptResult.ok ? "text-sage" : "text-destructive"
+                )}
+                role="status"
+              >
+                {promptResult.ok ? promptResult.message : promptResult.error}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }
 

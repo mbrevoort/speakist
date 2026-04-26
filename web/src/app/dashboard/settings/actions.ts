@@ -13,13 +13,88 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { organizations, orgMembers } from "@/lib/db/schema";
+import { organizations, orgMembers, users } from "@/lib/db/schema";
 import { requireUser, requireOrgAdmin } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 
 export type ActionResult =
   | { ok: true; message?: string }
   | { ok: false; error: string };
+
+// --- polish (per-user) ----------------------------------------------------
+//
+// The Mac side speaks to /api/me/polish via fetch; in the dashboard we can
+// hit the DB directly through a server action and skip the round trip.
+// Schema mirrors the API contract: `enabled` is a boolean, `system_prompt`
+// is `null` to clear (revert to default) or a non-empty string to set.
+
+const polishToggleSchema = z.object({ enabled: z.enum(["on", "off"]) });
+
+export async function setPolishEnabled(formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = polishToggleSchema.safeParse({
+      enabled: formData.get("enabled") ?? "off",
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    await db
+      .update(users)
+      .set({ polishEnabled: parsed.data.enabled === "on" })
+      .where(eq(users.id, user.id));
+
+    revalidatePath("/dashboard/settings");
+    return {
+      ok: true,
+      message:
+        parsed.data.enabled === "on"
+          ? "Polish enabled — every transcription gets cleaned up."
+          : "Polish disabled — raw transcripts will be returned as-is.",
+    };
+  } catch (err) {
+    console.error("setPolishEnabled failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
+const polishPromptSchema = z.object({
+  // Mirror the API's max-length cap so the failure modes stay consistent.
+  prompt: z.string().max(4000),
+});
+
+export async function setPolishPrompt(formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = polishPromptSchema.safeParse({
+      prompt: formData.get("prompt") ?? "",
+    });
+    if (!parsed.success) {
+      return { ok: false, error: "Prompt too long (4,000 char max)." };
+    }
+
+    // Whitespace-only is treated as "clear" so users can't accidentally
+    // commit a blank custom prompt (which would produce empty LLM
+    // outputs at polish time). Same rule as /api/me/polish.
+    const trimmed = parsed.data.prompt.trim();
+    const value = trimmed.length > 0 ? trimmed : null;
+
+    const db = getDb();
+    await db
+      .update(users)
+      .set({ polishSystemPrompt: value })
+      .where(eq(users.id, user.id));
+
+    revalidatePath("/dashboard/settings");
+    return {
+      ok: true,
+      message: value === null ? "Reset to default prompt." : "Custom prompt saved.",
+    };
+  } catch (err) {
+    console.error("setPolishPrompt failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(80) });
 

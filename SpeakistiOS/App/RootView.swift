@@ -63,6 +63,16 @@ struct HomeView: View {
                     }
                 }
 
+                if account.isSignedIn {
+                    Section("Polish") {
+                        NavigationLink {
+                            PolishSettingsView()
+                        } label: {
+                            Label("Polish prompt", systemImage: "wand.and.sparkles")
+                        }
+                    }
+                }
+
                 Section {
                     NavigationLink {
                         HistoryView()

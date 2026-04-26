@@ -60,6 +60,13 @@ final class SpeakistAccountManager: ObservableObject {
     private var preferences: Preferences?
     #endif
     private var client: SpeakistAPIClient?
+    /// Read-only accessor for views that need to call API methods directly
+    /// (e.g., the iOS Polish settings screen). Nil until `bind(client:)`
+    /// completes during app construction. Mac code uses `env.apiClient`
+    /// instead — this is the path for iOS where there's no AppEnvironment
+    /// wrapper yet.
+    var apiClient: SpeakistAPIClient? { client }
+
     private var pollTask: Task<Void, Never>?
 
     /// Snapshot of the active device-code pair so `pollNow()` can fire a

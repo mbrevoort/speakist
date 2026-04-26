@@ -1,13 +1,15 @@
-// Org settings. Phase 3 surface: name, auto-join domain, leave/delete.
-// Phase 5 adds the Deepgram key override panel for super-admin-flagged
-// orgs (on a separate super-admin route, not here).
+// Combined account + org settings.
+//   * Polish prompt + enabled toggle  — per-user
+//   * Org name, auto-join domain      — admin+
+//   * Leave / delete org              — situational
 
 import { and, eq } from "drizzle-orm";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
-import { orgMembers } from "@/lib/db/schema";
+import { orgMembers, users } from "@/lib/db/schema";
+import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
 import { SettingsClient } from "./settings-client";
 
 export const metadata = { title: "Settings — Speakist" };
@@ -18,19 +20,31 @@ export default async function SettingsPage() {
 
   const canAdmin = org.role === "owner" || org.role === "admin";
 
-  // Am I the sole owner? If so, leave/delete flow changes.
   const db = getDb();
+
+  // Am I the sole owner? If so, leave/delete flow changes.
   const owners = await db
     .select({ userId: orgMembers.userId })
     .from(orgMembers)
     .where(and(eq(orgMembers.orgId, org.id), eq(orgMembers.role, "owner")));
   const isSoleOwner = org.role === "owner" && owners.length === 1;
 
+  // Polish prefs are per-user, not per-org. Pulled here so the client
+  // form can hydrate without an API round-trip on render.
+  const [polishRow] = await db
+    .select({
+      enabled: users.polishEnabled,
+      systemPrompt: users.polishSystemPrompt,
+    })
+    .from(users)
+    .where(eq(users.id, user.id))
+    .limit(1);
+
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Settings"
-        description="Manage your organization's details and membership."
+        description="Your account and your organization."
       />
       <SettingsClient
         orgName={org.name}
@@ -39,6 +53,10 @@ export default async function SettingsPage() {
         canAdmin={canAdmin}
         isSoleOwner={isSoleOwner}
         role={org.role}
+        polishEnabled={!!polishRow?.enabled}
+        polishPrompt={polishRow?.systemPrompt ?? DEFAULT_POLISH_PROMPT}
+        polishIsCustom={!!polishRow?.systemPrompt}
+        polishDefaultPrompt={DEFAULT_POLISH_PROMPT}
       />
     </div>
   );
