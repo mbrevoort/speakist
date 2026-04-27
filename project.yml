@@ -357,12 +357,27 @@ targets:
           SPEAKIST_DISPLAY_NAME: "Speakist Dev"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
           SPEAKIST_API_BASE_URL: "https://speakist-dev.brevoortstudio.com"
+          # Manual signing with the Apple Distribution identity. With
+          # automatic signing, xcodebuild tried to ALSO mint a separate
+          # iOS App Development cert during archive (for the underlying
+          # build phase), eventually hitting Apple's per-cert-type cap.
+          # Manual mode tells Xcode "use exactly this identity, don't
+          # try to provision anything else." `-allowProvisioningUpdates`
+          # in release-ios-ci.sh still handles the matching App Store
+          # provisioning profile via the App Store Connect API key —
+          # that side is unaffected by the cert cap.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios
           SPEAKIST_CHANNEL: stable
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
+          # Same manual-signing reasoning as Dev. Release config exists
+          # for the future App Store production pipeline.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
     dependencies:
       - target: SpeakistKeyboard
 
@@ -451,11 +466,18 @@ targets:
           SPEAKIST_CHANNEL: dev
           SPEAKIST_DISPLAY_NAME: "Speakist Dev"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
+          # Mirror the parent app's manual-signing setup so embedded
+          # code signing matches. See the SpeakistiOS Dev block above
+          # for the full reasoning.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.Keyboard
           SPEAKIST_CHANNEL: stable
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
 
 schemes:
   Speakist:
