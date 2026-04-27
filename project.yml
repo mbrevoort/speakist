@@ -362,12 +362,19 @@ targets:
           # iOS App Development cert during archive (for the underlying
           # build phase), eventually hitting Apple's per-cert-type cap.
           # Manual mode tells Xcode "use exactly this identity, don't
-          # try to provision anything else." `-allowProvisioningUpdates`
-          # in release-ios-ci.sh still handles the matching App Store
-          # provisioning profile via the App Store Connect API key —
-          # that side is unaffected by the cert cap.
+          # try to provision anything else."
+          #
+          # `PROVISIONING_PROFILE_SPECIFIER` names the App Store profile
+          # that the Distribution cert signs into. The profile must
+          # exist at developer.apple.com (Profiles → "+" → App Store →
+          # bundle ID `…ios.dev` → Apple Distribution cert → Name:
+          # `Speakist iOS Dev`). `release-ios-ci.sh`'s
+          # `-allowProvisioningUpdates` + the App Store Connect API
+          # key download it onto the runner at archive time; nothing
+          # is auto-created so the cap stays untouched.
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Speakist iOS Dev"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios
           SPEAKIST_CHANNEL: stable
@@ -375,9 +382,11 @@ targets:
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           # Same manual-signing reasoning as Dev. Release config exists
-          # for the future App Store production pipeline.
+          # for the future App Store production pipeline; it'll need
+          # its own `Speakist iOS` (App Store) profile in the portal.
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Speakist iOS"
     dependencies:
       - target: SpeakistKeyboard
 
@@ -467,10 +476,13 @@ targets:
           SPEAKIST_DISPLAY_NAME: "Speakist Dev"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
           # Mirror the parent app's manual-signing setup so embedded
-          # code signing matches. See the SpeakistiOS Dev block above
-          # for the full reasoning.
+          # code signing matches. The keyboard extension needs its own
+          # App Store provisioning profile (`Speakist iOS Dev Keyboard`
+          # in the portal) because Apple validates parent/child bundle
+          # IDs against per-target profiles, not a shared one.
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Speakist iOS Dev Keyboard"
         Release:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.ios.Keyboard
           SPEAKIST_CHANNEL: stable
@@ -478,6 +490,7 @@ targets:
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Speakist iOS Keyboard"
 
 schemes:
   Speakist:
