@@ -6,6 +6,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   updateOrgName,
@@ -239,15 +240,19 @@ function PolishCard({
     setMode(serverMode);
   }, [serverEnabled, serverMode]);
 
-  function handleToggle() {
-    const next = !enabled;
+  function handleToggle(next: boolean) {
+    if (next === enabled) return;
     const fd = new FormData();
     fd.set("enabled", next ? "on" : "off");
     setToggleResult(null);
+    // Optimistic flip so the switch animates immediately. Roll back on
+    // server failure so the UI doesn't lie about persisted state.
+    const previous = enabled;
+    setEnabled(next);
     startToggleTransition(async () => {
       const r = await setPolishEnabled(fd);
       setToggleResult(r);
-      if (r.ok) setEnabled(next);
+      if (!r.ok) setEnabled(previous);
     });
   }
 
@@ -272,13 +277,21 @@ function PolishCard({
     >
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant={enabled ? "outline" : "default"}
-            disabled={togglePending}
-            onClick={handleToggle}
+          <label
+            htmlFor="polish-toggle"
+            className="flex items-center gap-3 cursor-pointer select-none"
           >
-            {togglePending ? "Saving…" : enabled ? "Polish is ON · Turn off" : "Polish is OFF · Turn on"}
-          </Button>
+            <Switch
+              id="polish-toggle"
+              checked={enabled}
+              onCheckedChange={handleToggle}
+              disabled={togglePending}
+              aria-label="Polish each transcription"
+            />
+            <span className="text-sm font-medium">
+              Polish each transcription
+            </span>
+          </label>
           {toggleResult && (
             <p
               className={cn(
