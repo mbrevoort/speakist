@@ -1,8 +1,19 @@
 # Speakist architecture
 
-A menu-bar-only macOS utility that captures push-to-talk audio, transcribes it via a cloud STT API, optionally cleans it up with an LLM, and pastes the result at the user's cursor in any app.
+Speakist is push-to-talk dictation for Mac and iOS, backed by a small
+Cloudflare Worker. The product lives in three places:
 
-See [speakist-prd.md](speakist-prd.md) for the product spec. This doc describes how the pieces are wired together in code.
+| Surface | Code | What it does |
+|---|---|---|
+| Mac menu-bar utility | `Speakist/` | Hold a shortcut, speak, release; transcript pastes at the cursor in any app. |
+| iOS containing app | `SpeakistiOS/` | Quick Dictate (record → polish → clipboard). Holds the mic session. |
+| iOS keyboard extension | `SpeakistKeyboard/` | Custom keyboard with a record button. Cannot hold the mic itself; talks to the containing app via App Group. |
+| Backend | `web/` | Auth (magic-link + device-code), per-org pricing, transcribe proxy, polish, billing. Next.js → Cloudflare Workers via OpenNext, D1 for storage, R2 for DMG hosting. |
+| Cross-target Swift | `Shared/` | A handful of files used by all three Apple targets — channel resolution, App Group bridge, history entry, etc. |
+
+See [speakist-prd.md](speakist-prd.md) for the product spec; that doc
+captures intent and is intentionally light on implementation. This doc
+is the inverse — how the wires are run.
 
 ---
 
@@ -10,279 +21,358 @@ See [speakist-prd.md](speakist-prd.md) for the product spec. This doc describes 
 
 | Layer | Choice |
 |---|---|
-| Language | Swift 5.10 |
-| UI | SwiftUI (+ AppKit bridges for menu bar, HUD, windows) |
-| Min OS | macOS 14 (Sonoma) |
-| Build | Xcode 15+, project generated from [`project.yml`](../project.yml) via [XcodeGen](https://github.com/yonaskolb/XcodeGen) |
-| Signing | Developer ID (team `Q5T8FJNX57`), Hardened Runtime on |
-| Persistence | SQLite via [GRDB.swift](https://github.com/groue/GRDB.swift) |
-| Shortcuts | [sindresorhus/KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) |
-| Auto-update | [Sparkle 2](https://github.com/sparkle-project/Sparkle) |
-| Bundle ID | `com.brevoort-studio.speakist` |
+| Apple targets | Swift 5.10, SwiftUI (+ AppKit / UIKit bridges), Xcode 16+ |
+| Min OS | macOS 14 (Sonoma), iOS 17 |
+| Build | XcodeGen-generated `Speakist.xcodeproj` from [`project.yml`](../project.yml) |
+| Code signing | Developer ID Application for Mac DMGs; Apple Distribution for iOS App Store / TestFlight (team `Q5T8FJNX57`) |
+| Mac persistence | SQLite via [GRDB.swift](https://github.com/groue/GRDB.swift) |
+| Mac shortcuts | [sindresorhus/KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) |
+| Mac auto-update | [Sparkle 2](https://github.com/sparkle-project/Sparkle) |
+| iOS IPC | App Group shared `UserDefaults` + Darwin notifications + URL scheme deep-links |
+| Backend framework | Next.js 15 (App Router) + TypeScript + Tailwind + shadcn/ui |
+| Backend hosting | Cloudflare Workers via [`@opennextjs/cloudflare`](https://opennext.js.org) |
+| Database | Cloudflare D1 (managed SQLite) |
+| ORM | Drizzle (TypeScript-native, SQLite-friendly) |
+| Auth | Auth.js v5 (NextAuth) + magic-link + Drizzle adapter |
+| Email | Resend (dev falls back to console) |
+| Payments | Stripe (Checkout + Customer Portal + webhooks) |
+| Upstream STT | Groq Whisper (default) and DeepGram, switchable per-org by super admin |
+| Polish LLM | Groq `llama-3.1-8b-instant` |
 
-Deliberately avoided: third-party networking (URLSession suffices), telemetry SDKs, Alamofire, Core Data.
-
----
-
-## 2. High-level architecture
-
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│                          AppDelegate (MainActor)                      │
-│    owns AppEnvironment, MenuBarController, ShortcutManager,           │
-│    SettingsWindowController, HistoryWindowController, Onboarding      │
-└───────────────────────────────────────────────────────────────────────┘
-                                  │
-                       ┌──────────┴──────────┐
-                       │   AppEnvironment    │  (DI container)
-                       └──────────┬──────────┘
-                                  │
-     ┌──────────────┬─────────────┼─────────────┬──────────────┐
-     ▼              ▼             ▼             ▼              ▼
-Preferences    Keychain     PermissionCoord  DeviceMonitor   Logger
-HistoryStore   Correction   UsageTracker     AudioArchive    Notifier
-AudioRecorder  CursorInserter FocusedField   HUDController   Updater
-               TranscriptionService
-
-       (shortcut trigger)
-       ShortcutManager ──▶ AudioRecorder ──▶ TranscriptionService
-                                                   │
-                                                   ├─▶ DeepgramClient
-                                                   ├─▶ CursorInserter (clipboard + ⌘V)
-                                                   ├─▶ HistoryStore + AudioArchive
-                                                   └─▶ UsageTracker + HUDController + Notifier
-```
-
-### 2.1 Threading model
-
-- **Main actor** owns all UI, permissions, preferences, SQLite access, and the menu bar. `AppEnvironment`, `HistoryStore`, `CorrectionStore`, `Preferences`, `KeychainStore`, `PermissionCoordinator`, `HUDController`, `MenuBarController`, `AppDelegate`, and all SwiftUI views are `@MainActor`.
-- **AudioRecorder** is deliberately *not* main-actor-isolated. Its mic tap closure runs on Core Audio's internal thread; `start`/`stop` are marked `@MainActor` so mutations to state always happen on main. The tap reads `self.converter` / `self.outputFile` directly — safe because we install/remove the tap synchronously before those properties change.
-- **STT client** (`DeepgramClient`) is a `struct` with `Sendable` conformance, so it can be awaited from any actor without reference-capture concerns.
-- **Sqlite writes** go through `DatabaseQueue.write { … }` (GRDB serializes internally).
-
-### 2.2 Activation policy
-
-`LSUIElement = YES` in Info.plist. `NSApp.setActivationPolicy(.accessory)` is re-applied on launch. No Dock icon, no Cmd+Tab presence. Settings / History / Onboarding are explicit `NSWindowController`s that call `NSApp.activate(ignoringOtherApps:)` before `showWindow(nil)` + `orderFrontRegardless()` — the SwiftUI `Settings { }` scene's `showSettingsWindow:` dispatch is unreliable for menu-bar-only apps, so we bypass it entirely.
+Deliberately avoided: third-party networking SDKs (`URLSession`/`fetch`
+suffice), telemetry, Core Data, multiple-region hosting, RLS-style DB
+policies (Cloudflare D1 doesn't have RLS — every server route goes
+through `requireUser` / `requireOrgMember` / `requireSuperAdmin`).
 
 ---
 
-## 3. Module layout
+## 2. The transcribe path
+
+This is the load-bearing flow. The same shape on Mac and iOS.
 
 ```
-Speakist/
-├── App/                 @main, AppDelegate (MainActor), DI container (AppEnvironment), Notifier
-├── MenuBar/             NSStatusItem controller + programmatically-drawn brand glyph
-├── Shortcut/            Wraps KeyboardShortcuts, owns push-to-talk state machine
-├── Recording/           AVAudioEngine capture + device enumeration + live RMS levels
-├── Transcription/       Deepgram client + orchestrator
-├── Paste/               Clipboard-snapshot + synthetic ⌘V, plus AX focus probe
-├── Corrections/         Word-level Myers diff → correction pairs → SQLite store → Deepgram keyterms
-├── History/             SQLite-backed transcription log, FTS5 search, audio archive, UI window
-├── Settings/            SettingsWindowController + SwiftUI sidebar + tab views + Keychain + Preferences
-├── HUD/                 Floating borderless panel with pulsing dot + live waveform + timer
-├── Onboarding/          First-run 4-pane flow (welcome, permissions, provider, launch-at-login)
-├── Permissions/         Mic + Accessibility state machine with TCC polling
-├── Usage/               Deepgram minute rollups + cost estimation
+                   ┌─────────────────────┐
+   user gesture ──▶│  AudioRecorder      │       16-kHz mono Int16 WAV
+                   │  (AVAudioEngine)    │       streamed to disk
+                   └──────────┬──────────┘
+                              │
+                              ▼
+              ┌───────────────────────────────┐
+              │  SpeakistTranscribeClient     │   POST /api/transcribe
+              │  bearer = signed-in session   │   body = audio bytes
+              └───────────────┬───────────────┘
+                              │
+                              ▼
+   ┌──────────────────────────────────────────────────────────────┐
+   │  Cloudflare Worker — /api/transcribe                         │
+   │  1. Resolve user's active org (last_active_org_id || 1st)    │
+   │  2. Read X-Language. Pick provider+model:                    │
+   │       en  → groq/whisper-large-v3-turbo                      │
+   │       else → groq/whisper-large-v3                           │
+   │     (plus org's allowed_models_json as a guard + override)   │
+   │  3. resolveProviderKey(env, orgId, providerId)               │
+   │       org override → app_settings system key → env → throw   │
+   │  4. dispatch() → upstream provider's REST API                │
+   │  5. (optional) runPolish() — Groq llama-3.1-8b-instant       │
+   │       super-admin's mode prompt; output-length sanity check  │
+   │  6. debitForAudioTranscription() — credit ledger insert      │
+   │  7. return { text, audioSeconds, provider, model, balance }  │
+   └──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                   ┌─────────────────────┐
+                   │  CursorInserter     │   clipboard + synthetic ⌘V
+                   │  (Mac)              │   if AX detects editable
+                   └─────────────────────┘
+                              │
+                              ▼
+                  ┌────────────────────┐
+                  │ HistoryStore       │   SQLite, on-device only
+                  │ AudioArchive       │   audio file, on-device only
+                  └────────────────────┘
+```
+
+**Privacy claim**: audio bytes pass through the Worker en route to the
+upstream provider, but the Worker streams without persisting and never
+writes audio or transcript text to D1, R2, or logs. The history (raw
++ polished transcript + the .wav file) lives only on the user's
+device.
+
+### 2.1 Why a proxy and not Mac-direct
+
+Earlier versions had the Mac POST audio to DeepGram directly using a
+short-lived ephemeral key minted by the Worker. The proxy path replaced
+that because:
+
+- Provider can be swapped per-org by the super admin without a Mac
+  release.
+- Per-transcription cost accounting is straightforward (server sees
+  the provider's reported duration; ledger insert is inline).
+- Polish and credit debits happen in the same response, removing the
+  separate `/api/usage` round-trip the legacy path needed.
+
+The legacy DeepGram-direct path (`scripts/release.sh` calls it Phase A)
+still exists in the Mac codebase but is gated behind `useTranscribeProxy`
+which defaults to true. Plan to remove it once we're confident the
+proxy has been the only path used for a release cycle.
+
+---
+
+## 3. Module layout (Apple)
+
+```
+Shared/                  Cross-target. SpeakistChannel, AppGroupBridge,
+                         DarwinNotifier, HistoryEntry, SpeakSessionState,
+                         URLSchemeBridge.
+
+Speakist/                Mac app.
+├── App/                 @main, AppDelegate (MainActor), AppEnvironment (DI),
+│                        Notifier
+├── Account/             SpeakistAPIClient (shared with iOS via project.yml
+│                        cross-compile), SpeakistAccountManager, KeychainStore
+├── MenuBar/             NSStatusItem controller + programmatically-drawn glyph
+├── Shortcut/            KeyboardShortcuts wrapper, push-to-talk state machine
+├── Recording/           AVAudioEngine capture + device monitor + RMS levels
+├── Transcription/       SpeakistTranscribeClient (proxy path),
+│                        DeepgramClient (legacy direct path),
+│                        TranscriptionService (orchestrator)
+├── Paste/               Clipboard snapshot + synthetic ⌘V + AX focus probe
+├── Corrections/         Myers diff → CorrectionStore → keyterm boost feed
+├── History/             SQLite-backed history, FTS5 search, audio archive,
+│                        history window
+├── Settings/            Settings window controller + sidebar tabs +
+│                        Preferences (UserDefaults) + KeychainStore
+├── HUD/                 Floating panel with pulsing dot + waveform + timer
+├── Onboarding/          First-run flow (welcome → permissions → sign-in →
+│                        polish opt-in → launch-at-login)
+├── Permissions/         Mic + Accessibility state machine, TCC polling
+├── Usage/               Local rollups (server is the source of truth)
 ├── Updates/             Sparkle 2 integration
 ├── Logging/             os.Logger façade with rotating 5MB file sink
 └── Resources/           Assets.xcassets (app icon, accent color), brand colors
+
+SpeakistiOS/             iOS containing app.
+├── App/                 @main, RootView (Home settings list)
+├── Onboarding/          First-run flow (sign-in → mic → keyboard install)
+├── Session/             SpeakSessionController, ListeningOverlay,
+│                        SwipeBackHint
+├── QuickDictate/        Quick-dictate flow (record → polish → clipboard)
+├── Recording/           AudioRecorder (iOS variant)
+├── Transcription/       SpeakistTranscribeClient (iOS-minimal variant)
+├── Settings/            PolishSection (inline section, not a screen)
+├── History/             HistoryStore (App-Group-shared) + HistoryView
+
+SpeakistKeyboard/        iOS custom keyboard extension.
+├── KeyboardViewController.swift
+└── …                    Renders the record button, opens the containing
+                         app via URL scheme + Darwin notifications. Cannot
+                         hold the mic session itself (iOS rule since 2014).
 ```
+
+### 3.1 What gets cross-compiled
+
+`SpeakistiOS` and `SpeakistKeyboard` reuse a handful of files from
+`Speakist/` (the Mac target) — see `project.yml` `SpeakistiOS:` source
+list. Today: `AppIdentity`, `Logger`, `Brand`, `SpeakistAPIClient`,
+`SpeakistAccountManager`, `TranscriptionTypes`, `DiffEngine`,
+`KeychainStore`. Adding a file to that list requires both targets to
+compile cleanly without macOS-only imports.
+
+CI's path filter knows about this list — see
+`.github/workflows/deploy-dev.yml` — so a change to one of those
+specific files retriggers both Mac and iOS builds, not just Mac.
+
+### 3.2 Threading model (Mac)
+
+- **Main actor** owns all UI, permissions, preferences, SQLite access,
+  and the menu bar.
+- **AudioRecorder** is deliberately *not* main-actor-isolated. Its mic
+  tap closure runs on Core Audio's internal thread; `start`/`stop` are
+  marked `@MainActor` so mutations to state always happen on main.
+- **STT clients** are `Sendable` structs constructed per-request, so
+  they can be awaited from any actor without reference-capture
+  concerns.
+- **GRDB writes** go through `DatabaseQueue.write { … }` (GRDB
+  serializes internally).
+
+### 3.3 Threading model (iOS)
+
+Largely the same, with two iOS-specific complications:
+
+1. The keyboard extension can't access the mic. The extension fires a
+   Darwin notification + opens a URL into the containing app, which
+   then takes over.
+2. iOS 26 enforces a manual swipe-right gesture to return from a
+   keyboard-launched main app — `SwipeBackHint` teaches the user the
+   gesture once.
 
 ---
 
-## 4. Data flow: one round-trip
+## 4. Persistence
 
-```
-          user holds ⌃⌘X                                user releases ⌃⌘X
-                │                                                │
-                ▼                                                ▼
-  ShortcutManager.pushDown()                    ShortcutManager.pushUp()
-                │                                                │
-                ▶ permission + state gates                       ▶ stop recording → RecordingResult
-                ▶ beginRecording()                               ▶ min-duration check
-                ▶ AudioRecorder.start()                          ▶ TranscriptionService.process(…)
-                ▶ HUDController.showRecording()                          │
-                ▶ max-duration timer armed                               ▼
-                                                            build keyterms from CorrectionStore
-                                                                         │
-                                                                         ▼
-                                                            DeepgramClient.transcribe() (+1 retry)
-                                                                         │
-                                                                         ▼
-                                                            FocusedFieldProbe.probe() → AX editable?
-                                                                         │
-                                                                         ▼
-                                                            CursorInserter.insert(text,
-                                                                                   hasEditableFocus)
-                                                                         │
-                                                                         ▼
-                                                            AudioArchive.archive(...) → history file
-                                                            HistoryStore.save(TranscriptionEntry)
-                                                            UsageTracker.record(...)
-                                                            HUDController.hide()
-                                                            NSSound.Pop playback (if enabled)
-```
-
-The one-retry-with-backoff lives in `TranscriptionService.withRetry`; `TranscriptionError.authFailure` cases never retry.
-
----
-
-## 5. Persistence
-
-Three SQLite databases in `~/Library/Application Support/Speakist/`:
-
-| File | Managed by | Schema |
-|---|---|---|
-| `history.sqlite` | [`HistoryStore`](../Speakist/History/HistoryStore.swift) | `transcriptions` + FTS5 shadow `transcriptions_fts` + `usage` |
-| `corrections.sqlite` | [`CorrectionStore`](../Speakist/Corrections/CorrectionStore.swift) | `corrections` (unique `(from_text, to_text)`) |
-
-Audio files live in `~/Library/Application Support/Speakist/Audio/<uuid>.wav`, managed by `AudioArchive` with a rolling "keep last N" prune policy (N configurable; default 20).
-
-### Retention
-- History: older-than-N-days **AND** beyond-top-M-entries, whichever is stricter. Defaults: 90 days / 1000 entries, user-tunable in Settings → History.
-- Audio: `keepAudio` toggle + `keepAudioCount`; purged on each new archive.
-- Both databases are unencrypted; macOS FileVault handles disk-level protection. Documented in About.
-
-### Correction learning loop
-
-1. User edits a history row's `final_transcript`.
-2. `DiffEngine.corrections(from:raw, to:edited)` runs a Myers-LCS token diff, extracts 1–4-token replacement runs, filters out pure punctuation/case-only edits.
-3. Each `CorrectionPair` is ingested into the `corrections` table (upsert on `(from, to)` with incrementing `count` and `last_seen`).
-4. On the next transcription, `VocabularyBuilder.keyterms(from:)` returns the top 50 *proper-noun-like* corrections (capitalized / has a digit) to feed into Deepgram's custom-vocab slot (`keyterm[]` for Nova-3, `keywords[]` for Nova-2).
-
----
-
-## 6. Deepgram client
-
-| Client | Endpoint | Retry | Custom-vocab slot |
+| Store | Lives | Schema | Notes |
 |---|---|---|---|
-| [`DeepgramClient`](../Speakist/Transcription/DeepgramClient.swift) | `POST /v1/listen` | 1× @ 500ms | `keyterm[]` (Nova-3) or `keywords[]` (Nova-2) |
+| Mac history | `~/Library/Application Support/Speakist/history.sqlite` | `transcriptions` (raw + polished + audio path) + FTS5 + `usage` rollup | Editing `final_transcript` triggers correction-pair extraction |
+| Mac corrections | `~/Library/Application Support/Speakist/corrections.sqlite` | `corrections (from, to)` upserted with `count` + `last_seen` | Top 50 proper-noun-shaped entries fed to STT keyterms (when supported) |
+| Mac audio archive | `~/Library/Application Support/Speakist/Audio/<uuid>.wav` | rolling "keep last N" prune | N is user-tunable; default 20 |
+| iOS history | App-Group shared `UserDefaults` + audio in App Group container | `HistoryEntry` struct list (no SQLite — small N, simple list works) | Shared with the keyboard extension so both surfaces see the same recent dictations |
+| Backend | Cloudflare D1 | `users`, `organizations`, `org_members`, `invitations`, `sessions`, `mac_sessions`, `device_auth_codes`, `usage_events`, `credit_ledger`, `pricing_config`, `provider_pricing`, `releases`, `app_settings`, `vocabulary_entries` | See `web/drizzle/migrations/` for the full schema timeline |
 
-The client owns no state beyond its API key + model selection — it's a `Sendable` struct constructed per-request. Errors map into a unified `TranscriptionError` enum (`.authFailed`, `.rateLimited`, `.serverError(Int, String?)`, `.network(String)`, etc.). `TranscriptionService` handles them centrally — `.authFailure` surfaces a user-visible notification, transient failures write a `transcription_status = "failed"` history row that the user can re-run from the History window.
+### 4.1 Correction-learning loop
+
+1. User edits a Mac history row's `final_transcript`.
+2. `DiffEngine.corrections(from:raw, to:edited)` runs a Myers token
+   diff and extracts 1–4-token replacement runs.
+3. Each pair is upserted into `corrections.sqlite`.
+4. On the next transcription, `VocabularyBuilder.keyterms(from:)`
+   returns the top 50 proper-noun-shaped corrections to feed the
+   transcription engine's keyterm-boost slot if the chosen provider
+   supports one (DeepGram does; Groq Whisper doesn't, so keyterms
+   are silently dropped on Whisper).
+
+iOS doesn't have a correction loop today — the iOS history surface is
+read-only.
 
 ---
 
-## 7. Paste pipeline
+## 5. Auth
 
-[`CursorInserter`](../Speakist/Paste/CursorInserter.swift) does the clipboard + synthetic ⌘V dance:
+Two flows, share the same backing tables.
 
-1. Snapshot current pasteboard (all types, all items) + `changeCount`.
-2. Clear + write transcript as plain string.
-3. Post synthetic ⌘V via `CGEvent` on `.cghidEventTap` if the focused field is editable.
-4. Sleep ~120ms for the target app to consume the paste.
-5. Restore the snapshot only if `changeCount` is still `snapshot + 1` (no one else wrote during the window).
+### 5.1 Web magic-link
 
-[`FocusedFieldProbe`](../Speakist/Paste/FocusedFieldProbe.swift) uses AX APIs (`AXUIElementCreateSystemWide` + `kAXFocusedUIElementAttribute`) to decide whether to fire the synthetic keystroke at all. Roles checked: `kAXTextFieldRole`, `kAXTextAreaRole`, `kAXComboBoxRole`, secure-text subroles, and any element exposing a settable string `AXValue` or a `kAXSelectedTextAttribute`.
+Standard Auth.js: enter email → email arrives → click link → session
+cookie. Used for `/dashboard` access on the web.
 
-Fallback: if the focused element isn't editable, we **don't** restore the old clipboard — we leave the transcript on the pasteboard and post a "Copied to clipboard" notification so the user can `⌘V` manually.
+### 5.2 Device-code (Mac + iOS)
+
+```
+1. Mac/iOS app   POST /api/auth/device/start                → user_code, device_code
+2. Mac/iOS app   open https://<base>/link?code=<user_code>  in browser
+3. User signs in on web with magic link if not already
+4. /link page    confirms the code; if user has 2+ org memberships,
+                 picks one explicitly here (writes users.last_active_org_id)
+5. Mac/iOS app   POST /api/auth/device/poll every ~3s  → refresh token
+                 (stored in Keychain on Mac, in iOS Keychain via App Group)
+```
+
+The /link page's workspace picker is the **only** UI for choosing a
+workspace on Mac/iOS. To switch workspaces on a device, sign out and
+sign back in. Web has a topbar dropdown for switching in-place.
+
+### 5.3 Multi-org
+
+A user can belong to multiple `organizations` via `org_members` rows.
+`getCurrentOrgForUser` resolves to `users.last_active_org_id` if it's
+still a valid membership; otherwise to the earliest-joined membership
+and self-heals the column. `acceptInvitation` auto-sets the persisted
+choice to the just-joined org so the post-redirect dashboard lands in
+the new workspace, not a stale earlier one.
+
+---
+
+## 6. Polish
+
+A second LLM pass that runs after STT. Two server-side modes:
+
+- **Intuitive** — applies explicit self-corrections ("I mean…",
+  "scratch that…"), fixes obvious slips. The intent-aware variant.
+- **Prescriptive** — punctuation, capitalization, clear grammar
+  fixes only. Never touches meaning. Default for new users.
+
+Each user picks `polish_mode` per their `users` row (UI on Mac
+Settings → Polish, iOS Home → Polish, web `/dashboard/settings`).
+The actual prompt strings live in `app_settings.polish_<mode>_prompt`,
+overridable at `/admin/system` by super admins; NULL falls back to
+the baked-in constants in `web/src/lib/transcription/polish.ts`.
+
+`runPolish` has two defensive backstops:
+
+1. If output length > 2× input length → reject (model went rogue).
+2. If output starts with a banned assistant preamble ("Sure,",
+   "Here is", "Of course", "I'd be happy to", etc.) → reject.
+
+On rejection the raw transcript is returned and `errorReason` is
+logged. Same for any HTTP/network failure — polish is best-effort and
+must never block the user from getting their transcript.
+
+---
+
+## 7. Per-org provider routing
+
+`organizations.allowed_models_json` is a per-org whitelist of
+`provider/model` slugs. Behaviour in `lib/transcription/orgAccess.ts`:
+
+- NULL or empty → use the language-based default (`groq/whisper-
+  large-v3-turbo` for English, `groq/whisper-large-v3` otherwise).
+- Non-empty and the language default is in the list → use the
+  language default.
+- Non-empty and the language default is NOT in the list → use the
+  first allowed entry.
+
+Pinning an org to e.g. `["deepgram/nova-3"]` is how a super admin
+gives one org a different STT engine without changing global defaults.
+
+API key resolution (`lib/transcription/secrets.ts`) is in this order:
+
+1. Org override (`organizations.<provider>_key_override_encrypted`)
+2. System key (`app_settings.system_<provider>_key_encrypted`)
+3. `<PROVIDER>_API_KEY` env (Worker secret or `.env.local`)
+4. Throw `no_key_configured`
+
+All system + org-override keys are AES-GCM-encrypted at rest with
+`APP_ENCRYPTION_KEY` (set as a Worker secret).
 
 ---
 
 ## 8. Permissions
 
-Speakist needs two OS-level grants:
-
 | Grant | How requested | Consequence if denied |
 |---|---|---|
-| Microphone | `AVCaptureDevice.requestAccess(for: .audio)` — requires `com.apple.security.device.audio-input` entitlement with Hardened Runtime enabled | Recording fires no audio; `requestAccess` silently returns `false` |
-| Accessibility | `AXIsProcessTrustedWithOptions([...AXTrustedCheckOptionPrompt: true])` — no entitlement required | Synthetic ⌘V can't fire; transcripts go to clipboard only |
+| Microphone (Mac) | `AVCaptureDevice.requestAccess(for: .audio)` — needs `com.apple.security.device.audio-input` entitlement + Hardened Runtime | Recording fires no audio; `requestAccess` silently returns false |
+| Accessibility (Mac) | `AXIsProcessTrustedWithOptions` | Synthetic ⌘V can't fire; transcripts go to clipboard only |
+| Microphone (iOS) | `NSMicrophoneUsageDescription` in Info.plist | Recording fails |
+| Keyboard Full Access (iOS) | User toggles in Settings → General → Keyboard | Keyboard extension can't reach the App Group, can't open the containing app via URL |
+| Local Network (iOS) | `NSLocalNetworkUsageDescription` | Tailscale-routed dev backend (CGNAT IPs) is unreachable; production speakist.ai is fine |
 
-[`PermissionCoordinator`](../Speakist/Permissions/PermissionCoordinator.swift) polls both states every second on `.common` run-loop mode (so SwiftUI event tracking doesn't starve the timer) AND refreshes on `NSApplication.didBecomeActive` / `NSWorkspace.didActivateApplicationNotification` — the latter catches the common case where the user flips a switch in System Settings and returns to Speakist.
-
-Both grants are TCC-keyed on the signed binary hash. Ad-hoc rebuilds change that hash each build and invalidate the grant; Developer ID signing keeps it stable.
-
----
-
-## 9. UI surfaces
-
-### 9.1 Menu bar ([`MenuBarController`](../Speakist/MenuBar/MenuBarController.swift))
-
-- `NSStatusItem` with variable length, icon-only.
-- Custom glyph drawn programmatically in [`MenuBarIcon`](../Speakist/MenuBar/MenuBarIcon.swift) — a rounded speech bubble with a 5-bar waveform cut out via even-odd path winding. Color is **baked into the NSImage** per state (idle = black template, recording = peach, transcribing = mustard, paused = 45% alpha template) because `NSStatusBarButton.contentTintColor` is inconsistent.
-- Menu attached directly (`statusItem.menu = menu`) with `NSMenuDelegate.menuNeedsUpdate(_:)` rebuilding items on each open, so the status line, "Recent" submenu, and Pause/Resume label always reflect current state.
-- Alpha pulse animation (30fps sine) for recording / transcribing states.
-
-### 9.2 HUD overlay ([`HUDController`](../Speakist/HUD/HUDController.swift))
-
-- Floating `NSPanel` (`.borderless + .nonactivatingPanel`, level `.statusBar`).
-- Positioned ~28pt above the cursor; snaps to screen edges.
-- Live waveform: 12-bar ring buffer fed by `AudioRecorder.levels` PassthroughSubject at buffer rate (~64ms @ 16kHz / 1024 samples).
-- RMS level is `sqrt`-curved (`sqrt(min(rms*4, 1))`) so normal speech visibly fills ~60–80% of bar height instead of ~10%.
-- Ignores mouse events so it never steals focus.
-
-### 9.3 Settings ([`SettingsWindowController`](../Speakist/Settings/SettingsWindowController.swift) + [`SettingsWindow`](../Speakist/Settings/SettingsWindow.swift))
-
-Sidebar layout using `NavigationSplitView`. Eight sections: General, Shortcuts, Audio, Transcription, Vocabulary, History, Usage, About. Minimum window size 720×520; sidebar fixed between 200–260pt.
-
-The Deepgram key lives in the Keychain (service `com.brevoort-studio.speakist.apikeys`, account `deepgram`). All other preferences live in `UserDefaults` via [`Preferences`](../Speakist/Settings/Preferences.swift), an `ObservableObject` wrapper.
-
-### 9.4 History window ([`HistoryWindow`](../Speakist/History/HistoryWindow.swift))
-
-Two-pane split view: searchable/filterable list on the left, per-entry detail on the right. Detail has raw transcript (read-only), editable final transcript (diffs on blur → correction pairs), audio playback if retained, and re-transcribe button.
-
-### 9.5 Onboarding ([`OnboardingWindow`](../Speakist/Onboarding/OnboardingWindow.swift))
-
-Four panes: Welcome → Permissions → Sign in to Speakist (device-code flow) → Launch-at-login. Uses `canAdvance` gates so the Continue button only enables when each pane's requirements are met.
+`PermissionCoordinator` (Mac) polls TCC state every second on
+`.common` run-loop mode and refreshes on `NSApplication.didBecomeActive`
+and `NSWorkspace.didActivateApplicationNotification` — the latter
+catches the user flipping a switch in System Settings and returning to
+Speakist.
 
 ---
 
-## 10. Distribution & release
+## 9. Distribution
 
-- Debug/local: ad-hoc signing disabled, Developer ID signing applied by default because `DEVELOPMENT_TEAM` is set in [`project.yml`](../project.yml).
-- Release: `make archive` → Xcode `Release` configuration → `notarytool submit --wait` → `stapler staple` → DMG.
-- Auto-update: Sparkle 2 appcast at `https://speakist.ai/appcast.xml` (EdDSA public key lives in Info.plist `SUPublicEDKey`).
+| Channel | Bundle ID | Display | SUFeedURL | apiBaseURL | DMG / TestFlight |
+|---|---|---|---|---|---|
+| Mac stable | `com.brevoort-studio.speakist` | Speakist | `speakist.ai/appcast.xml` | `speakist.ai` | R2 → `downloads.speakist.ai` |
+| Mac beta | `com.brevoort-studio.speakist.beta` | Speakist Beta | `speakist.ai/appcast-beta.xml` | `speakist.ai` | Same R2 |
+| Mac dev | `com.brevoort-studio.speakist.dev` | Speakist Dev | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | R2 → `downloads-dev.brevoortstudio.com` |
+| Mac local | `com.brevoort-studio.speakist.local` | Speakist Local | (none) | `localhost:3000` | Xcode Debug only |
+| iOS dev | `com.brevoort-studio.speakist.ios.dev` | Speakist Dev | (n/a) | `speakist-dev.brevoortstudio.com` | TestFlight Internal Testing |
+| iOS local | `com.brevoort-studio.speakist.ios.local` | Speakist Local | (none) | (configurable, defaults to `speakist-dev`) | Xcode Debug only |
 
----
-
-## 10½. Speakist backend integration (Phase 6)
-
-The Mac app is no longer a standalone client — it authenticates against a
-companion Next.js backend that lives in [`web/`](../web/) and runs on
-Cloudflare (Workers + D1 via OpenNext). Billing lives server-side; the Mac
-just:
-
-1. **Signs in** via a device-code flow. `Speakist/Account/SpeakistAccountManager`
-   POSTs to `/api/device/start`, displays the returned user-code in Settings,
-   opens `/link?code=…` in the browser, polls `/api/device/poll` every ~3 s.
-   On "authorized" it stores a 48-hex refresh token in the Keychain
-   (`KeychainAccount.refreshToken`).
-2. **Mints a Deepgram key per transcription.** `TranscriptionService.buildClient()`
-   POSTs to `/api/deepgram/token` (Bearer auth) and receives a short-lived
-   scoped Deepgram key (TTL 10 minutes, `usage:write` only). The Mac uses
-   that key for one `/v1/listen` call; the server-side key auto-deletes
-   after TTL.
-3. **Reports usage** via `POST /api/usage` with `{transcriptionClientId,
-   wordCount, audioMs, model}`. Backend deduplicates on
-   `(orgId, transcriptionClientId)` so a Mac retry with the same UUID
-   debits at most once. Response includes `newBalanceMillicents` and
-   `autoTopupTriggered`.
-4. **(Planned)** Vocabulary sync via `GET/POST /api/vocabulary`. Server
-   endpoints exist; Mac-side wiring into `CorrectionStore` is a follow-up.
-
-### Privacy load-bearing claim
-
-The Mac talks to Deepgram **directly**. The backend only mints the
-authorization token. Your voice and transcripts never pass through
-Speakist's servers. This is not a marketing line — it's a constraint on
-every feature going forward.
-
-### Failure modes the Mac translates to UX
-
-| Backend signal | Mac behavior |
-|---|---|
-| `401 not signed in` | Notifier + "Session rejected — please sign in again" |
-| `402 insufficient_credit` | Notifier + "Top up at {URL}/dashboard/billing" |
-| Network error minting token | Retry once, then save failed history entry |
+Dev (Mac DMG + iOS TestFlight) ships automatically on every push to
+`main` via [`docs/cicd.md`](cicd.md). Beta and stable are manual via
+[`docs/releasing.md`](releasing.md), running the same `release.sh`
+script CI uses.
 
 ---
 
-## 11. What's deliberately *not* in v1
+## 10. What's deliberately not here
 
-- On-device / offline STT.
-- Streaming / token-by-token paste.
-- Per-app correction scoping (corrections are global).
-- Voice commands ("new paragraph", etc.).
-- Telemetry, remote crash reporting.
-- Mac App Store (sandbox blocks synthetic events).
+- On-device / offline STT. (Whisper.cpp would be the obvious add but
+  changes the privacy story significantly.)
+- Streaming / token-by-token paste. The ⌘V dance only works post-hoc.
+- Per-app correction scoping. Corrections are global.
+- Voice commands ("new paragraph", etc.). Whisper's prompt-based
+  steering can do this for some use cases but isn't worth the
+  complexity at this stage.
+- Telemetry, remote crash reporting. By design.
+- Mac App Store. Sandbox blocks the synthetic ⌘V CGEvent.
+- Windows / Linux / Android.
 
-See §11 of [speakist-prd.md](speakist-prd.md) for the full out-of-scope list.
+See §11 of [speakist-prd.md](speakist-prd.md) for the canonical
+out-of-scope list and rationale.

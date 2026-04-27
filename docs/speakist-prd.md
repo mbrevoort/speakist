@@ -1,6 +1,21 @@
 # Speakist — Product Requirements Document
 
-> Push-to-talk dictation for macOS. Hold a shortcut, speak, release → transcribed text appears at your cursor in any app.
+> Push-to-talk dictation for Mac and iOS. Hold a shortcut, speak,
+> release → transcribed text appears at your cursor.
+
+> **⚠ Historical context.** This PRD captures the original v1 product
+> intent. Several v1-era constraints have since been relaxed:
+>
+> - **iOS** has shipped (containing app + custom keyboard extension).
+> - **LLM polish** is a real feature, gated by a per-user toggle and
+>   mode picker (Intuitive / Prescriptive).
+> - **Multiple STT providers** are supported — Groq Whisper is now the
+>   default; DeepGram is opt-in per org by super admin.
+> - **Per-org user prefs and multi-org workspaces** exist.
+>
+> For an accurate picture of how the system actually works today, read
+> [architecture.md](architecture.md). This PRD is preserved as
+> rationale for early product decisions, not as a current spec.
 
 ---
 

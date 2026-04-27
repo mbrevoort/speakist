@@ -18,8 +18,11 @@ You need:
 - The repo checked out locally, `pnpm install` already done in `web/`
 - `wrangler login` completed once (OAuths your Cloudflare account)
 - Access to the Cloudflare dashboard for attaching the custom domain
-- A Deepgram admin API key (same one you use locally)
-- A Stripe account with test mode available
+- A **Groq** API key (`gsk_…`) — Groq is the default upstream STT
+  and powers the polish LLM. Without this nothing can transcribe.
+- A **Deepgram** admin API key (optional — only needed if you'll
+  pin any orgs to a `deepgram/*` model).
+- A Stripe account with test mode available.
 
 If you'll also ship Mac builds from this environment, you'll additionally
 need R2 buckets + `RELEASE_PUBLISH_TOKEN` — see
@@ -118,7 +121,7 @@ pnpm exec wrangler secret put AUTH_SECRET --env dev
 pnpm exec wrangler secret put AUTH_URL --env dev
 # value: https://speakist-dev.brevoortstudio.com
 
-# AES-256 key for encrypting Deepgram keys at rest
+# AES-256 key for encrypting per-(org, provider) key overrides + system keys at rest
 pnpm exec wrangler secret put APP_ENCRYPTION_KEY --env dev
 # value: openssl rand -base64 32
 
@@ -257,20 +260,35 @@ going to prod).
 
 ---
 
-## 8. Set the system Deepgram key via /admin/system
+## 8. Set the system provider keys via /admin/system
 
-The Deepgram admin API key (the one with `keys:write`) is stored in the
-database encrypted by `APP_ENCRYPTION_KEY`, not in env vars. Configure
-through the UI:
+Provider API keys are stored in D1 encrypted by `APP_ENCRYPTION_KEY`,
+not in env vars — that way they're rotatable through the UI without a
+redeploy and per-org overrides can layer on top. Configure:
 
 1. Visit `https://speakist-dev.brevoortstudio.com/auth/signin`
 2. Sign in as `mike@brevoort.com` — the magic link will land in your
-   Resend inbox (or your email, if you've verified the domain)
-3. After signin, go to `/admin/system`
-4. System Deepgram key → **Set key** → paste your Deepgram admin API key → Save
+   Resend inbox (or in dev console if Resend isn't wired up).
+3. After signin, go to `/admin/system`.
+4. **System Groq key** → **Set key** → paste your Groq API key
+   (`gsk_…` from <https://console.groq.com/keys>) → Save. **This is
+   load-bearing** — Groq is the default provider, so without this key
+   transcription will 500 for any org without its own override.
+5. (Optional) **System Deepgram key** → set if any org's allowed-models
+   list will include a `deepgram/*` model. Skip otherwise — most orgs
+   never touch Deepgram.
 
-If it complains about `APP_ENCRYPTION_KEY`, double-check step 3 actually
-set that secret.
+If saving a key complains about `APP_ENCRYPTION_KEY`, the secret from
+step 3 didn't make it onto the Worker. Re-run `wrangler secret put
+APP_ENCRYPTION_KEY --env dev` and redeploy.
+
+### Polish prompt overrides (optional)
+
+Same `/admin/system` page exposes editor cards for the two polish-mode
+prompts (Intuitive + Prescriptive). Both default to NULL (= use the
+baked-in constants in `web/src/lib/transcription/polish.ts`). Edit
+when you want to tighten the prompt against an observed regression
+without shipping a code change.
 
 ---
 
@@ -307,9 +325,16 @@ On the dev URL (`https://speakist-dev.brevoortstudio.com`):
       ```bash
       defaults write com.brevoort-studio.speakist apiBaseURL "https://speakist-dev.brevoortstudio.com"
       ```
-      Restart Speakist. Sign in (device code flow works over HTTPS the same
-      as local). Hold ⌃⌘X, dictate. Confirm `/dashboard/usage` shows the
-      event and `/dashboard/billing` shows a per-word debit.
+      Or just install Speakist Dev (the dev-channel build already points
+      here). Sign in via the device-code flow. Hold ⌃⌘X, dictate.
+      Confirm `/dashboard/usage` shows the event with provider `groq`
+      and model `whisper-large-v3-turbo`, and `/dashboard/billing`
+      shows a per-word debit.
+- [ ] (Optional, multi-org) Invite a second account, accept the
+      invitation while signed in. Confirm the dashboard topbar gains
+      a workspace switcher dropdown and clicking it switches active
+      org. Sign out + sign back in on Mac and confirm the `/link`
+      page presents a workspace picker.
 
 Everything green? Dev is ready. Share the URL with teammates; invite them
 from `/dashboard/members`.
@@ -371,8 +396,10 @@ new forward migration" affair.
 | `Could not find compiled Open Next config` on deploy | `pnpm deploy:dev` now chains `opennextjs-cloudflare build` before deploy. If you invoked `deploy` directly, run the build first. |
 | `ERROR: "getCloudflareContext" has been called in sync mode in either a static route` during build | Every page that touches D1 (directly or via `requireUser()`) must be dynamic. The root layout sets `export const dynamic = "force-dynamic"` for exactly this reason — don't remove it. |
 | Sign-in lands back on `/auth/signin` looking signed-out | Browser cached an earlier cookie state. Hard reload, or sign out via the account menu first. The signin page now redirects to the callback URL if already signed in. |
-| Deepgram "mint failed: Error: DEEPGRAM_PROJECT_ID is not set" in worker logs | Set the secret (`wrangler secret put DEEPGRAM_PROJECT_ID --env dev`) + redeploy. |
-| Deepgram "No Deepgram key configured" in worker logs | `/admin/system` → System Deepgram key → paste your admin key. Requires `APP_ENCRYPTION_KEY` secret to already be set. |
+| `/api/transcribe` 500s with `no_key_configured: groq` | `/admin/system` → System Groq key → paste a `gsk_…` key. Requires `APP_ENCRYPTION_KEY` secret already set. |
+| `/api/transcribe` 500s with `no_key_configured: deepgram` | An org is pinned to a `deepgram/*` model via its allowed-models list but no Deepgram key is configured. Either set the system Deepgram key at `/admin/system`, set a per-org override on `/admin/orgs/<id>`, or remove the deepgram entry from the org's allowed-models list. |
+| Polish output looks like an LLM response instead of a formatted transcript | `runPolish` should reject this via the length + assistant-preamble heuristics; if you see it sneaking through, tighten the mode prompt at `/admin/system` (or revert to baked-in by clearing the override). Look for `[polish] rejected output:` lines in `wrangler tail`. |
+| Legacy Mac-direct DeepGram path: "DEEPGRAM_PROJECT_ID is not set" | Set the secret (`wrangler secret put DEEPGRAM_PROJECT_ID --env dev`) + redeploy. Only relevant if a Mac client still has `useTranscribeProxy` off — by default it's on and this path isn't reached. |
 | Stripe 402 on `/api/billing/topup` | `STRIPE_SECRET_KEY` is wrong mode (live vs test) or missing. Test keys start `sk_test_…`, live start `sk_live_…`. |
 | Stripe webhook 400 "bad signature" | `STRIPE_WEBHOOK_SECRET` Worker secret doesn't match the endpoint's signing secret. Copy again from Stripe Dashboard → Developers → Webhooks → your endpoint. |
 | Magic-link email never arrives (prod) | `RESEND_API_KEY` missing, `RESEND_FROM_EMAIL` not on a verified Resend domain, or Resend is rejecting. Check the Resend dashboard → Logs. |

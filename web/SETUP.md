@@ -105,8 +105,10 @@ openssl rand -base64 33 | pbcopy
 # Paste into AUTH_SECRET in .env.local
 ```
 
-Leave Resend/Stripe/Deepgram blank for now — magic-link emails will be
-logged to the dev console instead of sent.
+Leave Resend/Stripe/Groq/Deepgram blank for now — magic-link emails
+will be logged to the dev console instead of sent. Transcription
+won't work locally until you set a `GROQ_API_KEY` in `.env.local` (or
+configure a system Groq key at `/admin/system` after step 9 below).
 
 ## 8. Run the dev server
 
@@ -176,10 +178,11 @@ only toggle, etc.), see [DEPLOYING.md](./DEPLOYING.md).
 
 | Service | Used for | When you need it |
 |---|---|---|
-| **Cloudflare** | Hosting + D1 + Workers | Phase 1 (now) |
-| **Resend** | Magic-link + invitation emails | Phase 3, though dev-console works before |
-| **Stripe** | Billing | Phase 4 |
-| **Deepgram** | Short-lived STT keys | Phase 6 |
+| **Cloudflare** | Hosting + D1 + Workers | Step 1 of any deploy |
+| **Resend** | Magic-link + invitation emails | First user signup (dev console works as a fallback) |
+| **Stripe** | Billing | First top-up |
+| **Groq** | Default upstream STT (Whisper Turbo / Whisper Large) + polish LLM | First transcription |
+| **Deepgram** | Optional alternate STT for orgs the super admin pins to it | Only when an org's `allowed_models_json` references a `deepgram/*` model |
 
 ## Dev ↔ Prod workflow
 
