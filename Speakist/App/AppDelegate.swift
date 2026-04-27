@@ -49,6 +49,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Refresh /api/me whenever the app comes back to the foreground.
+        // Two specific scenarios this handles:
+        //   * User clicked "Switch workspace…" in Settings → picked an org
+        //     in the browser → returns to Speakist. The new org needs to
+        //     show up immediately in the Account row + drive subsequent
+        //     transcribe calls.
+        //   * User accepted an invitation in the browser. Same need.
+        //
+        // refreshIdentity() is idempotent + cheap (single GET /api/me) so
+        // re-firing it on every foreground is harmless.
+        center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                await self?.env.accountManager.refreshIdentity()
+            }
+        }
+
         if !env.preferences.onboardingCompleted {
             showOnboarding()
         }

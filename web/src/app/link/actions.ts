@@ -11,6 +11,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { deviceAuthCodes } from "@/lib/db/schema";
 import { requireUser } from "@/lib/authz";
+import { getOrgsForUser, setActiveOrgForUser } from "@/lib/orgs";
 
 export type ConfirmResult =
   | { ok: true; message: string }
@@ -24,6 +25,9 @@ const schema = z.object({
     .trim()
     .transform((s) => s.toUpperCase().replace(/\s+/g, ""))
     .pipe(z.string().min(8).max(16)),
+  // Optional workspace selection. Required when the user has 2+ memberships
+  // — see the multi-org check below. Single-membership users can omit it.
+  workspace_org_id: z.string().min(1).optional(),
 });
 
 export async function confirmDeviceCode(
@@ -31,11 +35,36 @@ export async function confirmDeviceCode(
 ): Promise<ConfirmResult> {
   const user = await requireUser();
 
-  const parsed = schema.safeParse({ user_code: formData.get("user_code") });
+  const parsed = schema.safeParse({
+    user_code: formData.get("user_code"),
+    workspace_org_id: formData.get("workspace_org_id") || undefined,
+  });
   if (!parsed.success) {
     return { ok: false, error: "That doesn't look like a valid code." };
   }
   const userCode = parsed.data.user_code;
+  const workspaceOrgId = parsed.data.workspace_org_id;
+
+  // Multi-org gate: if the user belongs to 2+ orgs, they must explicitly
+  // pick one before approving the device. Otherwise the Mac would land
+  // on whichever org the resolver fell back to, which is not what the
+  // user thinks they're authorizing.
+  const memberships = await getOrgsForUser(user.id);
+  if (memberships.length >= 2 && !workspaceOrgId) {
+    return {
+      ok: false,
+      error: "Pick which workspace this Mac should sign into.",
+    };
+  }
+  if (workspaceOrgId) {
+    const r = await setActiveOrgForUser(user.id, workspaceOrgId);
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: "That workspace isn't one of yours. Pick again.",
+      };
+    }
+  }
 
   const db = getDb();
   const now = new Date();

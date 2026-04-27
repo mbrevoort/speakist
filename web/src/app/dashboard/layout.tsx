@@ -11,7 +11,7 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
 import { MobileNav } from "@/components/dashboard/mobile-nav";
 import { requireUser } from "@/lib/authz";
-import { getCurrentOrgForUser } from "@/lib/orgs";
+import { getCurrentOrgForUser, getOrgsForUser } from "@/lib/orgs";
 import { getAuth } from "@/lib/auth";
 
 export default async function DashboardLayout({
@@ -87,6 +87,8 @@ export default async function DashboardLayout({
           isSuperAdmin={user.isSuperAdmin}
           signOutAction={signOutAction}
           mobileNav={<MobileNav orgName={org.name} role={org.role} />}
+          workspaces={await getOrgsForUser(user.id)}
+          activeOrgId={org.id}
         />
         <main className="flex-1 px-6 py-8 sm:px-10 sm:py-10 overflow-y-auto">
           {children}

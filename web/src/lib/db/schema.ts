@@ -71,6 +71,15 @@ export const users = sqliteTable("users", {
   polishMode: text("polish_mode", { enum: ["intuitive", "prescriptive"] })
     .notNull()
     .default("prescriptive"),
+  // Active workspace for users who belong to multiple orgs. NULL means
+  // "no explicit choice yet — use earliest-joined as fallback". Set
+  // when the user picks a workspace at sign-in (/link), accepts an
+  // invitation (auto-set to the newly-joined org), or uses the
+  // workspace switcher in the dashboard topbar. Read by
+  // `getCurrentOrgForUser`, which self-heals to earliest-joined-other
+  // if the persisted org is no longer one the user is a member of
+  // (e.g., an admin removed them).
+  lastActiveOrgId: text("last_active_org_id"),
   createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });

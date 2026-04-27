@@ -322,12 +322,31 @@ private struct AccountRow: View {
 
             if let org = identity?.orgName {
                 HStack {
-                    Text("Organization")
+                    Text("Workspace")
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(org)
                 }
                 .font(.footnote)
+                Button {
+                    // Open the web /switch-workspace page in Safari with
+                    // a return marker. After picking, the user comes back
+                    // to Speakist and the account refresh triggered by
+                    // `UIApplication.didBecomeActiveNotification` (already
+                    // wired in SpeakistApp) reflects the new workspace.
+                    let base = SpeakistChannel.current.defaultAPIBaseURL
+                    if var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) {
+                        comps.path = "/switch-workspace"
+                        comps.queryItems = [URLQueryItem(name: "return", value: "ios-app")]
+                        if let url = comps.url {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                } label: {
+                    Label("Switch workspace…", systemImage: "arrow.left.arrow.right")
+                        .font(.footnote)
+                }
+                .buttonStyle(.bordered)
             }
 
             if let balance = identity?.balanceMillicents {

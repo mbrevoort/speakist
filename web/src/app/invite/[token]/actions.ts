@@ -12,7 +12,7 @@
 import { and, eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
-import { invitations, orgMembers } from "@/lib/db/schema";
+import { invitations, orgMembers, users } from "@/lib/db/schema";
 import { requireUser } from "@/lib/authz";
 
 export async function acceptInvitation(formData: FormData): Promise<void> {
@@ -68,6 +68,16 @@ export async function acceptInvitation(formData: FormData): Promise<void> {
         eq(invitations.email, inv.email)
       )
     );
+
+  // Make the freshly-joined org the user's active workspace so the
+  // /dashboard redirect lands them in the org they just accepted into,
+  // not a different (earlier-joined) org. Without this the user would
+  // accept "Acme" then see their personal workspace, with no obvious
+  // signal anything happened.
+  await db
+    .update(users)
+    .set({ lastActiveOrgId: inv.orgId })
+    .where(eq(users.id, user.id));
 
   redirect("/dashboard");
 }

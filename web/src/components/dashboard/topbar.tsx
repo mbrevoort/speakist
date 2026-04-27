@@ -7,7 +7,8 @@
 "use client";
 
 import Link from "next/link";
-import { LogOut, Shield, UserRound } from "lucide-react";
+import { useTransition } from "react";
+import { Building2, Check, ChevronsUpDown, LogOut, Shield, UserRound } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { switchActiveWorkspace } from "@/app/dashboard/workspace-actions";
+
+interface TopbarWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  role: "owner" | "admin" | "member";
+}
+
 interface TopbarProps {
   userEmail: string;
   userDisplayName: string | null;
@@ -28,6 +38,13 @@ interface TopbarProps {
    *  surface is needed; a spacer keeps the avatar right-aligned via
    *  justify-between. */
   mobileNav?: React.ReactNode;
+  /** Every org the user belongs to. When length >= 2, a workspace
+   *  switcher dropdown renders to the left of the avatar. Single-
+   *  membership users see no switcher — the same UX as before. */
+  workspaces?: TopbarWorkspace[];
+  /** Currently-active org id, used to highlight the selected entry
+   *  in the switcher. */
+  activeOrgId?: string;
 }
 
 export function Topbar({
@@ -36,12 +53,25 @@ export function Topbar({
   isSuperAdmin,
   signOutAction,
   mobileNav,
+  workspaces,
+  activeOrgId,
 }: TopbarProps) {
   const initial = (userDisplayName?.[0] ?? userEmail[0] ?? "?").toUpperCase();
+  const showSwitcher = (workspaces?.length ?? 0) >= 2;
+  const activeWorkspace = workspaces?.find((w) => w.id === activeOrgId);
 
   return (
     <header className="h-16 shrink-0 border-b border-border/70 bg-background/70 backdrop-blur flex items-center justify-between gap-3 px-4 sm:px-6">
       {mobileNav ?? <span />}
+
+      <div className="flex items-center gap-2">
+        {showSwitcher && activeWorkspace && (
+          <WorkspaceSwitcher
+            workspaces={workspaces!}
+            activeOrgId={activeOrgId!}
+            activeName={activeWorkspace.name}
+          />
+        )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -100,6 +130,78 @@ export function Topbar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      </div>
     </header>
+  );
+}
+
+/**
+ * Workspace dropdown shown to multi-org users. Sits to the left of the
+ * account dropdown so the active workspace name is glanceable as part
+ * of "where am I" context. Single-membership users never render this.
+ */
+function WorkspaceSwitcher({
+  workspaces,
+  activeOrgId,
+  activeName,
+}: {
+  workspaces: TopbarWorkspace[];
+  activeOrgId: string;
+  activeName: string;
+}) {
+  const [pending, startTransition] = useTransition();
+
+  function pick(id: string) {
+    if (id === activeOrgId) return;
+    const fd = new FormData();
+    fd.set("org_id", id);
+    startTransition(async () => {
+      await switchActiveWorkspace(fd);
+    });
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="hidden sm:inline-flex items-center gap-2 rounded-md border border-border/70 bg-background pl-2.5 pr-2 py-1.5 text-sm hover:bg-muted/50 transition-colors"
+          aria-label="Switch workspace"
+          disabled={pending}
+        >
+          <Building2 className="h-4 w-4 text-muted-foreground" />
+          <span className="font-medium truncate max-w-[160px]">{activeName}</span>
+          <ChevronsUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={6} className="min-w-[260px]">
+        <DropdownMenuLabel className="text-xs font-medium text-muted-foreground tracking-wide uppercase">
+          Switch workspace
+        </DropdownMenuLabel>
+        {workspaces.map((w) => {
+          const active = w.id === activeOrgId;
+          return (
+            <DropdownMenuItem
+              key={w.id}
+              onSelect={(e) => {
+                e.preventDefault();
+                pick(w.id);
+              }}
+              className="flex items-start gap-2"
+            >
+              <span className="mt-0.5 inline-flex w-4 justify-center">
+                {active && <Check className="h-3.5 w-3.5 text-peach-deep" />}
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-medium truncate">{w.name}</span>
+                <span className="block text-xs text-muted-foreground truncate">
+                  {w.slug} · {w.role}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

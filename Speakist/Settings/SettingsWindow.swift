@@ -238,6 +238,27 @@ struct AccountSettingsView: View {
                                     }
                                 }
                                 Spacer()
+                                // Switch workspace — opens the browser
+                                // to /switch-workspace?return=mac-app.
+                                // Server persists the choice, the next
+                                // foreground triggers /api/me which
+                                // reflects the new active org. We
+                                // don't gate on "user has 2+ orgs"
+                                // here because the page itself shows
+                                // a friendly "you're only in one
+                                // workspace" message in that case —
+                                // less code than a separate fetch.
+                                Button("Switch workspace…") {
+                                    let url = prefs.apiBaseURL
+                                        .appendingPathComponent("switch-workspace")
+                                    var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                                    comps?.queryItems = [URLQueryItem(name: "return", value: "mac-app")]
+                                    if let final = comps?.url {
+                                        NSWorkspace.shared.open(final)
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
                             }
                         }
 

@@ -223,6 +223,11 @@ export interface CurrentOrg {
 
 export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg | null> {
   const db = getDb();
+
+  // All memberships, joined to org metadata. Pulled in one query so the
+  // resolver never needs a second round-trip just to fall back. Order
+  // by createdAt asc so the first row is also the earliest-joined org —
+  // our fallback when the persisted preference is unset or stale.
   const rows = await db
     .select({
       id: organizations.id,
@@ -236,18 +241,97 @@ export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg |
     .from(orgMembers)
     .innerJoin(organizations, eq(organizations.id, orgMembers.orgId))
     .where(eq(orgMembers.userId, userId))
-    .orderBy(orgMembers.createdAt)
+    .orderBy(orgMembers.createdAt);
+
+  if (rows.length === 0) return null;
+
+  const [userRow] = await db
+    .select({ lastActiveOrgId: users.lastActiveOrgId })
+    .from(users)
+    .where(eq(users.id, userId))
     .limit(1);
-  const r = rows[0];
-  if (!r) return null;
+
+  // Picked-by-user choice wins if it's still a valid membership. If
+  // not (org deleted, user removed), self-heal to earliest-joined and
+  // overwrite the stale preference so the next read is direct.
+  const preferredId = userRow?.lastActiveOrgId ?? null;
+  let resolved = preferredId
+    ? rows.find((r) => r.id === preferredId) ?? null
+    : null;
+
+  if (!resolved) {
+    resolved = rows[0];
+    if (preferredId && preferredId !== resolved.id) {
+      // The stored id no longer matches any of the user's memberships.
+      // Heal the stored value so future reads short-circuit, and so
+      // the topbar switcher reflects an accurate "active" state.
+      await db
+        .update(users)
+        .set({ lastActiveOrgId: resolved.id })
+        .where(eq(users.id, userId));
+    }
+  }
+
   return {
-    id: r.id,
-    name: r.name,
-    slug: r.slug,
-    role: r.role,
-    isComped: r.isComped,
-    autoJoinDomain: r.autoJoinDomain,
+    id: resolved.id,
+    name: resolved.name,
+    slug: resolved.slug,
+    role: resolved.role,
+    isComped: resolved.isComped,
+    autoJoinDomain: resolved.autoJoinDomain,
   };
+}
+
+/**
+ * Every workspace the user is a member of. Used by the dashboard topbar
+ * switcher and the device-code /link page to show a picker when there's
+ * more than one. Single-membership users get a 1-element array.
+ */
+export interface MembershipSummary {
+  id: string;
+  name: string;
+  slug: string;
+  role: OrgRole;
+}
+
+export async function getOrgsForUser(userId: string): Promise<MembershipSummary[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      slug: organizations.slug,
+      role: orgMembers.role,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(organizations.id, orgMembers.orgId))
+    .where(eq(orgMembers.userId, userId))
+    .orderBy(orgMembers.createdAt);
+  return rows;
+}
+
+/**
+ * Persist the user's chosen active workspace. Validates membership
+ * before writing so a malicious caller can't pin themselves into an
+ * org they don't belong to (resolver would self-heal at read time
+ * anyway, but rejecting at write time gives the caller a clean error).
+ */
+export async function setActiveOrgForUser(
+  userId: string,
+  orgId: string
+): Promise<{ ok: true } | { ok: false; error: "not_a_member" }> {
+  const db = getDb();
+  const [member] = await db
+    .select({ orgId: orgMembers.orgId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.userId, userId), eq(orgMembers.orgId, orgId)))
+    .limit(1);
+  if (!member) return { ok: false, error: "not_a_member" };
+  await db
+    .update(users)
+    .set({ lastActiveOrgId: orgId })
+    .where(eq(users.id, userId));
+  return { ok: true };
 }
 
 // --- credit balance --------------------------------------------------------
