@@ -13,7 +13,7 @@
 // webhook is a silent no-op. All other writes are intended to be called
 // exactly once by their specific code path.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   creditLedger,
@@ -96,6 +96,90 @@ export async function recordStripeTopup({
   }
 }
 
+// --- auto-topup helpers ----------------------------------------------------
+
+/**
+ * Sum the auto-top-up credits an org has already received in the current
+ * calendar month. Used by the auto-topup gate to decide whether a fresh
+ * charge would exceed the org's monthly cap. Counts only successful
+ * `stripe_auto_topup` ledger rows — manual top-ups don't count toward the
+ * cap (the user explicitly initiated those).
+ *
+ * Calendar month = (UTC year, UTC month). We use UTC to avoid the
+ * timezone tail wagging the dog when a Worker request is processed near
+ * a month boundary.
+ */
+async function autoTopupSpendThisMonthMc(orgId: string): Promise<number> {
+  const db = getDb();
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const [row] = await db
+    .select({
+      total: sql<number>`COALESCE(SUM(${creditLedger.deltaMillicents}), 0)`,
+    })
+    .from(creditLedger)
+    .where(
+      and(
+        eq(creditLedger.orgId, orgId),
+        eq(creditLedger.reason, "stripe_auto_topup"),
+        gte(creditLedger.createdAt, monthStart)
+      )
+    );
+  return row?.total ?? 0;
+}
+
+interface AutoTopupConfig {
+  thresholdMc: number;
+  amountMc: number;
+  /** NULL ⇒ no cap. */
+  maxMonthlyMc: number | null;
+}
+
+function resolveAutoTopupConfig(
+  org: {
+    autoTopupThresholdMillicents: number | null;
+    autoTopupAmountMillicents: number | null;
+    autoTopupMaxMonthlyMillicents: number | null;
+  },
+  cfg: {
+    autoTopupThresholdDefault: number | null | undefined;
+    autoTopupAmountDefault: number | null | undefined;
+  } | undefined
+): AutoTopupConfig {
+  return {
+    thresholdMc: org.autoTopupThresholdMillicents ?? cfg?.autoTopupThresholdDefault ?? 100_000,
+    amountMc: org.autoTopupAmountMillicents ?? cfg?.autoTopupAmountDefault ?? 500_000,
+    // No fallback to a default cap — orgs that haven't set one get
+    // unlimited (NULL). The schema default applies only at row-create
+    // time and is informational rather than enforced.
+    maxMonthlyMc: org.autoTopupMaxMonthlyMillicents,
+  };
+}
+
+/**
+ * Decide whether to fire an auto-topup right now. Returns the amount to
+ * charge, or null when we should skip (cap hit, threshold not met, etc.).
+ */
+async function decideAutoTopup(
+  orgId: string,
+  currentBalanceMc: number,
+  cfg: AutoTopupConfig
+): Promise<number | null> {
+  if (currentBalanceMc >= cfg.thresholdMc) return null;
+
+  if (cfg.maxMonthlyMc !== null) {
+    const spentThisMonth = await autoTopupSpendThisMonthMc(orgId);
+    if (spentThisMonth + cfg.amountMc > cfg.maxMonthlyMc) {
+      console.warn(
+        `[auto-topup] org=${orgId} cap reached: spent=${spentThisMonth} + amount=${cfg.amountMc} > cap=${cfg.maxMonthlyMc}; skipping`
+      );
+      return null;
+    }
+  }
+
+  return cfg.amountMc;
+}
+
 // --- debit + auto-topup ----------------------------------------------------
 
 interface DebitForUsageArgs {
@@ -156,6 +240,7 @@ export async function debitForUsage(args: DebitForUsageArgs): Promise<DebitResul
       autoTopupEnabled: organizations.autoTopupEnabled,
       autoTopupThresholdMillicents: organizations.autoTopupThresholdMillicents,
       autoTopupAmountMillicents: organizations.autoTopupAmountMillicents,
+      autoTopupMaxMonthlyMillicents: organizations.autoTopupMaxMonthlyMillicents,
       stripeCustomerId: organizations.stripeCustomerId,
       stripeDefaultPaymentMethodId: organizations.stripeDefaultPaymentMethodId,
     })
@@ -220,16 +305,9 @@ export async function debitForUsage(args: DebitForUsageArgs): Promise<DebitResul
     org.stripeCustomerId &&
     org.stripeDefaultPaymentMethodId
   ) {
-    const threshold =
-      org.autoTopupThresholdMillicents ??
-      cfg?.autoTopupThresholdDefault ??
-      500_000;
-    const amount =
-      org.autoTopupAmountMillicents ??
-      cfg?.autoTopupAmountDefault ??
-      2_000_000;
-
-    if (newBalance < threshold) {
+    const autoCfg = resolveAutoTopupConfig(org, cfg);
+    const chargeMc = await decideAutoTopup(args.orgId, newBalance, autoCfg);
+    if (chargeMc !== null) {
       // Fire-and-forget: the actual charge + credit happens via Stripe
       // webhook. If the PaymentIntent fails the caller is still in a
       // consistent state (usage recorded, debit performed, balance
@@ -240,7 +318,7 @@ export async function debitForUsage(args: DebitForUsageArgs): Promise<DebitResul
           orgId: args.orgId,
           stripeCustomerId: org.stripeCustomerId,
           stripePaymentMethodId: org.stripeDefaultPaymentMethodId,
-          amountMillicents: amount,
+          amountMillicents: chargeMc,
         });
         autoTopupTriggered = true;
       } catch (err) {
@@ -325,6 +403,7 @@ export async function debitForAudioTranscription(
       autoTopupEnabled: organizations.autoTopupEnabled,
       autoTopupThresholdMillicents: organizations.autoTopupThresholdMillicents,
       autoTopupAmountMillicents: organizations.autoTopupAmountMillicents,
+      autoTopupMaxMonthlyMillicents: organizations.autoTopupMaxMonthlyMillicents,
       stripeCustomerId: organizations.stripeCustomerId,
       stripeDefaultPaymentMethodId: organizations.stripeDefaultPaymentMethodId,
     })
@@ -397,19 +476,16 @@ export async function debitForAudioTranscription(
       .from(pricingConfig)
       .where(eq(pricingConfig.id, 1))
       .limit(1);
-    const threshold =
-      org.autoTopupThresholdMillicents ?? cfg?.autoTopupThresholdDefault ?? 500_000;
-    const amount =
-      org.autoTopupAmountMillicents ?? cfg?.autoTopupAmountDefault ?? 2_000_000;
-
-    if (newBalance < threshold) {
+    const autoCfg = resolveAutoTopupConfig(org, cfg);
+    const chargeMc = await decideAutoTopup(args.orgId, newBalance, autoCfg);
+    if (chargeMc !== null) {
       try {
         const { triggerAutoTopup } = await import("@/lib/billing");
         await triggerAutoTopup({
           orgId: args.orgId,
           stripeCustomerId: org.stripeCustomerId,
           stripePaymentMethodId: org.stripeDefaultPaymentMethodId,
-          amountMillicents: amount,
+          amountMillicents: chargeMc,
         });
         autoTopupTriggered = true;
       } catch (err) {

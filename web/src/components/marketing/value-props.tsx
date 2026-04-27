@@ -1,8 +1,10 @@
-// Four-up grid of differentiators. These are the reasons Speakist exists
-// instead of Wispr Flow / Superwhisper / Aqua. Keep the copy short — one
-// headline + one sentence per card.
+// Four-up grid of differentiators. Keep the copy short — one headline +
+// one sentence per card. The four cards address the four objections a
+// visitor brings: "I already have built-in dictation" / "subscription
+// tools are pricey" / "all these tools are bloated with AI chat features"
+// / "I don't want my voice in someone's data lake."
 
-import { CircleDollarSign, Gauge, Lock, Sparkles } from "lucide-react";
+import { CircleDollarSign, Lock, Sparkles, Zap } from "lucide-react";
 
 export function ValueProps() {
   return (
@@ -16,32 +18,33 @@ export function ValueProps() {
             Built for people who want a tool, not a platform.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Other dictation apps bolt on features until their pricing page
-            looks like a SaaS dashboard. Speakist only does one thing, and
-            charges you accordingly.
+            Built-in dictation has been a half-finished feature for years.
+            Subscription tools charge you whether you use them or not.
+            Speakist does one thing — well — and only charges you when you
+            actually use it.
           </p>
         </div>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <Card
-            icon={<CircleDollarSign className="size-5" />}
-            title="Pay for what you transcribe."
-            body="No monthly subscription. A penny buys you about 170 words. Most people spend under $1 a month."
+            icon={<Zap className="size-5" />}
+            title="Better than built-in."
+            body="Apple&rsquo;s dictation hasn&rsquo;t gotten meaningfully better in years — hit-or-miss accuracy, awkward punctuation, no polish. Speakist runs multi-stage state-of-the-art models, so the text reads like you meant it."
           />
           <Card
-            icon={<Gauge className="size-5" />}
-            title="Usage-based, not per-seat."
-            body="Bring your whole team for free. You only pay for the audio that actually gets transcribed."
+            icon={<CircleDollarSign className="size-5" />}
+            title="Pay only when you dictate."
+            body="No subscription. No per-seat fee. About half the price of Wispr Flow at typical use — and when you&rsquo;re not dictating, your bill is zero."
           />
           <Card
             icon={<Sparkles className="size-5" />}
-            title="One shortcut. That&apos;s it."
-            body="Hold ⌃⌘X, speak, release. No overlays, no AI chat window, no &ldquo;smart prompts.&rdquo; Just text at your cursor."
+            title="One gesture. Any app."
+            body="Hold ⌃⌘X on Mac. On iPhone, switch to the Speakist keyboard — a dedicated dictation keyboard you install once — and tap-and-hold. No overlays, no AI chat window, no &ldquo;smart prompts.&rdquo;"
           />
           <Card
             icon={<Lock className="size-5" />}
-            title="Your voice stays on your Mac."
-            body="Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved to disk in the cloud — only on your device."
+            title="Your voice stays on your device."
+            body="Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved in the cloud — only on your device."
           />
         </div>
       </div>

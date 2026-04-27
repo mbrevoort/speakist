@@ -185,13 +185,14 @@ export async function provisionNewUser(userId: string): Promise<ProvisionResult>
   });
 
   // Grant the signup bonus. Read the current pricing config so the amount
-  // reflects whatever super admin has set (default 500000 millicents = $5).
+  // reflects whatever super admin has set (default 60,000 millicents =
+  // ~3,000 words at the headline $0.20/1K rate). See docs/pricing-strategy.md.
   const [cfg] = await db
     .select({ amount: pricingConfig.signupBonusMillicents })
     .from(pricingConfig)
     .where(eq(pricingConfig.id, 1))
     .limit(1);
-  const bonusAmount = cfg?.amount ?? 500_000;
+  const bonusAmount = cfg?.amount ?? 60_000;
   if (bonusAmount > 0) {
     await db.insert(creditLedger).values({
       orgId,

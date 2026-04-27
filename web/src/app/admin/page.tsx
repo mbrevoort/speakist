@@ -2,25 +2,19 @@
 // here — this is a "what's the state of the business" page.
 
 import { PageHeader } from "@/components/dashboard/page-header";
+import { PlatformActivityChart } from "@/components/dashboard/platform-activity-chart";
 import { requireSuperAdmin } from "@/lib/authz";
-import { getPlatformTotals } from "@/lib/admin";
+import { getPlatformDailyUsage, getPlatformTotals } from "@/lib/admin";
 import { formatDollars } from "@/lib/utils";
 
 export const metadata = { title: "Admin — Speakist" };
 
 export default async function AdminOverview() {
   await requireSuperAdmin();
-  const totals = await getPlatformTotals();
-
-  // Revenue = gross top-ups. Cost = what Deepgram charged us (reported on
-  // each usage_event). Margin = revenue - cost (approximation — ignores
-  // outstanding credit liability + refunds).
-  const margin30d =
-    totals.usage30dCostMillicents - totals.usage30dDeepgramCostMillicents;
-  const marginPct =
-    totals.usage30dCostMillicents > 0
-      ? (margin30d / totals.usage30dCostMillicents) * 100
-      : 0;
+  const [totals, daily] = await Promise.all([
+    getPlatformTotals(),
+    getPlatformDailyUsage(30),
+  ]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-10">
@@ -56,31 +50,21 @@ export default async function AdminOverview() {
         />
       </section>
 
+      {/* Daily activity — words transcribed + active users, both per day. */}
       <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
-        <h2 className="text-lg font-semibold tracking-tight">
-          Last 30 days — revenue vs. Deepgram cost
-        </h2>
-        <div className="mt-6 grid sm:grid-cols-3 gap-6">
-          <BigNumber
-            label="Retail cost to orgs"
-            value={formatDollars(totals.usage30dCostMillicents)}
-          />
-          <BigNumber
-            label="Deepgram cost to us"
-            value={formatDollars(totals.usage30dDeepgramCostMillicents)}
-            muted
-          />
-          <BigNumber
-            label="Gross margin"
-            value={formatDollars(margin30d)}
-            hint={`${marginPct.toFixed(1)}%`}
-            tint={margin30d >= 0 ? "sage" : "destructive"}
-          />
+        <div className="flex items-baseline justify-between mb-2">
+          <h2 className="text-lg font-semibold tracking-tight">
+            Daily activity
+          </h2>
+          <span className="text-xs text-muted-foreground">
+            Last 30 days
+          </span>
         </div>
-        <p className="mt-6 text-xs text-muted-foreground">
-          Deepgram cost is reported per-transcription by the Mac app (Phase 6)
-          — shows $0 until Mac integration reports real per-call costs.
+        <p className="text-sm text-muted-foreground mb-6">
+          Words transcribed and distinct active users per day. An active user
+          is anyone with at least one dictation event that day.
         </p>
+        <PlatformActivityChart points={daily} />
       </section>
     </div>
   );
@@ -106,38 +90,6 @@ function Stat({
       </p>
       <p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
       {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
-    </div>
-  );
-}
-
-function BigNumber({
-  label,
-  value,
-  hint,
-  muted,
-  tint,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  muted?: boolean;
-  tint?: "sage" | "destructive";
-}) {
-  const color =
-    tint === "sage" ? "text-sage" : tint === "destructive" ? "text-destructive" : "text-foreground";
-  return (
-    <div>
-      <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium">
-        {label}
-      </p>
-      <p
-        className={`mt-2 text-4xl font-semibold tracking-tight tabular-nums ${
-          muted ? "text-muted-foreground" : color
-        }`}
-      >
-        {value}
-      </p>
-      {hint && <p className={`mt-1 text-sm ${color}`}>{hint}</p>}
     </div>
   );
 }

@@ -1,5 +1,6 @@
-// Public /link page — where Mac users land after their Mac app shows them
-// a user_code. Three states:
+// Public /link page — where Mac and iOS users land after the native app
+// shows them a user_code. Same device-code flow on both platforms; the
+// Cloudflare Worker endpoints don't differentiate. Three states:
 //   1. Not signed in → redirect to /auth/signin with callback back here
 //   2. Signed in, no code submitted yet → form (code may be pre-filled via ?code=)
 //   3. Submitted → success or error, rendered via the client component
@@ -15,7 +16,7 @@ import { users } from "@/lib/db/schema";
 import { getOrgsForUser } from "@/lib/orgs";
 import { LinkClient } from "./link-client";
 
-export const metadata = { title: "Link your Mac — Speakist" };
+export const metadata = { title: "Link your device — Speakist" };
 
 export default async function LinkPage({
   searchParams,
@@ -69,10 +70,11 @@ export default async function LinkPage({
           <LinkIcon className="size-6" />
         </div>
         <h1 className="text-center text-2xl font-semibold tracking-tight">
-          Link your Mac
+          Link your device
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
-          Type the code your Mac is showing to connect this account.
+          Type the code shown by the Speakist app on your Mac or iPhone to
+          connect it to this account.
         </p>
 
         <LinkClient

@@ -5,10 +5,15 @@
 // abstract.
 //
 // Math:
-//   * price_per_word_millicents is a REAL. Default 5.74. (5.74 × 10⁻⁵ ¢/word.)
+//   * price_per_word_millicents is a REAL. Default 20.0 ($0.20 / 1K words).
 //   * dollars per word = millicents / 100_000
 //   * per 1,000 words = that × 1000
 //   * "typical" monthly usage = 500 words/day × 30 days = 15,000 words
+//
+// Note: copy here uses dollars deliberately — anonymous landing visitors
+// haven't established a balance to anchor in words yet, so the per-1K
+// figure is the cleanest way to convey value vs. flat-rate competitors.
+// Inside the dashboard we anchor balance in words; this is the boundary.
 
 import Link from "next/link";
 import { eq } from "drizzle-orm";
@@ -27,14 +32,16 @@ export async function Pricing() {
 
   // Defensive fallback — `pricing_config` is seeded by the init migration,
   // but if we ever wipe the singleton we don't want the landing to crash.
-  const pricePerWordMc = cfg?.pricePerWordMillicents ?? 5.74;
-  const signupBonusMc = cfg?.signupBonusMillicents ?? 500_000;
+  const pricePerWordMc = cfg?.pricePerWordMillicents ?? 20.0;
+  const signupBonusMc = cfg?.signupBonusMillicents ?? 60_000;
 
   const pricePerWordDollars = pricePerWordMc / 100_000;
   const pricePer1000Words = pricePerWordDollars * 1000;
   const typicalMonthlyWords = 15_000; // 500/day × 30 days
   const typicalMonthlySpend = pricePerWordDollars * typicalMonthlyWords;
-  const signupBonusDollars = signupBonusMc / 100_000;
+  // Free trial expressed in words rather than dollars — that's the unit
+  // we want users anchored on (see docs/pricing-strategy.md).
+  const signupBonusWords = Math.floor(signupBonusMc / pricePerWordMc);
 
   return (
     <section id="pricing" className="border-y border-border/60 bg-white/40 py-20 sm:py-28">
@@ -44,11 +51,11 @@ export async function Pricing() {
             Pricing
           </p>
           <h2 className="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight">
-            One rate. Priced by the word.
+            Half the price. No subscription.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            We charge a little more than the underlying transcription costs
-            us, and that&apos;s it. No seats, no tiers, no enterprise upsell.
+            Pay only for the words you actually dictate. No monthly commitment,
+            no per-seat fees, no auto-renewing tier you forget about.
           </p>
         </div>
 
@@ -57,7 +64,7 @@ export async function Pricing() {
           <div className="relative rounded-3xl border-2 border-peach/30 bg-background p-8 sm:p-10 shadow-lg shadow-peach/5">
             <div className="absolute -top-3 left-1/2 -translate-x-1/2">
               <span className="rounded-full bg-peach text-primary-foreground text-xs font-semibold px-3 py-1">
-                ${signupBonusDollars.toFixed(0)} free to start
+                {signupBonusWords.toLocaleString("en-US")} free words to start
               </span>
             </div>
 
@@ -85,18 +92,18 @@ export async function Pricing() {
             <hr className="my-8 border-border/60" />
 
             <ul className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-              <PricingRow>${signupBonusDollars.toFixed(0)} in credits on signup — no card required</PricingRow>
-              <PricingRow>Unlimited team members, no per-seat fee</PricingRow>
-              <PricingRow>Top up $10 or $25 at a time (or auto-top-up)</PricingRow>
+              <PricingRow>{signupBonusWords.toLocaleString("en-US")} free words on signup — no card required</PricingRow>
+              <PricingRow>Volume discounts up to 50% on larger packs</PricingRow>
+              <PricingRow>Auto top-up with a monthly cap you control</PricingRow>
+              <PricingRow>Works on Mac and iPhone — same account, same balance</PricingRow>
               <PricingRow>Custom vocabulary for names and jargon</PricingRow>
-              <PricingRow>Audio and transcripts never saved in the cloud</PricingRow>
-              <PricingRow>Best-in-class transcription under the hood</PricingRow>
+              <PricingRow>Unlimited users per organization</PricingRow>
             </ul>
 
             <div className="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <Button asChild size="lg" className="flex-1">
                 <Link href="/auth/signin">
-                  Get your ${signupBonusDollars.toFixed(0)} free credit
+                  Start with {signupBonusWords.toLocaleString("en-US")} free words
                 </Link>
               </Button>
             </div>
@@ -105,10 +112,11 @@ export async function Pricing() {
           {/* Comparison blurb */}
           <p className="mt-8 text-center text-sm text-muted-foreground max-w-xl mx-auto">
             For context: subscription dictation apps run{" "}
-            <span className="font-medium text-foreground">$8&ndash;$15 a month flat</span>.
-            Speakist&apos;s typical light user pays{" "}
-            <span className="font-mono text-foreground">${typicalMonthlySpend.toFixed(2)}</span>
-            {" "}for the same kind of use — and if you stop dictating, your bill goes to zero.
+            <span className="font-medium text-foreground">$8&ndash;$15 a month flat</span>{" "}
+            even if you don&apos;t use them. A Speakist user dictating the same
+            500 words/day pays{" "}
+            <span className="font-mono text-foreground">~${typicalMonthlySpend.toFixed(2)}/mo</span>
+            {" "}— and if you take a week off, your bill takes the week off too.
           </p>
         </div>
       </div>

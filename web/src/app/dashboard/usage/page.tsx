@@ -42,7 +42,7 @@ export default async function UsagePage() {
         title="Usage"
         description={
           isAdmin
-            ? "See how your team's using their transcription credit."
+            ? "See how your team is using their word balance."
             : "Your transcription activity."
         }
       />

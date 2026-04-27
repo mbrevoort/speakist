@@ -14,7 +14,7 @@ import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { organizations, pricingConfig } from "@/lib/db/schema";
 import { listLedger } from "@/lib/credits";
-import { formatDollars } from "@/lib/utils";
+import { formatDollars, millicentsToWords } from "@/lib/utils";
 import { BillingClient } from "./billing-client";
 
 export const metadata = { title: "Billing — Speakist" };
@@ -41,6 +41,7 @@ export default async function BillingPage({
       autoTopupEnabled: organizations.autoTopupEnabled,
       autoTopupThresholdMillicents: organizations.autoTopupThresholdMillicents,
       autoTopupAmountMillicents: organizations.autoTopupAmountMillicents,
+      autoTopupMaxMonthlyMillicents: organizations.autoTopupMaxMonthlyMillicents,
       stripeDefaultPaymentMethodId: organizations.stripeDefaultPaymentMethodId,
     })
     .from(organizations)
@@ -49,8 +50,10 @@ export default async function BillingPage({
 
   const [cfg] = await db
     .select({
+      pricePerWordMc: pricingConfig.pricePerWordMillicents,
       defaultThreshold: pricingConfig.defaultAutoTopupThresholdMillicents,
       defaultAmount: pricingConfig.defaultAutoTopupAmountMillicents,
+      defaultMaxMonthly: pricingConfig.defaultAutoTopupMaxMonthlyMillicents,
     })
     .from(pricingConfig)
     .where(eq(pricingConfig.id, 1))
@@ -61,10 +64,15 @@ export default async function BillingPage({
     listLedger(org.id, 30),
   ]);
 
+  const pricePerWordMc = cfg?.pricePerWordMc ?? 20;
   const thresholdMc =
-    orgRow?.autoTopupThresholdMillicents ?? cfg?.defaultThreshold ?? 500_000;
+    orgRow?.autoTopupThresholdMillicents ?? cfg?.defaultThreshold ?? 100_000;
   const amountMc =
-    orgRow?.autoTopupAmountMillicents ?? cfg?.defaultAmount ?? 2_000_000;
+    orgRow?.autoTopupAmountMillicents ?? cfg?.defaultAmount ?? 500_000;
+  // Max-monthly: NULL on the org row means "no cap set"; we still pass the
+  // pricing-config default so the form has something useful to pre-fill if
+  // the user toggles the cap on for the first time.
+  const maxMonthlyMc = orgRow?.autoTopupMaxMonthlyMillicents ?? null;
 
   const canAdmin = org.role === "owner" || org.role === "admin";
 
@@ -72,17 +80,23 @@ export default async function BillingPage({
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Billing"
-        description="Top up your team's credit and manage auto-top-up."
+        description="Add words to your balance and manage auto-top-up."
       />
 
       <BillingClient
         balanceMillicents={balanceMc}
+        pricePerWordMillicents={pricePerWordMc}
         isComped={org.isComped}
         canAdmin={canAdmin}
         hasPaymentMethod={!!orgRow?.stripeDefaultPaymentMethodId}
         autoTopupEnabled={orgRow?.autoTopupEnabled ?? false}
-        autoTopupThresholdDollars={thresholdMc / 100_000}
-        autoTopupAmountDollars={amountMc / 100_000}
+        autoTopupThresholdWords={millicentsToWords(thresholdMc, pricePerWordMc)}
+        autoTopupAmountWords={millicentsToWords(amountMc, pricePerWordMc)}
+        autoTopupMaxMonthlyWords={
+          maxMonthlyMc !== null
+            ? millicentsToWords(maxMonthlyMc, pricePerWordMc)
+            : null
+        }
         topupStatus={sp.topup === "success" ? "success" : sp.topup === "cancel" ? "cancel" : null}
       />
 
@@ -98,8 +112,8 @@ export default async function BillingPage({
             </p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-border/70 bg-background overflow-x-auto">
-            <table className="w-full text-sm min-w-[560px]">
+          <div className="rounded-2xl border border-border/70 bg-background overflow-hidden">
+            <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
                   <th className="px-5 py-3 font-medium">Date</th>

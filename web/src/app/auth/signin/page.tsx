@@ -86,8 +86,8 @@ export default async function SignInPage({
       </form>
 
       <p className="mt-6 text-xs text-muted-foreground text-center leading-relaxed">
-        New here? Use the same form — we&apos;ll create your account and grant
-        your $5 signup credit automatically.
+        New here? Use the same form — we&apos;ll create your account and add
+        3,000 free words to your balance automatically.
       </p>
     </div>
   );
