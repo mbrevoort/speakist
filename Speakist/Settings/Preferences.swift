@@ -45,6 +45,7 @@ final class Preferences: ObservableObject {
         static let apiBaseURL = "apiBaseURL"
         static let useTranscribeProxy = "useTranscribeProxy"
         static let polishEnabled = "polishEnabled"
+        static let polishMode = "polishMode"
         static let polishSystemPrompt = "polishSystemPrompt"
         static let polishDefaultPrompt = "polishDefaultPrompt"
         static let polishIsCustom = "polishIsCustom"
@@ -113,6 +114,7 @@ final class Preferences: ObservableObject {
             // PUT. Default false + empty prompt matches what a fresh user
             // gets server-side.
             K.polishEnabled: false,
+            K.polishMode: "prescriptive",
             K.polishSystemPrompt: "",
             K.polishDefaultPrompt: "",
             K.polishIsCustom: false
@@ -262,12 +264,29 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: K.polishIsCustom); objectWillChange.send() }
     }
 
-    /// Atomically update all four polish cache fields from a fresh server
+    /// Selected polish mode (`intuitive` / `prescriptive`). Defaults to
+    /// `prescriptive` — the conservative variant that only fixes
+    /// punctuation and grammar, never touches meaning. Existing users
+    /// who had polish enabled before mode shipped were promoted to
+    /// `intuitive` server-side via migration 0010.
+    var polishMode: SpeakistAPIClient.PolishMode {
+        get {
+            let raw = defaults.string(forKey: K.polishMode) ?? ""
+            return SpeakistAPIClient.PolishMode(rawValue: raw) ?? .prescriptive
+        }
+        set { defaults.set(newValue.rawValue, forKey: K.polishMode); objectWillChange.send() }
+    }
+
+    /// Atomically update all five polish cache fields from a fresh server
     /// response. Single `objectWillChange.send()` so Settings doesn't
     /// flicker through intermediate states.
-    func applyPolishFromServer(enabled: Bool, systemPrompt: String,
-                                isCustom: Bool, defaultPrompt: String) {
+    func applyPolishFromServer(enabled: Bool,
+                                mode: SpeakistAPIClient.PolishMode,
+                                systemPrompt: String,
+                                isCustom: Bool,
+                                defaultPrompt: String) {
         defaults.set(enabled, forKey: K.polishEnabled)
+        defaults.set(mode.rawValue, forKey: K.polishMode)
         defaults.set(systemPrompt, forKey: K.polishSystemPrompt)
         defaults.set(isCustom, forKey: K.polishIsCustom)
         defaults.set(defaultPrompt, forKey: K.polishDefaultPrompt)

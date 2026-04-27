@@ -61,6 +61,16 @@ export const users = sqliteTable("users", {
   // shipped as "cleanup"; renamed in migration 0007.
   polishEnabled: bool("polish_enabled").notNull().default(false),
   polishSystemPrompt: text("polish_system_prompt"),
+  // Polish aggressiveness. `intuitive` runs the intent-aware prompt
+  // (applies explicit self-corrections, fixes obvious slips). `prescriptive`
+  // is conservative — only punctuation, capitalization, and clear
+  // grammar fixes, never touches meaning. Default is `prescriptive`
+  // (the safer mode); the migration that adds this column promotes
+  // existing polish-enabled users to `intuitive` to preserve their
+  // current behavior.
+  polishMode: text("polish_mode", { enum: ["intuitive", "prescriptive"] })
+    .notNull()
+    .default("prescriptive"),
   createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });

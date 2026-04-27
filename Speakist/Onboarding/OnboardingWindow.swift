@@ -400,6 +400,7 @@ private struct PolishTryPane: View {
                 let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
                 prefs.applyPolishFromServer(
                     enabled: resp.enabled,
+                    mode: resp.mode,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
                     defaultPrompt: resp.defaultPrompt)

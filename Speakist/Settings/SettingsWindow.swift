@@ -553,6 +553,7 @@ struct PolishSettingsView: View {
 
     @State private var draftPrompt: String = ""
     @State private var savingToggle = false
+    @State private var savingMode = false
     @State private var savingPrompt = false
     @State private var lastError: String?
     @State private var lastSavedAt: Date?
@@ -572,11 +573,35 @@ struct PolishSettingsView: View {
                     set: { newValue in saveToggle(newValue) }))
                     .disabled(savingToggle)
 
-                Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, fix grammar, and patch obvious word-level mistakes — the model is instructed to return only the polished text with nothing added. Adds ~200–500 ms of latency; the cost is absorbed.")
+                Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, capitalization, and clear grammar fixes. Adds about 200–500 ms of latency; the cost is absorbed.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
                 Text("Post-transcription polish")
+            }
+
+            // Mode picker. Always visible (even when polish is off) so
+            // a user can configure their preferred mode before flipping
+            // the toggle on. The actions disable when polish is off so
+            // server state stays consistent with the visual.
+            Section {
+                Picker("Mode", selection: Binding(
+                    get: { prefs.polishMode },
+                    set: { saveMode($0) }
+                )) {
+                    Text("Intuitive").tag(SpeakistAPIClient.PolishMode.intuitive)
+                    Text("Prescriptive").tag(SpeakistAPIClient.PolishMode.prescriptive)
+                }
+                .pickerStyle(.segmented)
+                .disabled(!prefs.polishEnabled || savingMode)
+
+                Text(prefs.polishMode == .intuitive
+                     ? "Tries to understand your intent and applies explicit self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}). Best when you talk through a thought and want the polished result."
+                     : "Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Mode")
             }
 
             Section {
@@ -649,6 +674,7 @@ struct PolishSettingsView: View {
                 let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
                 prefs.applyPolishFromServer(
                     enabled: resp.enabled,
+                    mode: resp.mode,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
                     defaultPrompt: resp.defaultPrompt
@@ -656,6 +682,39 @@ struct PolishSettingsView: View {
                 lastSavedAt = Date()
                 // Keep the editor in sync with whatever the server returned.
                 if draftPrompt.isEmpty || !prefs.polishIsCustom {
+                    draftPrompt = resp.systemPrompt
+                }
+            } catch {
+                lastError = "Couldn't save: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func saveMode(_ newValue: SpeakistAPIClient.PolishMode) {
+        guard newValue != prefs.polishMode else { return }
+        savingMode = true
+        lastError = nil
+        Task {
+            defer { savingMode = false }
+            do {
+                let resp = try await env.apiClient.updatePolish(
+                    enabled: nil,
+                    mode: newValue,
+                    systemPrompt: nil
+                )
+                prefs.applyPolishFromServer(
+                    enabled: resp.enabled,
+                    mode: resp.mode,
+                    systemPrompt: resp.systemPrompt,
+                    isCustom: resp.isCustom,
+                    defaultPrompt: resp.defaultPrompt
+                )
+                lastSavedAt = Date()
+                // Server returns a different default prompt per mode — if
+                // the user hadn't customized, swap the editor draft to
+                // the new mode's default. Custom prompts win over both
+                // modes' defaults so we leave them alone.
+                if !prefs.polishIsCustom {
                     draftPrompt = resp.systemPrompt
                 }
             } catch {
@@ -676,6 +735,7 @@ struct PolishSettingsView: View {
                     systemPrompt: .value(trimmed))
                 prefs.applyPolishFromServer(
                     enabled: resp.enabled,
+                    mode: resp.mode,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
                     defaultPrompt: resp.defaultPrompt
@@ -697,6 +757,7 @@ struct PolishSettingsView: View {
                 let resp = try await env.apiClient.updatePolish(enabled: nil, systemPrompt: .null)
                 prefs.applyPolishFromServer(
                     enabled: resp.enabled,
+                    mode: resp.mode,
                     systemPrompt: resp.systemPrompt,
                     isCustom: resp.isCustom,
                     defaultPrompt: resp.defaultPrompt

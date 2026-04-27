@@ -9,7 +9,7 @@ import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { orgMembers, users } from "@/lib/db/schema";
-import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
+import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
 import { SettingsClient } from "./settings-client";
 
 export const metadata = { title: "Settings — Speakist" };
@@ -34,11 +34,15 @@ export default async function SettingsPage() {
   const [polishRow] = await db
     .select({
       enabled: users.polishEnabled,
+      mode: users.polishMode,
       systemPrompt: users.polishSystemPrompt,
     })
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
+
+  const polishMode: PolishMode = (polishRow?.mode as PolishMode) ?? "prescriptive";
+  const polishModeDefault = defaultPromptForMode(polishMode);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -54,9 +58,10 @@ export default async function SettingsPage() {
         isSoleOwner={isSoleOwner}
         role={org.role}
         polishEnabled={!!polishRow?.enabled}
-        polishPrompt={polishRow?.systemPrompt ?? DEFAULT_POLISH_PROMPT}
+        polishMode={polishMode}
+        polishPrompt={polishRow?.systemPrompt ?? polishModeDefault}
         polishIsCustom={!!polishRow?.systemPrompt}
-        polishDefaultPrompt={DEFAULT_POLISH_PROMPT}
+        polishDefaultPrompt={polishModeDefault}
       />
     </div>
   );

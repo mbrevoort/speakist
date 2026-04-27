@@ -1,18 +1,25 @@
 // GET/PUT /api/me/polish
 //
 // Per-user polish preferences. Source of truth for whether /api/transcribe
-// runs the LLM polish pass and what system prompt it uses. Mac calls this
-// when the user flips the toggle or edits the prompt in Settings.
+// runs the LLM polish pass, what mode it runs in, and what system prompt
+// it uses. Mac/iOS/web all call this when the user flips a toggle or
+// edits the prompt in their Settings UI.
 //
 // Auth: bearer (Mac session) or cookie (web debugging).
 //
 // GET response:
-//   { enabled: bool, system_prompt: string, is_custom: bool, default_prompt: string }
-// PUT body:
-//   { enabled?: bool, system_prompt?: string | null }
-//   * `system_prompt: null` → clears the custom prompt, falls back to default
+//   {
+//     enabled: bool,
+//     mode: "intuitive" | "prescriptive",
+//     system_prompt: string,        // currently-effective prompt
+//     is_custom: bool,              // true when system_prompt is a user override
+//     default_prompt: string        // mode's baked-in default (read-only)
+//   }
+// PUT body (any combination, all optional):
+//   { enabled?: bool, mode?: "intuitive" | "prescriptive", system_prompt?: string | null }
+//   * `system_prompt: null` → clears the custom prompt, falls back to mode default
 //   * `system_prompt: "<text>"` → sets a custom prompt
-//   * Omit either field → no change to that field
+//   * Omit a field → no change to that field
 // PUT response: same shape as GET.
 
 import { eq } from "drizzle-orm";
@@ -20,7 +27,7 @@ import { z } from "zod";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
+import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -36,6 +43,7 @@ export async function GET(req: Request): Promise<Response> {
 // the key, which leaves the existing value alone.
 const bodySchema = z.object({
   enabled: z.boolean().optional(),
+  mode: z.enum(["intuitive", "prescriptive"]).optional(),
   system_prompt: z.string().max(4000).nullable().optional(),
 });
 
@@ -51,8 +59,13 @@ export async function PUT(req: Request): Promise<Response> {
       );
     }
 
-    const patch: Partial<{ polishEnabled: boolean; polishSystemPrompt: string | null }> = {};
+    const patch: Partial<{
+      polishEnabled: boolean;
+      polishMode: PolishMode;
+      polishSystemPrompt: string | null;
+    }> = {};
     if (parsed.data.enabled !== undefined) patch.polishEnabled = parsed.data.enabled;
+    if (parsed.data.mode !== undefined) patch.polishMode = parsed.data.mode;
     if (parsed.data.system_prompt !== undefined) {
       // Treat whitespace-only as "clear" so users can't accidentally
       // commit a blank custom prompt (which would produce empty LLM
@@ -77,16 +90,20 @@ async function readPolish(userId: string) {
   const [row] = await db
     .select({
       enabled: users.polishEnabled,
+      mode: users.polishMode,
       prompt: users.polishSystemPrompt,
     })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
+  const mode: PolishMode = (row?.mode as PolishMode) ?? "prescriptive";
+  const modeDefault = defaultPromptForMode(mode);
   return {
     enabled: !!row?.enabled,
-    system_prompt: row?.prompt ?? DEFAULT_POLISH_PROMPT,
+    mode,
+    system_prompt: row?.prompt ?? modeDefault,
     is_custom: !!row?.prompt,
-    default_prompt: DEFAULT_POLISH_PROMPT,
+    default_prompt: modeDefault,
   };
 }
 

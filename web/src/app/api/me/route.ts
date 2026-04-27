@@ -18,7 +18,7 @@ import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
-import { DEFAULT_POLISH_PROMPT } from "@/lib/transcription/polish";
+import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -33,11 +33,15 @@ export async function GET(req: Request): Promise<Response> {
     const [prefs] = await db
       .select({
         enabled: users.polishEnabled,
+        mode: users.polishMode,
         prompt: users.polishSystemPrompt,
       })
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1);
+
+    const mode: PolishMode = (prefs?.mode as PolishMode) ?? "prescriptive";
+    const modeDefault = defaultPromptForMode(mode);
 
     return Response.json({
       id: user.id,
@@ -56,13 +60,14 @@ export async function GET(req: Request): Promise<Response> {
         : null,
       polish: {
         enabled: !!prefs?.enabled,
-        // `null` on the user row → return the default so Mac shows it
-        // pre-filled in the Settings editor. `isCustom` tells the Mac
-        // whether the prompt on the user row is a custom override or
-        // the server default baked into the response.
-        system_prompt: prefs?.prompt ?? DEFAULT_POLISH_PROMPT,
+        mode,
+        // `null` on the user row → return the mode's default so the
+        // client shows it pre-filled in the Settings editor. `isCustom`
+        // tells the client whether the prompt on the user row is a
+        // user override or the server default baked into the response.
+        system_prompt: prefs?.prompt ?? modeDefault,
         is_custom: !!prefs?.prompt,
-        default_prompt: DEFAULT_POLISH_PROMPT,
+        default_prompt: modeDefault,
       },
     });
   } catch (err) {

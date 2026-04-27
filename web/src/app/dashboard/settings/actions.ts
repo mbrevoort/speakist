@@ -58,6 +58,38 @@ export async function setPolishEnabled(formData: FormData): Promise<ActionResult
   }
 }
 
+const polishModeSchema = z.object({
+  mode: z.enum(["intuitive", "prescriptive"]),
+});
+
+export async function setPolishMode(formData: FormData): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = polishModeSchema.safeParse({
+      mode: formData.get("mode"),
+    });
+    if (!parsed.success) return { ok: false, error: "Bad mode." };
+
+    const db = getDb();
+    await db
+      .update(users)
+      .set({ polishMode: parsed.data.mode })
+      .where(eq(users.id, user.id));
+
+    revalidatePath("/dashboard/settings");
+    return {
+      ok: true,
+      message:
+        parsed.data.mode === "intuitive"
+          ? "Switched to Intuitive mode — polish will apply intent-based corrections."
+          : "Switched to Prescriptive mode — polish will only fix punctuation and grammar.",
+    };
+  } catch (err) {
+    console.error("setPolishMode failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
 const polishPromptSchema = z.object({
   // Mirror the API's max-length cap so the failure modes stay consistent.
   prompt: z.string().max(4000),

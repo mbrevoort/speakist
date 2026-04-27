@@ -178,22 +178,41 @@ final class SpeakistAPIClient {
 
         struct PolishInfo: Decodable {
             let enabled: Bool
-            /// The currently-effective prompt (custom if set, else default).
+            /// One of the two modes the server supports. Older servers
+            /// that haven't shipped the mode column yet don't include
+            /// this field — defaultMode() handles the missing case.
+            let mode: PolishMode
+            /// The currently-effective prompt (custom if set, else the
+            /// server default for the active mode).
             let systemPrompt: String
             /// True when `systemPrompt` is a user-set override; false when
-            /// it's the baked-in server default. Distinguishes "user
-            /// customized and happens to match default" from "user hasn't
-            /// customized yet" in the Settings editor.
+            /// it's the baked-in server default for the current mode.
+            /// Distinguishes "user customized and happens to match default"
+            /// from "user hasn't customized yet" in the Settings editor.
             let isCustom: Bool
-            /// Server's current default — shown as placeholder text under
-            /// the editor so users know what they're overriding.
+            /// Server's current mode-specific default — shown as
+            /// read-only context under the editor so users know what
+            /// they're overriding.
             let defaultPrompt: String
 
             enum CodingKeys: String, CodingKey {
-                case enabled
+                case enabled, mode
                 case systemPrompt = "system_prompt"
                 case isCustom = "is_custom"
                 case defaultPrompt = "default_prompt"
+            }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                self.enabled = try c.decode(Bool.self, forKey: .enabled)
+                // Tolerate older servers that don't return `mode`. Default
+                // to the conservative mode so the client UI shows a sane
+                // selection until the next /api/me sync after the server
+                // upgrade lands.
+                self.mode = (try? c.decode(PolishMode.self, forKey: .mode)) ?? .prescriptive
+                self.systemPrompt = try c.decode(String.self, forKey: .systemPrompt)
+                self.isCustom = try c.decode(Bool.self, forKey: .isCustom)
+                self.defaultPrompt = try c.decode(String.self, forKey: .defaultPrompt)
             }
         }
 
@@ -212,31 +231,69 @@ final class SpeakistAPIClient {
 
     // MARK: - Polish prefs
 
+    /// Two server-side polish prompt variants. `intuitive` runs the
+    /// intent-aware prompt that applies explicit self-corrections
+    /// ("I mean…", "scratch that…") and fixes obvious slips.
+    /// `prescriptive` is conservative — only punctuation, capitalization,
+    /// and clear grammar fixes; never touches meaning. The server's
+    /// migration 0010 promotes existing polish-enabled users to
+    /// `intuitive` to preserve their current behavior; new users default
+    /// to `prescriptive`.
+    enum PolishMode: String, Codable, CaseIterable, Identifiable, Sendable {
+        case intuitive
+        case prescriptive
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .intuitive: return "Intuitive"
+            case .prescriptive: return "Prescriptive"
+            }
+        }
+    }
+
     struct PolishPrefsResponse: Decodable {
         let enabled: Bool
+        let mode: PolishMode
         let systemPrompt: String
         let isCustom: Bool
         let defaultPrompt: String
 
         enum CodingKeys: String, CodingKey {
-            case enabled
+            case enabled, mode
             case systemPrompt = "system_prompt"
             case isCustom = "is_custom"
             case defaultPrompt = "default_prompt"
         }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.enabled = try c.decode(Bool.self, forKey: .enabled)
+            self.mode = (try? c.decode(PolishMode.self, forKey: .mode)) ?? .prescriptive
+            self.systemPrompt = try c.decode(String.self, forKey: .systemPrompt)
+            self.isCustom = try c.decode(Bool.self, forKey: .isCustom)
+            self.defaultPrompt = try c.decode(String.self, forKey: .defaultPrompt)
+        }
     }
 
-    /// PATCH-style update of the user's polish prefs. `systemPrompt = nil`
-    /// (as an explicit Optional set via `.some(.none)`) clears the custom
-    /// override and reverts to the server default. Pass `nil` for either
-    /// field to leave it unchanged.
+    /// PATCH-style update of the user's polish prefs. Each parameter is
+    /// independently optional:
+    ///   * `enabled = nil`        → don't touch the toggle
+    ///   * `mode = nil`           → don't touch the mode
+    ///   * `systemPrompt = nil`   → don't touch the prompt
+    ///   * `systemPrompt = .null` → explicitly clear the custom prompt
+    ///                              (revert to the active mode's default)
+    ///   * `systemPrompt = .value(s)` → set a custom prompt
     ///
     /// Returns the post-save state so callers can refresh their local cache
     /// without a follow-up GET.
     func updatePolish(enabled: Bool?,
+                      mode: PolishMode? = nil,
                       systemPrompt: OptionalValue<String>?) async throws -> PolishPrefsResponse {
         var body: [String: Any] = [:]
         if let enabled { body["enabled"] = enabled }
+        if let mode { body["mode"] = mode.rawValue }
         if let systemPrompt {
             switch systemPrompt {
             case .value(let s): body["system_prompt"] = s

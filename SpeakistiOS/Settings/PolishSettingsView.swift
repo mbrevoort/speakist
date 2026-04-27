@@ -21,6 +21,7 @@ struct PolishSettingsView: View {
 
     @State private var loading = true
     @State private var savingToggle = false
+    @State private var savingMode = false
     @State private var savingPrompt = false
     @State private var lastError: String?
     @State private var lastSavedAt: Date?
@@ -77,11 +78,36 @@ struct PolishSettingsView: View {
                 set: { saveToggle(to: $0) }
             ))
             .disabled(savingToggle)
-            Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, fix obvious slips, and apply explicit self-corrections. Adds about 200–500 ms of latency; cost absorbed.")
+            Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, capitalization, and clear grammar fixes. Adds about 200–500 ms of latency; cost absorbed.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
             Text("Post-transcription polish")
+        }
+
+        // Mode picker. Segmented control with a description that swaps
+        // based on the selected mode. Visible always (even when polish
+        // is off) so a user can configure their preferred mode before
+        // flipping it on; disabled in that state to keep server calls
+        // gated.
+        Section {
+            Picker("Mode", selection: Binding(
+                get: { loaded.mode },
+                set: { saveMode(to: $0) }
+            )) {
+                Text("Intuitive").tag(SpeakistAPIClient.PolishMode.intuitive)
+                Text("Prescriptive").tag(SpeakistAPIClient.PolishMode.prescriptive)
+            }
+            .pickerStyle(.segmented)
+            .disabled(!loaded.enabled || savingMode)
+
+            Text(loaded.mode == .intuitive
+                 ? "Tries to understand your intent and applies explicit self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}). Best when you talk through a thought and want the polished result."
+                 : "Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Mode")
         }
 
         Section {
@@ -185,10 +211,7 @@ struct PolishSettingsView: View {
                 lastError = "Server didn't return polish settings."
                 return
             }
-            apply(enabled: polish.enabled,
-                  prompt: polish.systemPrompt,
-                  isCustom: polish.isCustom,
-                  defaultPrompt: polish.defaultPrompt)
+            apply(from: polish)
         } catch {
             lastError = error.localizedDescription
         }
@@ -205,10 +228,28 @@ struct PolishSettingsView: View {
                     enabled: newValue,
                     systemPrompt: nil
                 )
-                apply(enabled: resp.enabled,
-                      prompt: resp.systemPrompt,
-                      isCustom: resp.isCustom,
-                      defaultPrompt: resp.defaultPrompt)
+                apply(from: resp)
+                lastSavedAt = Date()
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func saveMode(to newValue: SpeakistAPIClient.PolishMode) {
+        guard let client = account.apiClient else { return }
+        guard newValue != loaded?.mode else { return }
+        savingMode = true
+        lastError = nil
+        Task {
+            defer { savingMode = false }
+            do {
+                let resp = try await client.updatePolish(
+                    enabled: nil,
+                    mode: newValue,
+                    systemPrompt: nil
+                )
+                apply(from: resp)
                 lastSavedAt = Date()
             } catch {
                 lastError = error.localizedDescription
@@ -228,10 +269,7 @@ struct PolishSettingsView: View {
                 enabled: nil,
                 systemPrompt: .value(trimmed)
             )
-            apply(enabled: resp.enabled,
-                  prompt: resp.systemPrompt,
-                  isCustom: resp.isCustom,
-                  defaultPrompt: resp.defaultPrompt)
+            apply(from: resp)
             lastSavedAt = Date()
         } catch {
             lastError = error.localizedDescription
@@ -251,28 +289,45 @@ struct PolishSettingsView: View {
                 enabled: nil,
                 systemPrompt: .null
             )
-            apply(enabled: resp.enabled,
-                  prompt: resp.systemPrompt,
-                  isCustom: resp.isCustom,
-                  defaultPrompt: resp.defaultPrompt)
+            apply(from: resp)
             lastSavedAt = Date()
         } catch {
             lastError = error.localizedDescription
         }
     }
 
-    private func apply(enabled: Bool, prompt: String, isCustom: Bool, defaultPrompt: String) {
+    /// Apply a `/api/me/polish` PUT response (or matching shape from
+    /// /api/me's PolishInfo) to local state. Single funnel so every
+    /// caller stays in sync as the response shape grows.
+    private func apply(from resp: SpeakistAPIClient.PolishPrefsResponse) {
         let next = PolishState(
-            enabled: enabled,
-            systemPrompt: prompt,
-            isCustom: isCustom,
-            defaultPrompt: defaultPrompt
+            enabled: resp.enabled,
+            mode: resp.mode,
+            systemPrompt: resp.systemPrompt,
+            isCustom: resp.isCustom,
+            defaultPrompt: resp.defaultPrompt
         )
         loaded = next
         // Only overwrite the editor when the server's effective prompt
         // changed and the local draft was clean; otherwise we'd stomp the
         // user's in-progress edit on every Save (which round-trips through
         // the server).
+        if !draftIsDirtyVs(next) {
+            draft = next.systemPrompt
+        }
+    }
+
+    /// Same shape, used when hydrating from /api/me's PolishInfo (which
+    /// is structurally identical to PolishPrefsResponse on the wire).
+    private func apply(from polish: SpeakistAPIClient.MeResponse.PolishInfo) {
+        let next = PolishState(
+            enabled: polish.enabled,
+            mode: polish.mode,
+            systemPrompt: polish.systemPrompt,
+            isCustom: polish.isCustom,
+            defaultPrompt: polish.defaultPrompt
+        )
+        loaded = next
         if !draftIsDirtyVs(next) {
             draft = next.systemPrompt
         }
@@ -290,10 +345,11 @@ struct PolishSettingsView: View {
         return fmt.localizedString(for: date, relativeTo: Date())
     }
 
-    /// Compact local mirror of the four fields the Mac caches in
+    /// Compact local mirror of the polish fields the Mac caches in
     /// Preferences. Plain struct keeps the view's state single-source.
     private struct PolishState: Equatable {
         let enabled: Bool
+        let mode: SpeakistAPIClient.PolishMode
         let systemPrompt: String
         let isCustom: Bool
         let defaultPrompt: String

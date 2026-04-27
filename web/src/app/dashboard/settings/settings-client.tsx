@@ -13,9 +13,12 @@ import {
   leaveOrg,
   deleteOrg,
   setPolishEnabled,
+  setPolishMode,
   setPolishPrompt,
   type ActionResult,
 } from "./actions";
+
+type PolishMode = "intuitive" | "prescriptive";
 
 interface Props {
   orgName: string;
@@ -27,6 +30,7 @@ interface Props {
   /** Polish prefs are per-user; passed from the server so first paint
    *  has the right values without a client-side fetch. */
   polishEnabled: boolean;
+  polishMode: PolishMode;
   polishPrompt: string;
   polishIsCustom: boolean;
   polishDefaultPrompt: string;
@@ -40,6 +44,7 @@ export function SettingsClient({
   isSoleOwner,
   role,
   polishEnabled,
+  polishMode,
   polishPrompt,
   polishIsCustom,
   polishDefaultPrompt,
@@ -48,6 +53,7 @@ export function SettingsClient({
     <div className="space-y-10">
       <PolishCard
         enabled={polishEnabled}
+        mode={polishMode}
         prompt={polishPrompt}
         isCustom={polishIsCustom}
         defaultPrompt={polishDefaultPrompt}
@@ -223,11 +229,13 @@ function LeaveButton({ disabled }: { disabled: boolean }) {
 
 function PolishCard({
   enabled: serverEnabled,
+  mode: serverMode,
   prompt: serverPrompt,
   isCustom: serverIsCustom,
   defaultPrompt,
 }: {
   enabled: boolean;
+  mode: PolishMode;
   prompt: string;
   isCustom: boolean;
   defaultPrompt: string;
@@ -236,13 +244,16 @@ function PolishCard({
   // optimistic feedback without re-rendering the whole page from the RSC
   // tree. Each successful action mutates these in-place.
   const [enabled, setEnabled] = useState(serverEnabled);
+  const [mode, setMode] = useState<PolishMode>(serverMode);
   const [isCustom, setIsCustom] = useState(serverIsCustom);
   const [draft, setDraft] = useState(serverPrompt);
   const [savedPrompt, setSavedPrompt] = useState(serverPrompt);
 
   const [toggleResult, setToggleResult] = useState<ActionResult | null>(null);
+  const [modeResult, setModeResult] = useState<ActionResult | null>(null);
   const [promptResult, setPromptResult] = useState<ActionResult | null>(null);
   const [togglePending, startToggleTransition] = useTransition();
+  const [modePending, startModeTransition] = useTransition();
   const [promptPending, startPromptTransition] = useTransition();
 
   // If the page is re-rendered server-side (e.g. revalidatePath), pick up
@@ -250,6 +261,7 @@ function PolishCard({
   // get the stale server state if React decided to re-mount.
   useEffect(() => {
     setEnabled(serverEnabled);
+    setMode(serverMode);
     setIsCustom(serverIsCustom);
     setSavedPrompt(serverPrompt);
     // Only stomp the editor when the user hasn't started a fresh edit;
@@ -258,7 +270,7 @@ function PolishCard({
       current === savedPrompt ? serverPrompt : current
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverEnabled, serverIsCustom, serverPrompt]);
+  }, [serverEnabled, serverMode, serverIsCustom, serverPrompt]);
 
   const draftIsDirty = draft !== savedPrompt;
   const draftIsBlank = draft.trim().length === 0;
@@ -272,6 +284,22 @@ function PolishCard({
       const r = await setPolishEnabled(fd);
       setToggleResult(r);
       if (r.ok) setEnabled(next);
+    });
+  }
+
+  function handleModeChange(next: PolishMode) {
+    if (next === mode) return;
+    const fd = new FormData();
+    fd.set("mode", next);
+    setModeResult(null);
+    // Optimistic — flip the local state immediately so the UI reflects
+    // the choice instantly. If the action fails, we roll back below.
+    const previous = mode;
+    setMode(next);
+    startModeTransition(async () => {
+      const r = await setPolishMode(fd);
+      setModeResult(r);
+      if (!r.ok) setMode(previous);
     });
   }
 
@@ -310,8 +338,8 @@ function PolishCard({
 
   return (
     <Card
-      title="Polish prompt"
-      description="Routes every transcription through a small LLM to add punctuation, fix obvious slips, and apply explicit self-corrections (“I mean…”, “scratch that…”). The prompt below tells the LLM what to do; you can customize it or revert to the server default."
+      title="Polish"
+      description="Routes every transcription through a small LLM to add punctuation, capitalization, and clear grammar fixes. Pick a mode below to control how aggressive the cleanup is."
     >
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-3">
@@ -335,14 +363,50 @@ function PolishCard({
           )}
         </div>
 
+        {/* Mode picker — only relevant when polish is enabled, but
+            still shown when off so the user can configure their
+            preferred mode before flipping it on. */}
+        <fieldset className="space-y-3" disabled={modePending || !enabled}>
+          <legend className="text-sm font-medium">Mode</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ModeOption
+              label="Intuitive"
+              description="Tries to understand your intent and applies explicit self-corrections (“I mean…”, “scratch that…”). Best when you talk through a thought and want the polished result."
+              value="intuitive"
+              selected={mode === "intuitive"}
+              onSelect={() => handleModeChange("intuitive")}
+              disabled={modePending || !enabled}
+            />
+            <ModeOption
+              label="Prescriptive"
+              description="Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting."
+              value="prescriptive"
+              selected={mode === "prescriptive"}
+              onSelect={() => handleModeChange("prescriptive")}
+              disabled={modePending || !enabled}
+            />
+          </div>
+          {modeResult && (
+            <p
+              className={cn(
+                "text-sm",
+                modeResult.ok ? "text-sage" : "text-destructive"
+              )}
+              role="status"
+            >
+              {modeResult.ok ? modeResult.message : modeResult.error}
+            </p>
+          )}
+        </fieldset>
+
         <div>
           <label className="text-sm font-medium" htmlFor="polish-prompt">
             System prompt
           </label>
           <p className="mt-1 text-xs text-muted-foreground">
             {isCustom
-              ? "You're using a custom prompt. Reset below to go back to the server default."
-              : "You're using the server default. Edit and save below to override."}
+              ? "You're using a custom prompt — applied regardless of mode. Reset below to go back to the mode's server default."
+              : "You're using the server default for the selected mode. Switching modes above swaps the default prompt; editing and saving below pins a custom prompt that overrides both modes."}
           </p>
           <textarea
             id="polish-prompt"
@@ -389,6 +453,58 @@ function PolishCard({
         </div>
       </div>
     </Card>
+  );
+}
+
+// Radio-style card pair for the polish mode picker. Visually highlights
+// the selected mode with the peach accent; full-card tap target so the
+// click region is generous on mobile.
+function ModeOption({
+  label,
+  description,
+  value,
+  selected,
+  onSelect,
+  disabled,
+}: {
+  label: string;
+  description: string;
+  value: "intuitive" | "prescriptive";
+  selected: boolean;
+  onSelect: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      disabled={disabled}
+      role="radio"
+      aria-checked={selected}
+      className={cn(
+        "text-left rounded-xl border p-4 transition-colors",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        selected
+          ? "border-peach-deep bg-peach/10"
+          : "border-border/70 bg-background hover:bg-muted/50",
+        disabled && "opacity-60 cursor-not-allowed"
+      )}
+    >
+      <div className="flex items-center gap-2 font-medium text-sm">
+        <span
+          className={cn(
+            "inline-block h-3 w-3 rounded-full border",
+            selected ? "border-peach-deep bg-peach-deep" : "border-muted-foreground/40"
+          )}
+          aria-hidden
+        />
+        {label}
+        <span className="ml-auto text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+          {value}
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{description}</p>
+    </button>
   );
 }
 

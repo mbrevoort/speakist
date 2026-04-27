@@ -241,6 +241,7 @@ export async function POST(req: Request): Promise<Response> {
     const [userPrefs] = await db
       .select({
         polishEnabled: users.polishEnabled,
+        polishMode: users.polishMode,
         polishSystemPrompt: users.polishSystemPrompt,
       })
       .from(users)
@@ -251,13 +252,15 @@ export async function POST(req: Request): Promise<Response> {
         env as unknown as Parameters<typeof runPolish>[0],
         org.id,
         output.text,
-        userPrefs.polishSystemPrompt
+        userPrefs.polishSystemPrompt,
+        (userPrefs.polishMode as "intuitive" | "prescriptive") ?? "prescriptive"
       );
       // Metadata-only log (no content) so operators can confirm in
       // `pnpm dev` / tail logs that the right prompt variant ran +
       // whether the model output changed length unexpectedly.
       console.info(
         `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
+          `mode=${userPrefs.polishMode} ` +
           `prompt=${userPrefs.polishSystemPrompt ? "custom" : "default"} ` +
           `inChars=${output.text.length} outChars=${polish.text.length} ` +
           `tokens=${polish.promptTokens}/${polish.completionTokens} ` +

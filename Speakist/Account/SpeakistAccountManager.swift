@@ -272,6 +272,7 @@ final class SpeakistAccountManager: ObservableObject {
             if let polish = me.polish {
                 preferences?.applyPolishFromServer(
                     enabled: polish.enabled,
+                    mode: polish.mode,
                     systemPrompt: polish.systemPrompt,
                     isCustom: polish.isCustom,
                     defaultPrompt: polish.defaultPrompt
