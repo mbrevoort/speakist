@@ -372,6 +372,11 @@ export const appSettings = sqliteTable("app_settings", {
   // so this key is actually load-bearing — without it the transcribe
   // path 500s for every org that hasn't set its own override.
   systemGroqKeyEncrypted: text("system_groq_key_encrypted"),
+  // Super-admin overrides for the two polish-mode system prompts.
+  // NULL → use the baked-in default in `lib/transcription/polish.ts`.
+  // Edited only at /admin/system; end users never see the prompt text.
+  polishIntuitivePrompt: text("polish_intuitive_prompt"),
+  polishPrescriptivePrompt: text("polish_prescriptive_prompt"),
   // When false, provisionNewUser stops auto-creating a workspace for
   // brand-new signups that don't match an existing org's auto_join_domain.
   // Used to lock down dev/staging to invite-only access. Production stays

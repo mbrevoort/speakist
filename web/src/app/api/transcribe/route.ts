@@ -242,7 +242,6 @@ export async function POST(req: Request): Promise<Response> {
       .select({
         polishEnabled: users.polishEnabled,
         polishMode: users.polishMode,
-        polishSystemPrompt: users.polishSystemPrompt,
       })
       .from(users)
       .where(eq(users.id, user.id))
@@ -252,7 +251,6 @@ export async function POST(req: Request): Promise<Response> {
         env as unknown as Parameters<typeof runPolish>[0],
         org.id,
         output.text,
-        userPrefs.polishSystemPrompt,
         (userPrefs.polishMode as "intuitive" | "prescriptive") ?? "prescriptive"
       );
       // Metadata-only log (no content) so operators can confirm in
@@ -261,7 +259,6 @@ export async function POST(req: Request): Promise<Response> {
       console.info(
         `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
           `mode=${userPrefs.polishMode} ` +
-          `prompt=${userPrefs.polishSystemPrompt ? "custom" : "default"} ` +
           `inChars=${output.text.length} outChars=${polish.text.length} ` +
           `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
           `latencyMs=${polish.latencyMs}` +

@@ -1,14 +1,19 @@
-// Admin → system settings. Platform-wide knobs. Today: system-wide Deepgram
-// key, and the "allow public org creation" toggle that gates whether
-// brand-new signups auto-get a workspace.
+// Admin → system settings. Platform-wide knobs:
+//   * Public signup toggle
+//   * System Groq + Deepgram keys (encrypted at rest)
+//   * Polish mode prompts (intuitive + prescriptive) — overrides for the
+//     baked-in defaults; NULL falls back to the constants in
+//     lib/transcription/polish.ts.
 
 import { eq } from "drizzle-orm";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireSuperAdmin } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
+import { bakedInPromptForMode } from "@/lib/transcription/polish";
 import {
   AllowPublicOrgToggle,
+  PolishPromptEditor,
   SystemDeepgramKey,
   SystemGroqKey,
 } from "./system-client";
@@ -22,6 +27,8 @@ export default async function AdminSystemPage() {
     .select({
       deepgramEncrypted: appSettings.systemDeepgramKeyEncrypted,
       groqEncrypted: appSettings.systemGroqKeyEncrypted,
+      polishIntuitive: appSettings.polishIntuitivePrompt,
+      polishPrescriptive: appSettings.polishPrescriptivePrompt,
       allowPublicOrgCreation: appSettings.allowPublicOrgCreation,
     })
     .from(appSettings)
@@ -91,6 +98,40 @@ export default async function AdminSystemPage() {
         </p>
         <div className="mt-5">
           <SystemDeepgramKey hasKey={!!row?.deepgramEncrypted} />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
+        <h2 className="text-lg font-semibold tracking-tight">Polish — Intuitive prompt</h2>
+        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+          System prompt used when a user has Polish enabled and selects
+          the <em>Intuitive</em> mode. Empty (or whitespace-only) saves
+          NULL, which falls back to the baked-in default below — useful
+          for reverting after experimentation.
+        </p>
+        <div className="mt-5">
+          <PolishPromptEditor
+            mode="intuitive"
+            current={row?.polishIntuitive ?? null}
+            bakedInDefault={bakedInPromptForMode("intuitive")}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
+        <h2 className="text-lg font-semibold tracking-tight">Polish — Prescriptive prompt</h2>
+        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+          System prompt used when a user has Polish enabled and selects
+          the <em>Prescriptive</em> mode. Conservative by design — only
+          punctuation, capitalization, and clear grammar fixes; never
+          touches meaning. Empty saves NULL → baked-in fallback.
+        </p>
+        <div className="mt-5">
+          <PolishPromptEditor
+            mode="prescriptive"
+            current={row?.polishPrescriptive ?? null}
+            bakedInDefault={bakedInPromptForMode("prescriptive")}
+          />
         </div>
       </section>
     </div>

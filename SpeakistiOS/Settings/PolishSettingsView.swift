@@ -1,35 +1,23 @@
 import SwiftUI
 
-/// Per-user polish settings on iOS. Lets a signed-in user:
-///   * Toggle the LLM polish pass on/off
-///   * Edit the system prompt that drives the polish
-///   * Reset back to the server-shipped default prompt
-///
-/// Source of truth for both fields is the server (`users.polish_enabled`,
-/// `users.polish_system_prompt`); we PUT through `/api/me/polish` and
-/// reflect the response back into the view. There is no local Preferences
-/// cache on iOS — a fresh fetch on appear is cheap and avoids the
-/// "stale local state vs. server" reconciliation the Mac has to do.
+/// Per-user polish settings on iOS. Lets a signed-in user toggle the
+/// post-transcription polish pass and pick a mode (Intuitive vs.
+/// Prescriptive). The mode prompts themselves are super-admin-only and
+/// configured at /admin/system on the web — iOS never shows or edits
+/// the prompt text.
 struct PolishSettingsView: View {
     @EnvironmentObject private var account: SpeakistAccountManager
 
     /// Loaded server state. `nil` while the initial fetch is in flight or
     /// when the user is signed out (in which case the view shows a
-    /// sign-in prompt instead of the editor).
+    /// sign-in prompt instead of the controls).
     @State private var loaded: PolishState?
-    @State private var draft: String = ""
 
     @State private var loading = true
     @State private var savingToggle = false
     @State private var savingMode = false
-    @State private var savingPrompt = false
     @State private var lastError: String?
     @State private var lastSavedAt: Date?
-
-    private var draftIsDirty: Bool {
-        guard let loaded else { return false }
-        return draft != loaded.systemPrompt
-    }
 
     var body: some View {
         Form {
@@ -78,7 +66,7 @@ struct PolishSettingsView: View {
                 set: { saveToggle(to: $0) }
             ))
             .disabled(savingToggle)
-            Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, capitalization, and clear grammar fixes. Adds about 200–500 ms of latency; cost absorbed.")
+            Text("Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
@@ -108,52 +96,13 @@ struct PolishSettingsView: View {
                 .foregroundStyle(.secondary)
         } header: {
             Text("Mode")
-        }
-
-        Section {
-            // TextEditor on iOS doesn't have a built-in placeholder; we
-            // overlay one when the draft is empty + polish is off, mirroring
-            // the Mac's UX for "you need to enable polish first".
-            TextEditor(text: $draft)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 220)
-                .disabled(!loaded.enabled || savingPrompt)
-                .scrollContentBackground(.hidden)
-                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-
-            HStack(spacing: 12) {
-                Button {
-                    Task { await resetToDefault() }
-                } label: {
-                    Label("Reset to default", systemImage: "arrow.counterclockwise")
-                }
-                .disabled(!loaded.isCustom || savingPrompt)
-
-                Spacer()
-
-                Button {
-                    Task { await savePrompt() }
-                } label: {
-                    Text(savingPrompt ? "Saving…" : "Save")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.speakistPeach)
-                .disabled(
-                    !loaded.enabled
-                    || savingPrompt
-                    || !draftIsDirty
-                    || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
-            }
-        } header: {
-            Text("System prompt")
         } footer: {
-            footerView(loaded: loaded)
+            footerView()
         }
     }
 
     @ViewBuilder
-    private func footerView(loaded: PolishState) -> some View {
+    private func footerView() -> some View {
         if let err = lastError {
             Text(err)
                 .font(.footnote)
@@ -162,12 +111,8 @@ struct PolishSettingsView: View {
             Text("Saved \(relative(savedAt)).")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-        } else if !loaded.isCustom {
-            Text("Using the server default. Edit the text above and tap Save to override.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         } else {
-            Text("Synced with your account. Updating from any device propagates everywhere.")
+            Text("Synced with your account. Changing here updates every device you're signed into.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -257,86 +202,14 @@ struct PolishSettingsView: View {
         }
     }
 
-    private func savePrompt() async {
-        guard let client = account.apiClient else { return }
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        savingPrompt = true
-        lastError = nil
-        defer { savingPrompt = false }
-        do {
-            let resp = try await client.updatePolish(
-                enabled: nil,
-                systemPrompt: .value(trimmed)
-            )
-            apply(from: resp)
-            lastSavedAt = Date()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    private func resetToDefault() async {
-        guard let client = account.apiClient else { return }
-        savingPrompt = true
-        lastError = nil
-        defer { savingPrompt = false }
-        do {
-            // `.null` clears `polish_system_prompt` server-side; the GET in
-            // the response body returns the default in `system_prompt`, and
-            // the editor seeds from that on apply().
-            let resp = try await client.updatePolish(
-                enabled: nil,
-                systemPrompt: .null
-            )
-            apply(from: resp)
-            lastSavedAt = Date()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    /// Apply a `/api/me/polish` PUT response (or matching shape from
-    /// /api/me's PolishInfo) to local state. Single funnel so every
-    /// caller stays in sync as the response shape grows.
+    /// Apply a `/api/me/polish` PUT response to local state.
     private func apply(from resp: SpeakistAPIClient.PolishPrefsResponse) {
-        let next = PolishState(
-            enabled: resp.enabled,
-            mode: resp.mode,
-            systemPrompt: resp.systemPrompt,
-            isCustom: resp.isCustom,
-            defaultPrompt: resp.defaultPrompt
-        )
-        loaded = next
-        // Only overwrite the editor when the server's effective prompt
-        // changed and the local draft was clean; otherwise we'd stomp the
-        // user's in-progress edit on every Save (which round-trips through
-        // the server).
-        if !draftIsDirtyVs(next) {
-            draft = next.systemPrompt
-        }
+        loaded = PolishState(enabled: resp.enabled, mode: resp.mode)
     }
 
-    /// Same shape, used when hydrating from /api/me's PolishInfo (which
-    /// is structurally identical to PolishPrefsResponse on the wire).
+    /// Same shape, used when hydrating from /api/me's PolishInfo.
     private func apply(from polish: SpeakistAPIClient.MeResponse.PolishInfo) {
-        let next = PolishState(
-            enabled: polish.enabled,
-            mode: polish.mode,
-            systemPrompt: polish.systemPrompt,
-            isCustom: polish.isCustom,
-            defaultPrompt: polish.defaultPrompt
-        )
-        loaded = next
-        if !draftIsDirtyVs(next) {
-            draft = next.systemPrompt
-        }
-    }
-
-    /// Is the editor's draft different from the given state's prompt? Used
-    /// to decide whether to clobber the editor on a server response.
-    private func draftIsDirtyVs(_ state: PolishState) -> Bool {
-        draft != state.systemPrompt
+        loaded = PolishState(enabled: polish.enabled, mode: polish.mode)
     }
 
     private func relative(_ date: Date) -> String {
@@ -345,13 +218,11 @@ struct PolishSettingsView: View {
         return fmt.localizedString(for: date, relativeTo: Date())
     }
 
-    /// Compact local mirror of the polish fields the Mac caches in
-    /// Preferences. Plain struct keeps the view's state single-source.
+    /// Local mirror of the two polish fields the user can change. The
+    /// system prompt itself is super-admin-only and never displayed
+    /// here, so the struct doesn't carry it.
     private struct PolishState: Equatable {
         let enabled: Bool
         let mode: SpeakistAPIClient.PolishMode
-        let systemPrompt: String
-        let isCustom: Bool
-        let defaultPrompt: String
     }
 }

@@ -1,9 +1,15 @@
 // GET/PUT /api/me/polish
 //
-// Per-user polish preferences. Source of truth for whether /api/transcribe
-// runs the LLM polish pass, what mode it runs in, and what system prompt
-// it uses. Mac/iOS/web all call this when the user flips a toggle or
-// edits the prompt in their Settings UI.
+// Per-user polish preferences. Source of truth for whether
+// /api/transcribe runs the LLM polish pass and what mode it runs in.
+// Mac/iOS/web all call this when the user flips the toggle or changes
+// the mode in their Settings UI.
+//
+// End users no longer customize the system prompt — that's now a
+// super-admin-only setting at /admin/system. The endpoint still returns
+// the active prompt for read-only display in older clients (and so
+// `/api/me` payload shape doesn't shift), but ignores any inbound
+// `system_prompt` field.
 //
 // Auth: bearer (Mac session) or cookie (web debugging).
 //
@@ -11,15 +17,14 @@
 //   {
 //     enabled: bool,
 //     mode: "intuitive" | "prescriptive",
-//     system_prompt: string,        // currently-effective prompt
-//     is_custom: bool,              // true when system_prompt is a user override
-//     default_prompt: string        // mode's baked-in default (read-only)
+//     system_prompt: string,        // currently-effective prompt (read-only)
+//     is_custom: false,             // legacy field; always false now
+//     default_prompt: string        // same as system_prompt
 //   }
 // PUT body (any combination, all optional):
-//   { enabled?: bool, mode?: "intuitive" | "prescriptive", system_prompt?: string | null }
-//   * `system_prompt: null` → clears the custom prompt, falls back to mode default
-//   * `system_prompt: "<text>"` → sets a custom prompt
-//   * Omit a field → no change to that field
+//   { enabled?: bool, mode?: "intuitive" | "prescriptive" }
+//   Older clients may send `system_prompt`; we accept the field so the
+//   request doesn't 400 but ignore the value.
 // PUT response: same shape as GET.
 
 import { eq } from "drizzle-orm";
@@ -27,7 +32,7 @@ import { z } from "zod";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
+import { resolvePromptForMode, type PolishMode } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -38,12 +43,11 @@ export async function GET(req: Request): Promise<Response> {
   }
 }
 
-// Accept either top-level or lightly-wrapped JSON. system_prompt = null
-// is the explicit "clear custom prompt" signal — distinct from omitting
-// the key, which leaves the existing value alone.
 const bodySchema = z.object({
   enabled: z.boolean().optional(),
   mode: z.enum(["intuitive", "prescriptive"]).optional(),
+  // Accepted for forward/backward compat with older clients that may
+  // still send it; intentionally ignored server-side.
   system_prompt: z.string().max(4000).nullable().optional(),
 });
 
@@ -59,20 +63,10 @@ export async function PUT(req: Request): Promise<Response> {
       );
     }
 
-    const patch: Partial<{
-      polishEnabled: boolean;
-      polishMode: PolishMode;
-      polishSystemPrompt: string | null;
-    }> = {};
+    const patch: Partial<{ polishEnabled: boolean; polishMode: PolishMode }> = {};
     if (parsed.data.enabled !== undefined) patch.polishEnabled = parsed.data.enabled;
     if (parsed.data.mode !== undefined) patch.polishMode = parsed.data.mode;
-    if (parsed.data.system_prompt !== undefined) {
-      // Treat whitespace-only as "clear" so users can't accidentally
-      // commit a blank custom prompt (which would produce empty LLM
-      // outputs at polish time).
-      const trimmed = parsed.data.system_prompt?.trim() ?? null;
-      patch.polishSystemPrompt = trimmed && trimmed.length > 0 ? trimmed : null;
-    }
+    // `system_prompt` is intentionally ignored — see header comment.
 
     if (Object.keys(patch).length > 0) {
       const db = getDb();
@@ -91,19 +85,22 @@ async function readPolish(userId: string) {
     .select({
       enabled: users.polishEnabled,
       mode: users.polishMode,
-      prompt: users.polishSystemPrompt,
     })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
   const mode: PolishMode = (row?.mode as PolishMode) ?? "prescriptive";
-  const modeDefault = defaultPromptForMode(mode);
+  const prompt = await resolvePromptForMode(mode);
   return {
     enabled: !!row?.enabled,
     mode,
-    system_prompt: row?.prompt ?? modeDefault,
-    is_custom: !!row?.prompt,
-    default_prompt: modeDefault,
+    system_prompt: prompt,
+    // Legacy fields — kept in the response so older clients that read
+    // them don't blow up. End users can no longer customize, so
+    // is_custom is permanently false and default_prompt mirrors the
+    // active prompt.
+    is_custom: false,
+    default_prompt: prompt,
   };
 }
 

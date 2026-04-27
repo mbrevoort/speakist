@@ -90,43 +90,9 @@ export async function setPolishMode(formData: FormData): Promise<ActionResult> {
   }
 }
 
-const polishPromptSchema = z.object({
-  // Mirror the API's max-length cap so the failure modes stay consistent.
-  prompt: z.string().max(4000),
-});
-
-export async function setPolishPrompt(formData: FormData): Promise<ActionResult> {
-  try {
-    const user = await requireUser();
-    const parsed = polishPromptSchema.safeParse({
-      prompt: formData.get("prompt") ?? "",
-    });
-    if (!parsed.success) {
-      return { ok: false, error: "Prompt too long (4,000 char max)." };
-    }
-
-    // Whitespace-only is treated as "clear" so users can't accidentally
-    // commit a blank custom prompt (which would produce empty LLM
-    // outputs at polish time). Same rule as /api/me/polish.
-    const trimmed = parsed.data.prompt.trim();
-    const value = trimmed.length > 0 ? trimmed : null;
-
-    const db = getDb();
-    await db
-      .update(users)
-      .set({ polishSystemPrompt: value })
-      .where(eq(users.id, user.id));
-
-    revalidatePath("/dashboard/settings");
-    return {
-      ok: true,
-      message: value === null ? "Reset to default prompt." : "Custom prompt saved.",
-    };
-  } catch (err) {
-    console.error("setPolishPrompt failed:", err);
-    return { ok: false, error: "Couldn't save." };
-  }
-}
+// Note: per-user prompt customization was removed. The two mode prompts
+// are now configured globally by super admins at /admin/system. End-user
+// Settings only exposes the toggle + mode picker.
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(80) });
 

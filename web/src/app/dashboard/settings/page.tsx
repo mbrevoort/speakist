@@ -9,7 +9,7 @@ import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { orgMembers, users } from "@/lib/db/schema";
-import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
+import type { PolishMode } from "@/lib/transcription/polish";
 import { SettingsClient } from "./settings-client";
 
 export const metadata = { title: "Settings — Speakist" };
@@ -35,14 +35,12 @@ export default async function SettingsPage() {
     .select({
       enabled: users.polishEnabled,
       mode: users.polishMode,
-      systemPrompt: users.polishSystemPrompt,
     })
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
 
   const polishMode: PolishMode = (polishRow?.mode as PolishMode) ?? "prescriptive";
-  const polishModeDefault = defaultPromptForMode(polishMode);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -59,9 +57,6 @@ export default async function SettingsPage() {
         role={org.role}
         polishEnabled={!!polishRow?.enabled}
         polishMode={polishMode}
-        polishPrompt={polishRow?.systemPrompt ?? polishModeDefault}
-        polishIsCustom={!!polishRow?.systemPrompt}
-        polishDefaultPrompt={polishModeDefault}
       />
     </div>
   );

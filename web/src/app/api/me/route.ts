@@ -18,7 +18,7 @@ import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
-import { defaultPromptForMode, type PolishMode } from "@/lib/transcription/polish";
+import { resolvePromptForMode, type PolishMode } from "@/lib/transcription/polish";
 
 export async function GET(req: Request): Promise<Response> {
   try {
@@ -34,14 +34,13 @@ export async function GET(req: Request): Promise<Response> {
       .select({
         enabled: users.polishEnabled,
         mode: users.polishMode,
-        prompt: users.polishSystemPrompt,
       })
       .from(users)
       .where(eq(users.id, user.id))
       .limit(1);
 
     const mode: PolishMode = (prefs?.mode as PolishMode) ?? "prescriptive";
-    const modeDefault = defaultPromptForMode(mode);
+    const prompt = await resolvePromptForMode(mode);
 
     return Response.json({
       id: user.id,
@@ -61,13 +60,15 @@ export async function GET(req: Request): Promise<Response> {
       polish: {
         enabled: !!prefs?.enabled,
         mode,
-        // `null` on the user row → return the mode's default so the
-        // client shows it pre-filled in the Settings editor. `isCustom`
-        // tells the client whether the prompt on the user row is a
-        // user override or the server default baked into the response.
-        system_prompt: prefs?.prompt ?? modeDefault,
-        is_custom: !!prefs?.prompt,
-        default_prompt: modeDefault,
+        // The active prompt the server will use given the selected
+        // mode, including any super-admin override from app_settings.
+        // End users can't customize the prompt anymore — `is_custom`
+        // and `default_prompt` are kept in the payload so older
+        // clients that read them don't crash, but is_custom is
+        // permanently false now.
+        system_prompt: prompt,
+        is_custom: false,
+        default_prompt: prompt,
       },
     });
   } catch (err) {

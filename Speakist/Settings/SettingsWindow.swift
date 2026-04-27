@@ -551,29 +551,20 @@ struct PolishSettingsView: View {
     @EnvironmentObject var prefs: Preferences
     @EnvironmentObject var env: AppEnvironment
 
-    @State private var draftPrompt: String = ""
     @State private var savingToggle = false
     @State private var savingMode = false
-    @State private var savingPrompt = false
     @State private var lastError: String?
     @State private var lastSavedAt: Date?
-
-    private var draftIsDirty: Bool {
-        // "Dirty" = different from what the server currently has.
-        // When the user hasn't customized yet, the current effective prompt
-        // is the default, so any edit counts as dirty.
-        draftPrompt != prefs.polishSystemPrompt
-    }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Polish each transcription with AI", isOn: Binding(
+                Toggle("Polish each transcription", isOn: Binding(
                     get: { prefs.polishEnabled },
                     set: { newValue in saveToggle(newValue) }))
                     .disabled(savingToggle)
 
-                Text("Pipes the raw transcript through a small language model (Llama 3.1 8B on Groq) to add punctuation, capitalization, and clear grammar fixes. Adds about 200–500 ms of latency; the cost is absorbed.")
+                Text("Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
@@ -602,41 +593,6 @@ struct PolishSettingsView: View {
                     .foregroundColor(.secondary)
             } header: {
                 Text("Mode")
-            }
-
-            Section {
-                TextEditor(text: $draftPrompt)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 180)
-                    .disabled(!prefs.polishEnabled || savingPrompt)
-                    .overlay(alignment: .topLeading) {
-                        if draftPrompt.isEmpty && !prefs.polishEnabled {
-                            Text("Enable polish above to edit the system prompt.")
-                                .font(.callout)
-                                .foregroundColor(.secondary)
-                                .padding(6)
-                                .allowsHitTesting(false)
-                        }
-                    }
-
-                HStack {
-                    if prefs.polishIsCustom {
-                        Button("Reset to default") { resetToDefault() }
-                            .disabled(savingPrompt)
-                    } else {
-                        Text("Using the server default. Edit the text above and click Save to override.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    Button(savingPrompt ? "Saving…" : "Save prompt") { savePrompt() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!prefs.polishEnabled || savingPrompt || !draftIsDirty || draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            } header: {
-                Text("System prompt")
             } footer: {
                 if let err = lastError {
                     Text(err).font(.footnote).foregroundColor(.red)
@@ -644,23 +600,11 @@ struct PolishSettingsView: View {
                     Text("Saved \(relativeTimeString(savedAt)).")
                         .font(.footnote)
                         .foregroundColor(.secondary)
-                } else if prefs.polishEnabled {
-                    Text("Synced from your account. Any Mac you sign into will use the same prompt.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear {
-            // Seed the editor with the server's current effective prompt
-            // the first time Settings opens. After that, the user's edits
-            // hold until they Save or Reset.
-            if draftPrompt.isEmpty {
-                draftPrompt = prefs.polishSystemPrompt
-            }
-        }
     }
 
     // MARK: - Actions
@@ -680,10 +624,6 @@ struct PolishSettingsView: View {
                     defaultPrompt: resp.defaultPrompt
                 )
                 lastSavedAt = Date()
-                // Keep the editor in sync with whatever the server returned.
-                if draftPrompt.isEmpty || !prefs.polishIsCustom {
-                    draftPrompt = resp.systemPrompt
-                }
             } catch {
                 lastError = "Couldn't save: \(error.localizedDescription)"
             }
@@ -710,62 +650,8 @@ struct PolishSettingsView: View {
                     defaultPrompt: resp.defaultPrompt
                 )
                 lastSavedAt = Date()
-                // Server returns a different default prompt per mode — if
-                // the user hadn't customized, swap the editor draft to
-                // the new mode's default. Custom prompts win over both
-                // modes' defaults so we leave them alone.
-                if !prefs.polishIsCustom {
-                    draftPrompt = resp.systemPrompt
-                }
             } catch {
                 lastError = "Couldn't save: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func savePrompt() {
-        savingPrompt = true
-        lastError = nil
-        let trimmed = draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        Task {
-            defer { savingPrompt = false }
-            do {
-                let resp = try await env.apiClient.updatePolish(
-                    enabled: nil,
-                    systemPrompt: .value(trimmed))
-                prefs.applyPolishFromServer(
-                    enabled: resp.enabled,
-                    mode: resp.mode,
-                    systemPrompt: resp.systemPrompt,
-                    isCustom: resp.isCustom,
-                    defaultPrompt: resp.defaultPrompt
-                )
-                draftPrompt = resp.systemPrompt
-                lastSavedAt = Date()
-            } catch {
-                lastError = "Couldn't save: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func resetToDefault() {
-        savingPrompt = true
-        lastError = nil
-        Task {
-            defer { savingPrompt = false }
-            do {
-                let resp = try await env.apiClient.updatePolish(enabled: nil, systemPrompt: .null)
-                prefs.applyPolishFromServer(
-                    enabled: resp.enabled,
-                    mode: resp.mode,
-                    systemPrompt: resp.systemPrompt,
-                    isCustom: resp.isCustom,
-                    defaultPrompt: resp.defaultPrompt
-                )
-                draftPrompt = resp.systemPrompt
-                lastSavedAt = Date()
-            } catch {
-                lastError = "Couldn't reset: \(error.localizedDescription)"
             }
         }
     }

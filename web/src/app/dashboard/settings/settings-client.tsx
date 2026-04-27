@@ -4,7 +4,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { RotateCcw, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -14,7 +14,6 @@ import {
   deleteOrg,
   setPolishEnabled,
   setPolishMode,
-  setPolishPrompt,
   type ActionResult,
 } from "./actions";
 
@@ -31,9 +30,6 @@ interface Props {
    *  has the right values without a client-side fetch. */
   polishEnabled: boolean;
   polishMode: PolishMode;
-  polishPrompt: string;
-  polishIsCustom: boolean;
-  polishDefaultPrompt: string;
 }
 
 export function SettingsClient({
@@ -45,19 +41,10 @@ export function SettingsClient({
   role,
   polishEnabled,
   polishMode,
-  polishPrompt,
-  polishIsCustom,
-  polishDefaultPrompt,
 }: Props) {
   return (
     <div className="space-y-10">
-      <PolishCard
-        enabled={polishEnabled}
-        mode={polishMode}
-        prompt={polishPrompt}
-        isCustom={polishIsCustom}
-        defaultPrompt={polishDefaultPrompt}
-      />
+      <PolishCard enabled={polishEnabled} mode={polishMode} />
 
       <Card title="Organization name" description="Shown in the sidebar and on invitation emails.">
         <TextFieldForm
@@ -230,50 +217,27 @@ function LeaveButton({ disabled }: { disabled: boolean }) {
 function PolishCard({
   enabled: serverEnabled,
   mode: serverMode,
-  prompt: serverPrompt,
-  isCustom: serverIsCustom,
-  defaultPrompt,
 }: {
   enabled: boolean;
   mode: PolishMode;
-  prompt: string;
-  isCustom: boolean;
-  defaultPrompt: string;
 }) {
-  // Local mirrors of the server state so toggle / save / reset can show
-  // optimistic feedback without re-rendering the whole page from the RSC
-  // tree. Each successful action mutates these in-place.
+  // Local mirrors of the server state so toggle / mode-change show
+  // optimistic feedback without re-rendering the whole page from the
+  // RSC tree.
   const [enabled, setEnabled] = useState(serverEnabled);
   const [mode, setMode] = useState<PolishMode>(serverMode);
-  const [isCustom, setIsCustom] = useState(serverIsCustom);
-  const [draft, setDraft] = useState(serverPrompt);
-  const [savedPrompt, setSavedPrompt] = useState(serverPrompt);
 
   const [toggleResult, setToggleResult] = useState<ActionResult | null>(null);
   const [modeResult, setModeResult] = useState<ActionResult | null>(null);
-  const [promptResult, setPromptResult] = useState<ActionResult | null>(null);
   const [togglePending, startToggleTransition] = useTransition();
   const [modePending, startModeTransition] = useTransition();
-  const [promptPending, startPromptTransition] = useTransition();
 
-  // If the page is re-rendered server-side (e.g. revalidatePath), pick up
-  // the new server values. Without this, the second save in a row would
-  // get the stale server state if React decided to re-mount.
+  // Re-sync from server on revalidatePath so a second save picks up the
+  // fresh state instead of the locally-stomped one.
   useEffect(() => {
     setEnabled(serverEnabled);
     setMode(serverMode);
-    setIsCustom(serverIsCustom);
-    setSavedPrompt(serverPrompt);
-    // Only stomp the editor when the user hasn't started a fresh edit;
-    // otherwise we'd lose in-flight changes on every revalidate.
-    setDraft((current) =>
-      current === savedPrompt ? serverPrompt : current
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverEnabled, serverMode, serverIsCustom, serverPrompt]);
-
-  const draftIsDirty = draft !== savedPrompt;
-  const draftIsBlank = draft.trim().length === 0;
+  }, [serverEnabled, serverMode]);
 
   function handleToggle() {
     const next = !enabled;
@@ -292,10 +256,8 @@ function PolishCard({
     const fd = new FormData();
     fd.set("mode", next);
     setModeResult(null);
-    // Optimistic — flip the local state immediately so the UI reflects
-    // the choice instantly. If the action fails, we roll back below.
     const previous = mode;
-    setMode(next);
+    setMode(next); // optimistic
     startModeTransition(async () => {
       const r = await setPolishMode(fd);
       setModeResult(r);
@@ -303,43 +265,10 @@ function PolishCard({
     });
   }
 
-  function handleSave() {
-    const fd = new FormData();
-    fd.set("prompt", draft);
-    setPromptResult(null);
-    startPromptTransition(async () => {
-      const r = await setPolishPrompt(fd);
-      setPromptResult(r);
-      if (r.ok) {
-        setSavedPrompt(draft);
-        setIsCustom(true);
-      }
-    });
-  }
-
-  function handleReset() {
-    if (!isCustom) return;
-    if (!window.confirm("Reset to the default polish prompt? Your customizations will be lost.")) {
-      return;
-    }
-    const fd = new FormData();
-    fd.set("prompt", "");
-    setPromptResult(null);
-    startPromptTransition(async () => {
-      const r = await setPolishPrompt(fd);
-      setPromptResult(r);
-      if (r.ok) {
-        setDraft(defaultPrompt);
-        setSavedPrompt(defaultPrompt);
-        setIsCustom(false);
-      }
-    });
-  }
-
   return (
     <Card
       title="Polish"
-      description="Routes every transcription through a small LLM to add punctuation, capitalization, and clear grammar fixes. Pick a mode below to control how aggressive the cleanup is."
+      description="Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes."
     >
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-3">
@@ -363,9 +292,9 @@ function PolishCard({
           )}
         </div>
 
-        {/* Mode picker — only relevant when polish is enabled, but
-            still shown when off so the user can configure their
-            preferred mode before flipping it on. */}
+        {/* Mode picker — visible always so the user can configure
+            their preferred mode before turning polish on, disabled
+            when off so the choice doesn't go off into the void. */}
         <fieldset className="space-y-3" disabled={modePending || !enabled}>
           <legend className="text-sm font-medium">Mode</legend>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -398,59 +327,6 @@ function PolishCard({
             </p>
           )}
         </fieldset>
-
-        <div>
-          <label className="text-sm font-medium" htmlFor="polish-prompt">
-            System prompt
-          </label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {isCustom
-              ? "You're using a custom prompt — applied regardless of mode. Reset below to go back to the mode's server default."
-              : "You're using the server default for the selected mode. Switching modes above swaps the default prompt; editing and saving below pins a custom prompt that overrides both modes."}
-          </p>
-          <textarea
-            id="polish-prompt"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            disabled={!enabled || promptPending}
-            rows={14}
-            className={cn(
-              "mt-2 w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-mono leading-relaxed",
-              "outline-none focus:ring-2 focus:ring-ring",
-              "disabled:opacity-60"
-            )}
-            spellCheck={false}
-          />
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              onClick={handleSave}
-              disabled={!enabled || promptPending || !draftIsDirty || draftIsBlank}
-            >
-              {promptPending ? "Saving…" : "Save prompt"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={handleReset}
-              disabled={!isCustom || promptPending}
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset to default
-            </Button>
-            {promptResult && (
-              <p
-                className={cn(
-                  "text-sm",
-                  promptResult.ok ? "text-sage" : "text-destructive"
-                )}
-                role="status"
-              >
-                {promptResult.ok ? promptResult.message : promptResult.error}
-              </p>
-            )}
-          </div>
-        </div>
       </div>
     </Card>
   );

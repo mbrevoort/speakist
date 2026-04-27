@@ -342,7 +342,7 @@ private struct PolishTryPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Polish your transcripts").font(.title2.weight(.semibold))
-            Text("When polish is on, each transcript runs through a fast language model that tidies grammar, adds punctuation, and patches obvious word-level mistakes. Adds ~200–500 ms.")
+            Text("When polish is on, each transcript is tidied up — punctuation added, capitalization fixed, clear grammar slips corrected.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -352,7 +352,7 @@ private struct PolishTryPane: View {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles")
                         .foregroundColor(.speakistPeach)
-                    Text("Polish each transcription with AI")
+                    Text("Polish each transcription")
                 }
             }
             .disabled(saving)

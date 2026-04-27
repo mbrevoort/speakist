@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   setAllowPublicOrgCreation,
+  setPolishPrompt,
   setSystemDeepgramKey,
   setSystemGroqKey,
   type ActionResult,
@@ -213,6 +215,165 @@ export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: b
         {result && <InlineResult result={result} />}
       </div>
     </form>
+  );
+}
+
+// --- polish prompt editor (super admin only) -----------------------------
+
+/**
+ * Edit the system prompt for one polish mode. Saves to
+ * `app_settings.polish_<mode>_prompt`; saving an empty string clears it
+ * (NULL), which falls back to the baked-in constant in
+ * `lib/transcription/polish.ts`. The baked-in default is shown in a
+ * read-only collapsible underneath so admins can copy/paste it as a
+ * starting point or compare against their override.
+ */
+export function PolishPromptEditor({
+  mode,
+  current,
+  bakedInDefault,
+}: {
+  mode: "intuitive" | "prescriptive";
+  /** What's stored in the DB. NULL means "using baked-in". */
+  current: string | null;
+  bakedInDefault: string;
+}) {
+  // The textarea hydrates with the saved override; if there is none,
+  // it starts blank to make "no override" obvious. The baked-in
+  // default is shown in a read-only viewer below the editor so admins
+  // can grab it as a starting point.
+  const [draft, setDraft] = useState(current ?? "");
+  const [savedValue, setSavedValue] = useState<string | null>(current);
+  const [showBakedIn, setShowBakedIn] = useState(false);
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  // Sync from server on revalidatePath. Don't stomp an in-flight edit.
+  useEffect(() => {
+    setSavedValue(current);
+    setDraft((d) => (d === (savedValue ?? "") ? current ?? "" : d));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
+
+  const isOverride = savedValue !== null;
+  const draftIsDirty = draft !== (savedValue ?? "");
+
+  function handleSave() {
+    const fd = new FormData();
+    fd.set("mode", mode);
+    fd.set("prompt", draft);
+    setResult(null);
+    startTransition(async () => {
+      const r = await setPolishPrompt(fd);
+      setResult(r);
+      if (r.ok) setSavedValue(draft.trim().length > 0 ? draft : null);
+    });
+  }
+
+  function handleResetToDefault() {
+    if (!window.confirm(`Clear the ${mode} prompt override? Polish will fall back to the baked-in default.`)) {
+      return;
+    }
+    const fd = new FormData();
+    fd.set("mode", mode);
+    fd.set("prompt", "");
+    setResult(null);
+    startTransition(async () => {
+      const r = await setPolishPrompt(fd);
+      setResult(r);
+      if (r.ok) {
+        setSavedValue(null);
+        setDraft("");
+      }
+    });
+  }
+
+  function handleSeedFromDefault() {
+    setDraft(bakedInDefault);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p
+          className={cn(
+            "text-sm font-semibold",
+            isOverride ? "text-sage" : "text-mustard"
+          )}
+        >
+          {isOverride
+            ? "Custom prompt is active"
+            : "Using the baked-in default"}
+        </p>
+        <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
+          {isOverride
+            ? "Polish for this mode is using the saved override below. Clear it to revert to the baked-in default."
+            : "No override saved. Polish for this mode is using the baked-in default. Edit and save below to override."}
+        </p>
+      </div>
+
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={16}
+        spellCheck={false}
+        className={cn(
+          "w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-mono leading-relaxed",
+          "outline-none focus:ring-2 focus:ring-ring",
+          "disabled:opacity-60"
+        )}
+        disabled={pending}
+        placeholder="Empty = use the baked-in default below."
+      />
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" onClick={handleSave} disabled={pending || !draftIsDirty}>
+          {pending ? "Saving…" : "Save prompt"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleResetToDefault}
+          disabled={pending || !isOverride}
+        >
+          <RotateCcw className="h-4 w-4" />
+          Clear override
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleSeedFromDefault}
+          disabled={pending}
+          title="Copy the baked-in default into the editor as a starting point"
+        >
+          Seed from default
+        </Button>
+        {result && (
+          <p
+            className={cn(
+              "text-sm",
+              result.ok ? "text-sage" : "text-destructive"
+            )}
+            role="status"
+          >
+            {result.ok ? result.message : result.error}
+          </p>
+        )}
+      </div>
+
+      <details
+        className="mt-4 rounded-lg border border-border/50 bg-muted/30"
+        open={showBakedIn}
+        onToggle={(e) => setShowBakedIn((e.target as HTMLDetailsElement).open)}
+      >
+        <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium">
+          Baked-in default
+        </summary>
+        <pre className="px-4 pb-4 text-xs font-mono whitespace-pre-wrap break-words text-muted-foreground max-h-[400px] overflow-y-auto">
+          {bakedInDefault}
+        </pre>
+      </details>
+    </div>
   );
 }
 
