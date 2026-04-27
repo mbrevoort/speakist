@@ -328,25 +328,9 @@ private struct AccountRow: View {
                     Text(org)
                 }
                 .font(.footnote)
-                Button {
-                    // Open the web /switch-workspace page in Safari with
-                    // a return marker. After picking, the user comes back
-                    // to Speakist and the account refresh triggered by
-                    // `UIApplication.didBecomeActiveNotification` (already
-                    // wired in SpeakistApp) reflects the new workspace.
-                    let base = SpeakistChannel.current.defaultAPIBaseURL
-                    if var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) {
-                        comps.path = "/switch-workspace"
-                        comps.queryItems = [URLQueryItem(name: "return", value: "ios-app")]
-                        if let url = comps.url {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                } label: {
-                    Label("Switch workspace…", systemImage: "arrow.left.arrow.right")
-                        .font(.footnote)
-                }
-                .buttonStyle(.bordered)
+                // Workspace selection happens at sign-in only (the /link
+                // device-code page picker for users with 2+ memberships).
+                // To switch on this device, sign out and sign back in.
             }
 
             if let balance = identity?.balanceMillicents {

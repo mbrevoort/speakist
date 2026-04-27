@@ -62,11 +62,11 @@ struct SpeakistApp: App {
                 //      (iOS 26 blocks keyboard→app URL opens).
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                     account.pollNow()
-                    // Refresh /api/me so a workspace switch the user made
-                    // in Safari (via /switch-workspace?return=ios-app) is
-                    // reflected in the Account row + drives the next
-                    // transcribe call. Idempotent + cheap, so safe on
-                    // every foreground.
+                    // Refresh /api/me so any account-level state changes
+                    // (invitation accepted in Safari, workspace switched
+                    // via the web dashboard topbar, balance topped up,
+                    // etc.) are reflected in the Account row + drive the
+                    // next transcribe call. Idempotent + cheap.
                     Task { await account.refreshIdentity() }
                     AppGroupBridge.defaults?.set(
                         Date().timeIntervalSince1970,
