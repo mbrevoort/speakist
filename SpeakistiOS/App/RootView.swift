@@ -63,15 +63,11 @@ struct HomeView: View {
                     }
                 }
 
-                if account.isSignedIn {
-                    Section("Polish") {
-                        NavigationLink {
-                            PolishSettingsView()
-                        } label: {
-                            Label("Polish prompt", systemImage: "wand.and.sparkles")
-                        }
-                    }
-                }
+                // Polish controls render inline (toggle + mode picker
+                // when signed in). The PolishSection view returns
+                // EmptyView() when signed out so it disappears entirely
+                // — no NavigationLink, no detail screen.
+                PolishSection()
 
                 Section {
                     NavigationLink {
