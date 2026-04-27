@@ -4,7 +4,11 @@
 // the session URL. The client navigates the user to that URL; on return,
 // Stripe's webhook adds the credit.
 //
-// Body: { amountMillicents: number }
+// Body: { tierId: string }
+//   The client picks one of the SKUs in src/lib/billing/topupTiers.ts. We
+//   resolve it server-side so the bonus credit can't be tampered with from
+//   the browser.
+//
 // Only admins/owners can initiate top-ups — members shouldn't be able to
 // spend the org's money. (They can still consume credit by transcribing;
 // they just can't add to the pool.)
@@ -13,9 +17,10 @@ import { z } from "zod";
 import { requireOrgAdmin, requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { createTopupCheckoutSession } from "@/lib/billing";
+import { getTopupTier } from "@/lib/billing/topupTiers";
 
 const bodySchema = z.object({
-  amountMillicents: z.number().int().positive().max(100_000_000),
+  tierId: z.string().min(1).max(32),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -28,7 +33,12 @@ export async function POST(req: Request): Promise<Response> {
     const json = await req.json().catch(() => null);
     const parsed = bodySchema.safeParse(json);
     if (!parsed.success) {
-      return Response.json({ error: "Bad amount" }, { status: 400 });
+      return Response.json({ error: "Bad request body" }, { status: 400 });
+    }
+
+    const tier = getTopupTier(parsed.data.tierId);
+    if (!tier) {
+      return Response.json({ error: "Unknown top-up tier" }, { status: 400 });
     }
 
     // Build a return URL back to /dashboard/billing. The base comes from the
@@ -38,7 +48,7 @@ export async function POST(req: Request): Promise<Response> {
 
     const session = await createTopupCheckoutSession({
       orgId: org.id,
-      amountMillicents: parsed.data.amountMillicents,
+      tier,
       returnUrl,
       customerEmail: user.email,
     });

@@ -13,7 +13,7 @@ export function Footer() {
           <div className="max-w-sm">
             <Wordmark />
             <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
-              Push-to-talk dictation for macOS. Made in Colorado by{" "}
+              Push-to-talk dictation for Mac and iPhone. Made in Colorado by{" "}
               <a
                 href="https://brevoortstudio.com"
                 className="underline underline-offset-4 hover:text-foreground"

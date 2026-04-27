@@ -5,44 +5,51 @@
 //
 // The page-level success/cancel toasts are derived from the ?topup= query
 // param set on Stripe's return URL.
+//
+// User-facing balance is shown in WORDS (the utility unit), not dollars.
+// See docs/pricing-strategy.md for the rationale. Dollars still appear in
+// the ledger and the admin views.
 
 "use client";
 
 import { useState, useTransition } from "react";
 import { AlertCircle, CheckCircle2, ExternalLink, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn, formatDollars } from "@/lib/utils";
+import { cn, formatDollars, formatWords, millicentsToWords } from "@/lib/utils";
+import { TOPUP_TIERS, type TopupTier } from "@/lib/billing/topupTiers";
 import { updateAutoTopup, type ActionResult } from "./actions";
 
 interface Props {
   balanceMillicents: number;
+  pricePerWordMillicents: number;
   isComped: boolean;
   canAdmin: boolean;
   hasPaymentMethod: boolean;
   autoTopupEnabled: boolean;
-  autoTopupThresholdDollars: number;
-  autoTopupAmountDollars: number;
+  /** All three are surfaced as "words" in the form, but persisted as
+   *  millicents server-side via the action. */
+  autoTopupThresholdWords: number;
+  autoTopupAmountWords: number;
+  /** NULL ⇒ no cap set; the form lets the user toggle this on. */
+  autoTopupMaxMonthlyWords: number | null;
   topupStatus: "success" | "cancel" | null;
 }
-
-const TOPUP_TIERS_MILLICENTS = [
-  1_000_000, // $10
-  2_500_000, // $25
-  5_000_000, // $50
-  10_000_000, // $100
-];
 
 export function BillingClient(props: Props) {
   const {
     balanceMillicents,
+    pricePerWordMillicents,
     isComped,
     canAdmin,
     hasPaymentMethod,
     autoTopupEnabled,
-    autoTopupThresholdDollars,
-    autoTopupAmountDollars,
+    autoTopupThresholdWords,
+    autoTopupAmountWords,
+    autoTopupMaxMonthlyWords,
     topupStatus,
   } = props;
+
+  const balanceWords = millicentsToWords(balanceMillicents, pricePerWordMillicents);
 
   return (
     <div className="space-y-10">
@@ -57,39 +64,50 @@ export function BillingClient(props: Props) {
         <Banner kind="warn">Top-up cancelled. No charge was made.</Banner>
       )}
 
-      {/* Balance */}
+      {/* Balance — primary display in words. The dollar amount is shown as
+       *  a sub-line because the billing page is admin-only and admins are
+       *  the ones who reconcile against Stripe. Per docs/pricing-strategy.md
+       *  the dollar number does NOT appear on the user-wide dashboard. */}
       <section className="rounded-2xl border border-peach/40 bg-background p-6 sm:p-8 shadow-sm shadow-peach/10">
         <p className="text-xs uppercase tracking-[0.15em] text-muted-foreground font-medium">
-          Credit balance
+          Words remaining
         </p>
         <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums">
-          {formatDollars(balanceMillicents, { precision: 2 })}
+          {balanceWords.toLocaleString("en-US")}
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
           {isComped
-            ? "This org is comped — usage doesn't debit this balance."
+            ? "This org is comped — usage doesn't debit your balance."
             : "Debits in real time as your team transcribes."}
         </p>
+        {!isComped && (
+          <p className="mt-3 text-xs text-muted-foreground tabular-nums">
+            Balance value: {formatDollars(balanceMillicents, { precision: 2 })}
+          </p>
+        )}
       </section>
 
-      {/* Top-up */}
+      {/* Top-up tiers */}
       {!isComped && (
         <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold tracking-tight">Add credit</h2>
+              <h2 className="text-lg font-semibold tracking-tight">Add words</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                One-time top-up. Secured by Stripe.
+                Larger packs include bonus words — secured by Stripe.
               </p>
             </div>
-            {hasPaymentMethod && canAdmin && (
-              <PortalButton />
-            )}
+            {hasPaymentMethod && canAdmin && <PortalButton />}
           </div>
 
-          <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {TOPUP_TIERS_MILLICENTS.map((amount) => (
-              <TopupTile key={amount} amountMillicents={amount} disabled={!canAdmin} />
+          <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {TOPUP_TIERS.map((tier) => (
+              <TopupTile
+                key={tier.id}
+                tier={tier}
+                pricePerWordMillicents={pricePerWordMillicents}
+                disabled={!canAdmin}
+              />
             ))}
           </div>
 
@@ -107,8 +125,9 @@ export function BillingClient(props: Props) {
           canAdmin={canAdmin}
           hasPaymentMethod={hasPaymentMethod}
           enabled={autoTopupEnabled}
-          thresholdDollars={autoTopupThresholdDollars}
-          amountDollars={autoTopupAmountDollars}
+          thresholdWords={autoTopupThresholdWords}
+          amountWords={autoTopupAmountWords}
+          maxMonthlyWords={autoTopupMaxMonthlyWords}
         />
       )}
     </div>
@@ -138,21 +157,23 @@ function Banner({
 }
 
 function TopupTile({
-  amountMillicents,
+  tier,
+  pricePerWordMillicents,
   disabled,
 }: {
-  amountMillicents: number;
+  tier: TopupTier;
+  pricePerWordMillicents: number;
   disabled?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
-  const dollars = amountMillicents / 100_000;
+  const wordsGranted = millicentsToWords(tier.creditMillicents, pricePerWordMillicents);
 
   const onClick = () =>
     startTransition(async () => {
       const res = await fetch("/api/billing/topup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amountMillicents }),
+        body: JSON.stringify({ tierId: tier.id }),
       });
       if (!res.ok) {
         alert("Couldn't start checkout. Try again.");
@@ -170,11 +191,18 @@ function TopupTile({
       className="group relative rounded-xl border-2 border-border/70 bg-background p-4 text-left hover:border-peach/50 hover:bg-peach/5 transition-colors disabled:opacity-50 disabled:pointer-events-none"
     >
       <div className="text-2xl font-semibold tracking-tight">
-        ${dollars.toFixed(0)}
+        ${tier.dollarAmount}
       </div>
-      <div className="mt-1 text-xs text-muted-foreground">
-        ≈ {Math.round(dollars * 17_500).toLocaleString()} words
+      <div className="mt-1 text-sm font-medium tabular-nums">
+        {formatWords(wordsGranted)}
       </div>
+      {tier.bonusPct > 0 ? (
+        <div className="mt-1 text-xs font-medium text-sage">
+          +{tier.bonusPct}% bonus
+        </div>
+      ) : (
+        <div className="mt-1 text-xs text-muted-foreground">Base rate</div>
+      )}
       <Plus className="absolute top-3 right-3 h-4 w-4 text-muted-foreground group-hover:text-peach-deep" />
       {pending && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/70 rounded-xl text-sm">
@@ -209,18 +237,21 @@ function AutoTopupCard({
   canAdmin,
   hasPaymentMethod,
   enabled,
-  thresholdDollars,
-  amountDollars,
+  thresholdWords,
+  amountWords,
+  maxMonthlyWords,
 }: {
   canAdmin: boolean;
   hasPaymentMethod: boolean;
   enabled: boolean;
-  thresholdDollars: number;
-  amountDollars: number;
+  thresholdWords: number;
+  amountWords: number;
+  maxMonthlyWords: number | null;
 }) {
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
   const [on, setOn] = useState(enabled);
+  const [capOn, setCapOn] = useState(maxMonthlyWords !== null);
 
   return (
     <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
@@ -228,9 +259,10 @@ function AutoTopupCard({
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Auto top-up</h2>
           <p className="mt-1 text-sm text-muted-foreground max-w-lg">
-            When your balance drops below the threshold, we automatically
-            charge your saved payment method and add credit. Your team
-            never stops transcribing.
+            When your remaining words drop below the threshold, we
+            automatically charge your saved payment method and add words
+            so your team never stops transcribing. The monthly cap is the
+            most we&apos;ll ever auto-charge in a calendar month.
           </p>
         </div>
       </div>
@@ -245,6 +277,7 @@ function AutoTopupCard({
       <form
         action={(fd) => {
           fd.set("enabled", on ? "on" : "off");
+          fd.set("capEnabled", capOn ? "on" : "off");
           setResult(null);
           startTransition(async () => setResult(await updateAutoTopup(fd)));
         }}
@@ -262,22 +295,46 @@ function AutoTopupCard({
         </label>
 
         <div className="grid sm:grid-cols-2 gap-4">
-          <DollarField
-            name="thresholdDollars"
-            label="Trigger when balance falls below"
-            defaultValue={thresholdDollars}
+          <WordsField
+            name="thresholdWords"
+            label="Trigger when remaining words fall below"
+            defaultValue={thresholdWords}
             disabled={!canAdmin || !on}
           />
-          <DollarField
-            name="amountDollars"
-            label="Top-up amount"
-            defaultValue={amountDollars}
+          <WordsField
+            name="amountWords"
+            label="Words to add per top-up"
+            defaultValue={amountWords}
             disabled={!canAdmin || !on}
-            helper="Minimum $5."
+            helper="At least the smallest pack ($5) of words. No bonus on auto-top-ups."
           />
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="space-y-3 pt-2">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={capOn}
+              onChange={(e) => setCapOn(e.target.checked)}
+              disabled={!canAdmin || !on}
+              className="h-4 w-4 rounded border-border text-peach focus:ring-ring"
+            />
+            <span className="text-sm">
+              Set a monthly maximum (recommended)
+            </span>
+          </label>
+          {capOn && (
+            <WordsField
+              name="maxMonthlyWords"
+              label="Never auto-add more than this many words per month"
+              defaultValue={maxMonthlyWords ?? amountWords * 4}
+              disabled={!canAdmin || !on}
+              helper="If a top-up would push this month's auto-charges past the cap, we skip it and let your balance go negative until you top up manually."
+            />
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 pt-2">
           <Button type="submit" disabled={!canAdmin || pending} size="default">
             {pending ? "Saving…" : "Save"}
           </Button>
@@ -298,7 +355,7 @@ function AutoTopupCard({
   );
 }
 
-function DollarField({
+function WordsField({
   name,
   label,
   defaultValue,
@@ -320,15 +377,19 @@ function DollarField({
           disabled && "opacity-60"
         )}
       >
-        <span className="pl-3 pr-1 text-muted-foreground select-none">$</span>
         <input
-          type="text"
+          type="number"
           name={name}
           defaultValue={defaultValue}
           disabled={disabled}
-          inputMode="decimal"
-          className="flex-1 bg-transparent px-2 py-2.5 text-sm outline-none"
+          inputMode="numeric"
+          step="500"
+          min="0"
+          className="flex-1 bg-transparent px-3 py-2.5 text-sm outline-none tabular-nums"
         />
+        <span className="pr-3 pl-1 text-muted-foreground select-none text-xs">
+          words
+        </span>
       </div>
       {helper && <p className="mt-1 text-xs text-muted-foreground">{helper}</p>}
     </label>

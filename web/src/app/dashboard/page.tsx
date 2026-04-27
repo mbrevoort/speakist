@@ -2,19 +2,31 @@
 // No widgets/charts yet — those land in Phase 4 once we have real usage to
 // chart. Phase 3's home is deliberately a "welcome + where to go next" page.
 
+import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { ArrowRight, Apple, BarChart3, CreditCard, Users as UsersIcon } from "lucide-react";
+import { ArrowRight, Apple, BarChart3, CreditCard, Download, ExternalLink, Users as UsersIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
-import { formatDollars } from "@/lib/utils";
+import { getDb } from "@/lib/db";
+import { pricingConfig } from "@/lib/db/schema";
+import { millicentsToWords } from "@/lib/utils";
 
 export const metadata = { title: "Dashboard — Speakist" };
 
 export default async function DashboardHome() {
   const user = await requireUser();
   const org = (await getCurrentOrgForUser(user.id))!; // layout guarantees non-null
-  const balanceMc = await getOrgCreditBalance(org.id);
+  const db = getDb();
+  const [balanceMc, [cfg]] = await Promise.all([
+    getOrgCreditBalance(org.id),
+    db
+      .select({ perWordMc: pricingConfig.pricePerWordMillicents })
+      .from(pricingConfig)
+      .where(eq(pricingConfig.id, 1))
+      .limit(1),
+  ]);
+  const balanceWords = millicentsToWords(balanceMc, cfg?.perWordMc ?? 20);
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -26,21 +38,22 @@ export default async function DashboardHome() {
           Welcome to Speakist.
         </h1>
         <p className="mt-2 text-muted-foreground max-w-xl">
-          Your team is set up. Download the Mac app and start dictating — every
-          transcription debits the credits below.
+          Your team is set up. Install Speakist on Mac or iPhone and start
+          dictating — every transcription draws from your word balance below.
         </p>
       </header>
 
       {/* Credit + org status cards */}
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard label="Credit balance" primary>
+        <StatCard label="Words remaining" primary>
           <p className="text-4xl font-semibold tracking-tight tabular-nums">
-            {formatDollars(balanceMc, { precision: 2 })}
+            {balanceWords.toLocaleString("en-US")}
+            <span className="ml-1 text-base font-normal text-muted-foreground">words</span>
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
             {org.isComped
               ? "Comped — usage won't debit this balance."
-              : "Usage-based. Debits in real time as your team transcribes."}
+              : "Debits in real time as your team transcribes."}
           </p>
         </StatCard>
 
@@ -66,7 +79,7 @@ export default async function DashboardHome() {
             >
               <span className="flex items-center gap-2">
                 <CreditCard className="h-4 w-4" />
-                Top up credit
+                Add words
               </span>
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>
@@ -94,7 +107,7 @@ export default async function DashboardHome() {
         </StatCard>
       </section>
 
-      {/* Download CTA placeholder — wired in Phase 6 */}
+      {/* Download CTA — Mac + iOS, same account works on both. */}
       <section className="rounded-2xl border-2 border-dashed border-border/70 bg-white/30 p-8 sm:p-10">
         <div className="flex flex-col sm:flex-row items-start gap-6">
           <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-plum text-cream">
@@ -102,19 +115,34 @@ export default async function DashboardHome() {
           </div>
           <div className="flex-1">
             <h2 className="text-xl font-semibold tracking-tight">
-              Download Speakist for Mac
+              Get Speakist on Mac and iPhone
             </h2>
             <p className="mt-2 text-muted-foreground">
-              Install the native app, sign in with your Speakist account, and
-              hold <kbd className="font-mono rounded border border-border bg-muted px-1.5 py-0.5 text-xs">⌃⌘X</kbd> anywhere to dictate.
+              Same account, same balance, both devices. On Mac, hold{" "}
+              <kbd className="font-mono rounded border border-border bg-muted px-1.5 py-0.5 text-xs">⌃⌘X</kbd>.
+              On iPhone, switch to the Speakist keyboard and tap-and-hold.
             </p>
-            <div className="mt-4 flex items-center gap-3">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <Button asChild>
-                <a href="/api/download/mac">Download for Mac</a>
+                <a href="/api/download/mac" download className="gap-2">
+                  <Download className="size-4" aria-hidden />
+                  Download for Mac
+                </a>
+              </Button>
+              <Button asChild variant="outline">
+                <a
+                  href="https://testflight.apple.com/join/5jqHKMnu"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="gap-2"
+                >
+                  iPhone Beta (TestFlight)
+                  <ExternalLink className="size-4" aria-hidden />
+                </a>
               </Button>
               <span className="text-xs text-muted-foreground">
-                Requires macOS 14 (Sonoma) or newer. Free to install — you
-                only pay per word transcribed.
+                Requires macOS 14+ or iOS 17+. Free to install — you only pay
+                per word transcribed.
               </span>
             </div>
           </div>

@@ -165,9 +165,16 @@ export const organizations = sqliteTable(
     // from pricing_config". `stripeDefaultPaymentMethodId` is populated the
     // first time a Checkout top-up completes with setup_future_usage on,
     // and is required for off-session auto-top-up charges.
+    //
+    // `autoTopupMaxMonthlyMillicents` is the hard ceiling on how much we
+    // can auto-charge in a calendar month. NULL ⇒ no cap (the org's only
+    // safety is the threshold/amount config). Provides bounded downside
+    // for users who'd otherwise be uncomfortable enabling auto-top-up at
+    // all — see docs/pricing-strategy.md.
     autoTopupEnabled: bool("auto_topup_enabled").notNull().default(false),
     autoTopupThresholdMillicents: integer("auto_topup_threshold_millicents"),
     autoTopupAmountMillicents: integer("auto_topup_amount_millicents"),
+    autoTopupMaxMonthlyMillicents: integer("auto_topup_max_monthly_millicents"),
     stripeDefaultPaymentMethodId: text("stripe_default_payment_method_id"),
 
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
@@ -361,11 +368,25 @@ export const providerPricing = sqliteTable(
 
 export const pricingConfig = sqliteTable("pricing_config", {
   id: integer("id").primaryKey().default(1),
-  pricePerWordMillicents: real("price_per_word_millicents").notNull().default(5.74),
+  // Display-and-debit per-word rate. 20 mc/word = $0.20 per 1,000 words —
+  // the headline rate behind the SKU ladder in src/lib/billing/topupTiers.ts.
+  // Positions Speakist at half the effective price of Wispr Flow at typical
+  // use (30K words/mo). Also used to convert balance millicents → "words
+  // remaining" for user-facing display (see millicentsToWords in src/lib/utils.ts).
+  pricePerWordMillicents: real("price_per_word_millicents").notNull().default(20.0),
   deepgramPerMinuteMillicents: real("deepgram_per_minute_millicents").notNull().default(430.0),
-  signupBonusMillicents: integer("signup_bonus_millicents").notNull().default(500_000),
-  defaultAutoTopupAmountMillicents: integer("default_auto_topup_amount_millicents").notNull().default(2_000_000),
-  defaultAutoTopupThresholdMillicents: integer("default_auto_topup_threshold_millicents").notNull().default(500_000),
+  // Free trial allowance, once on first org provisioning. 60,000 mc =
+  // $0.60 = ~3,000 words at the headline rate. See docs/pricing-strategy.md
+  // for why 3K (one-time, no recurring grant).
+  signupBonusMillicents: integer("signup_bonus_millicents").notNull().default(60_000),
+  // Auto-top-up defaults. Threshold = balance below which a charge fires.
+  // Amount = how much we charge. 100_000 mc = $1.00 = ~5,000 words remaining.
+  // 500_000 mc = $5.00 = the smallest top-up tier (no bonus on auto-topup).
+  defaultAutoTopupAmountMillicents: integer("default_auto_topup_amount_millicents").notNull().default(500_000),
+  defaultAutoTopupThresholdMillicents: integer("default_auto_topup_threshold_millicents").notNull().default(100_000),
+  // Default monthly cap (max auto-topup spend per calendar month). Used to
+  // pre-fill the per-org cap when an admin enables it for the first time.
+  defaultAutoTopupMaxMonthlyMillicents: integer("default_auto_topup_max_monthly_millicents").notNull().default(2_000_000),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
 

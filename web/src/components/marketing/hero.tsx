@@ -1,11 +1,16 @@
-// Hero section. Oversized headline, short subhead, primary CTA + secondary
-// link. Right side: an illustrated shortcut-keys-in-use visual implying
-// "hold these keys, get text."
+// Hero section. Oversized headline, short subhead, primary CTA + per-
+// platform download buttons. Right side: an illustrated shortcut-keys-in-
+// use visual implying "hold these keys, get text" — works as a metaphor
+// for both the Mac shortcut and the iOS keyboard's hold-to-talk gesture.
 //
 // Design intent: calm and confident, not shouty. White space is the feature.
 
 import Link from "next/link";
+import { Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+// TestFlight invite for the iOS beta. External so it opens in a new tab.
+const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu";
 
 export function Hero() {
   return (
@@ -26,35 +31,60 @@ export function Hero() {
           <div className="max-w-2xl">
             <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/60 px-3 py-1 text-xs font-medium text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-peach animate-pulse" />
-              Private beta for macOS
+              Beta for Mac and iPhone
             </p>
 
             <h1 className="mt-6 text-5xl sm:text-6xl lg:text-7xl font-semibold tracking-tight leading-[1.05] text-foreground">
-              Dictation that
+              Type at the
               <br />
-              <span className="text-peach">disappears.</span>
+              <span className="text-peach">speed of thought.</span>
             </h1>
 
             <p className="mt-6 text-lg sm:text-xl text-muted-foreground leading-relaxed max-w-xl">
-              Hold a shortcut, speak, release. Clean text lands at your cursor
-              in any app. No floating windows, no subscriptions you&apos;ll
-              forget to cancel, no voice data stored outside your Mac.
+              You speak about 3× faster than you type — yet built-in Mac and
+              iOS dictation makes you wish you&apos;d just typed. Speakist
+              actually works: hold a key on Mac or use the Speakist iOS
+              keyboard, and clean text lands at your cursor in any app — for
+              half the price of a subscription.
             </p>
 
-            <div className="mt-10 flex flex-wrap items-center gap-4">
+            {/* Primary CTA on its own row — single, dominant action. The
+             *  install buttons sit on a second row with platform-specific
+             *  icons (download arrow for the DMG, external-link arrow for
+             *  TestFlight) so each button telegraphs what'll happen on
+             *  click before the user commits. */}
+            <div className="mt-10 flex">
               <Button asChild size="xl">
-                <Link href="/auth/signin">Start with $5 free</Link>
+                <Link href="/auth/signin">Start with 3,000 free words</Link>
               </Button>
-              <Button asChild size="xl" variant="outline">
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button asChild size="lg" variant="outline">
                 {/* /api/download/mac 302s to the latest stable DMG on R2.
                     Direct link — no signin required for installing; the
                     account flow happens on first launch. */}
-                <a href="/api/download/mac" download>Download for Mac</a>
+                <a href="/api/download/mac" download className="gap-2">
+                  <Download className="size-4" aria-hidden />
+                  Download for Mac
+                </a>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <a
+                  href={IOS_TESTFLIGHT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="gap-2"
+                >
+                  iPhone Beta (TestFlight)
+                  <ExternalLink className="size-4" aria-hidden />
+                </a>
               </Button>
             </div>
 
             <p className="mt-6 text-sm text-muted-foreground">
-              No credit card. Pay only for what you transcribe. Requires macOS 14+.
+              No credit card. No subscription. Pay only for what you transcribe.
+              Requires macOS 14+ or iOS 17+.
             </p>
           </div>
 

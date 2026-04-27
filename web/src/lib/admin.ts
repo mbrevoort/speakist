@@ -11,6 +11,7 @@ import {
   organizations,
   usageEvents,
   users,
+  type OrgRole,
 } from "@/lib/db/schema";
 
 // --- platform rollups ------------------------------------------------------
@@ -20,8 +21,6 @@ export interface PlatformTotals {
   users: number;
   usage30dWords: number;
   usage30dEvents: number;
-  usage30dCostMillicents: number;
-  usage30dDeepgramCostMillicents: number;
   balanceAllOrgsMillicents: number;
   topupsAllTimeMillicents: number;
 }
@@ -39,12 +38,6 @@ export async function getPlatformTotals(): Promise<PlatformTotals> {
     .select({
       events: sql<number>`COUNT(*)`,
       words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
-      cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
-      // Renamed from deepgramCostMillicents in migration 0004 — same
-      // meaning (what we paid the upstream provider), just not Deepgram-
-      // specific anymore. The admin UI label stays "Deepgram cost" for
-      // now since ~100% of traffic is still Deepgram.
-      dgCost: sql<number>`COALESCE(SUM(${usageEvents.upstreamCostMillicents}), 0)`,
     })
     .from(usageEvents)
     .where(gte(usageEvents.createdAt, since30));
@@ -75,11 +68,71 @@ export async function getPlatformTotals(): Promise<PlatformTotals> {
     users: Number(usersRow?.n ?? 0),
     usage30dWords: Number(usage30?.words ?? 0),
     usage30dEvents: Number(usage30?.events ?? 0),
-    usage30dCostMillicents: Number(usage30?.cost ?? 0),
-    usage30dDeepgramCostMillicents: Number(usage30?.dgCost ?? 0),
     balanceAllOrgsMillicents: Number(balance?.total ?? 0),
     topupsAllTimeMillicents: Number(topups?.total ?? 0),
   };
+}
+
+// --- platform-wide daily activity ------------------------------------------
+
+export interface PlatformDayPoint {
+  /** YYYY-MM-DD in UTC. */
+  day: string;
+  words: number;
+  /** Distinct users with at least one usage_event on this day. */
+  activeUsers: number;
+}
+
+/**
+ * Per-day platform activity for the last N days (including today). Buckets
+ * usage_events by UTC date in JavaScript rather than via SQL strftime —
+ * matches the pattern in `getUsageByDay` for the same reason (D1 + Drizzle
+ * timestamp_ms quirks).
+ *
+ * The series is dense: missing days appear as zero rows so the chart
+ * doesn't have gaps.
+ */
+export async function getPlatformDailyUsage(
+  days = 30
+): Promise<PlatformDayPoint[]> {
+  const db = getDb();
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const since = new Date(sinceMs);
+
+  const events = await db
+    .select({
+      createdAt: usageEvents.createdAt,
+      userId: usageEvents.userId,
+      wordCount: usageEvents.wordCount,
+    })
+    .from(usageEvents)
+    .where(gte(usageEvents.createdAt, since));
+
+  const byDay = new Map<string, { words: number; userIds: Set<string> }>();
+  for (const e of events) {
+    const d = e.createdAt instanceof Date ? e.createdAt : new Date(Number(e.createdAt));
+    const key = d.toISOString().slice(0, 10);
+    const bucket = byDay.get(key) ?? { words: 0, userIds: new Set<string>() };
+    bucket.words += Number(e.wordCount ?? 0);
+    bucket.userIds.add(e.userId);
+    byDay.set(key, bucket);
+  }
+
+  const out: PlatformDayPoint[] = [];
+  const todayUtcMidnight = new Date();
+  todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(todayUtcMidnight.getTime() - i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    const bucket = byDay.get(key);
+    out.push({
+      day: key,
+      words: bucket?.words ?? 0,
+      activeUsers: bucket?.userIds.size ?? 0,
+    });
+  }
+
+  return out;
 }
 
 // --- orgs list -------------------------------------------------------------
@@ -278,15 +331,26 @@ export interface AdminUserRow {
   isSuperAdmin: boolean;
   orgCount: number;
   createdAt: Date;
-  lastSignIn: Date | null;  // approx — we use emailVerified as proxy pending sessions query
+  /** Most recent usage_event timestamp; null if the user has never
+   *  transcribed. Used as the sort key in the admin users list. */
+  lastActiveAt: Date | null;
+  /** Counts in the trailing 30 days, surfaced inline so the list shows
+   *  who's active without clicking through. */
+  last30dEvents: number;
+  last30dWords: number;
 }
 
 export async function listAllUsers(filter?: string): Promise<AdminUserRow[]> {
   const db = getDb();
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const since30Ms = since30.getTime();
   const where = filter
     ? or(like(users.email, `%${filter}%`), like(users.displayName, `%${filter}%`))
     : undefined;
 
+  // Correlated subqueries for the per-user usage rollups. Cheap on SQLite
+  // for a few hundred users; if this gets slow we'd switch to a single
+  // GROUP BY join.
   const rows = await db
     .select({
       id: users.id,
@@ -294,14 +358,33 @@ export async function listAllUsers(filter?: string): Promise<AdminUserRow[]> {
       displayName: users.displayName,
       isSuperAdmin: users.isSuperAdmin,
       createdAt: users.createdAt,
-      emailVerified: users.emailVerified,
       orgCount: sql<number>`(
         SELECT COUNT(*) FROM org_members WHERE org_members.user_id = users.id
+      )`,
+      lastActiveMs: sql<number | null>`(
+        SELECT MAX(created_at) FROM usage_events
+        WHERE usage_events.user_id = users.id
+      )`,
+      last30dEvents: sql<number>`(
+        SELECT COUNT(*) FROM usage_events
+        WHERE usage_events.user_id = users.id
+          AND usage_events.created_at >= ${since30Ms}
+      )`,
+      last30dWords: sql<number>`(
+        SELECT COALESCE(SUM(word_count), 0) FROM usage_events
+        WHERE usage_events.user_id = users.id
+          AND usage_events.created_at >= ${since30Ms}
       )`,
     })
     .from(users)
     .where(where)
-    .orderBy(desc(users.createdAt));
+    // Sort by last active DESC, with users that have never transcribed
+    // sorting last (COALESCE → 0). Ties (e.g. multiple never-active users)
+    // break by signup date DESC so newest accounts surface first.
+    .orderBy(
+      sql`COALESCE((SELECT MAX(created_at) FROM usage_events WHERE usage_events.user_id = users.id), 0) DESC`,
+      desc(users.createdAt)
+    );
 
   return rows.map((r) => ({
     id: r.id,
@@ -310,6 +393,218 @@ export async function listAllUsers(filter?: string): Promise<AdminUserRow[]> {
     isSuperAdmin: r.isSuperAdmin,
     orgCount: Number(r.orgCount),
     createdAt: r.createdAt,
-    lastSignIn: r.emailVerified,
+    lastActiveAt:
+      r.lastActiveMs != null ? new Date(Number(r.lastActiveMs)) : null,
+    last30dEvents: Number(r.last30dEvents),
+    last30dWords: Number(r.last30dWords),
   }));
+}
+
+// --- user detail (admin view) ---------------------------------------------
+
+export interface AdminUserMembership {
+  orgId: string;
+  orgName: string;
+  orgSlug: string;
+  role: OrgRole;
+  joinedAt: Date;
+}
+
+export interface AdminUserRecentEvent {
+  id: string;
+  orgId: string;
+  orgName: string;
+  wordCount: number;
+  audioMs: number | null;
+  processingMs: number | null;
+  costMillicents: number;
+  providerId: string;
+  model: string;
+  polishApplied: boolean;
+  createdAt: Date;
+}
+
+export interface AdminUserDailyPoint {
+  /** YYYY-MM-DD in UTC. */
+  day: string;
+  words: number;
+  events: number;
+  costMillicents: number;
+}
+
+export interface AdminUserDetail {
+  id: string;
+  email: string;
+  displayName: string | null;
+  isSuperAdmin: boolean;
+  createdAt: Date;
+  lastActiveAt: Date | null;
+
+  memberships: AdminUserMembership[];
+
+  /** Aggregates across the trailing 30 days. */
+  last30d: {
+    events: number;
+    words: number;
+    audioMs: number;
+    costMillicents: number;
+  };
+
+  /** Dense-fill 30-day series — zero rows for inactive days so the chart
+   *  doesn't have gaps. */
+  daily: AdminUserDailyPoint[];
+
+  /** Most recent dictation events with the org each one came from. */
+  recentEvents: AdminUserRecentEvent[];
+}
+
+export async function getUserDetail(
+  userId: string
+): Promise<AdminUserDetail | null> {
+  const db = getDb();
+
+  // Base user row.
+  const [row] = await db
+    .select({
+      id: users.id,
+      email: users.email,
+      displayName: users.displayName,
+      isSuperAdmin: users.isSuperAdmin,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!row) return null;
+
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  // 30-day summary in one query, plus all-time last-active.
+  const [summary] = await db
+    .select({
+      events: sql<number>`COUNT(*)`,
+      words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
+      audioMs: sql<number>`COALESCE(SUM(${usageEvents.audioMs}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
+      lastActiveMs: sql<number | null>`MAX(${usageEvents.createdAt})`,
+    })
+    .from(usageEvents)
+    .where(eq(usageEvents.userId, userId));
+
+  // Memberships (with org names).
+  const memberships = await db
+    .select({
+      orgId: organizations.id,
+      orgName: organizations.name,
+      orgSlug: organizations.slug,
+      role: orgMembers.role,
+      joinedAt: orgMembers.createdAt,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(organizations.id, orgMembers.orgId))
+    .where(eq(orgMembers.userId, userId))
+    .orderBy(desc(orgMembers.createdAt));
+
+  // Daily series — JS-side bucketing for D1/timestamp_ms-friendliness.
+  const dailyEvents = await db
+    .select({
+      createdAt: usageEvents.createdAt,
+      wordCount: usageEvents.wordCount,
+      costMillicents: usageEvents.costMillicents,
+    })
+    .from(usageEvents)
+    .where(
+      and(
+        eq(usageEvents.userId, userId),
+        gte(usageEvents.createdAt, since30)
+      )
+    );
+
+  const byDay = new Map<
+    string,
+    { words: number; events: number; cost: number }
+  >();
+  for (const e of dailyEvents) {
+    const d = e.createdAt instanceof Date ? e.createdAt : new Date(Number(e.createdAt));
+    const key = d.toISOString().slice(0, 10);
+    const bucket = byDay.get(key) ?? { words: 0, events: 0, cost: 0 };
+    bucket.words += Number(e.wordCount ?? 0);
+    bucket.events += 1;
+    bucket.cost += Number(e.costMillicents ?? 0);
+    byDay.set(key, bucket);
+  }
+  const daily: AdminUserDailyPoint[] = [];
+  const todayUtcMidnight = new Date();
+  todayUtcMidnight.setUTCHours(0, 0, 0, 0);
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(todayUtcMidnight.getTime() - i * 24 * 60 * 60 * 1000);
+    const key = d.toISOString().slice(0, 10);
+    const bucket = byDay.get(key);
+    daily.push({
+      day: key,
+      words: bucket?.words ?? 0,
+      events: bucket?.events ?? 0,
+      costMillicents: bucket?.cost ?? 0,
+    });
+  }
+
+  // Recent events with org names.
+  const recentRows = await db
+    .select({
+      id: usageEvents.id,
+      orgId: organizations.id,
+      orgName: organizations.name,
+      wordCount: usageEvents.wordCount,
+      audioMs: usageEvents.audioMs,
+      processingMs: usageEvents.processingMs,
+      costMillicents: usageEvents.costMillicents,
+      providerId: usageEvents.providerId,
+      model: usageEvents.model,
+      polishApplied: usageEvents.polishApplied,
+      createdAt: usageEvents.createdAt,
+    })
+    .from(usageEvents)
+    .innerJoin(organizations, eq(organizations.id, usageEvents.orgId))
+    .where(eq(usageEvents.userId, userId))
+    .orderBy(desc(usageEvents.createdAt))
+    .limit(25);
+
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.displayName,
+    isSuperAdmin: row.isSuperAdmin,
+    createdAt: row.createdAt,
+    lastActiveAt:
+      summary?.lastActiveMs != null
+        ? new Date(Number(summary.lastActiveMs))
+        : null,
+    memberships: memberships.map((m) => ({
+      orgId: m.orgId,
+      orgName: m.orgName,
+      orgSlug: m.orgSlug,
+      role: m.role,
+      joinedAt: m.joinedAt,
+    })),
+    last30d: {
+      events: Number(summary?.events ?? 0),
+      words: Number(summary?.words ?? 0),
+      audioMs: Number(summary?.audioMs ?? 0),
+      costMillicents: Number(summary?.cost ?? 0),
+    },
+    daily,
+    recentEvents: recentRows.map((r) => ({
+      id: r.id,
+      orgId: r.orgId,
+      orgName: r.orgName,
+      wordCount: r.wordCount,
+      audioMs: r.audioMs,
+      processingMs: r.processingMs,
+      costMillicents: r.costMillicents,
+      providerId: r.providerId,
+      model: r.model,
+      polishApplied: r.polishApplied,
+      createdAt: r.createdAt,
+    })),
+  };
 }

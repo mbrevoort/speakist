@@ -88,23 +88,27 @@ async function handleCheckoutCompleted(event: Stripe.Event) {
   if (session.payment_status !== "paid") return;
 
   const orgId = session.metadata?.orgId;
-  const amountMillicentsStr = session.metadata?.amountMillicents;
-  if (!orgId || !amountMillicentsStr) {
+  // For pricing-v2 manual top-ups we stamp the resolved tier onto the
+  // session — `creditMillicents` already reflects the volume bonus, so the
+  // ledger gets the bonus amount, not the dollar charge.
+  const creditMillicentsStr = session.metadata?.creditMillicents;
+  const tierId = session.metadata?.tierId;
+  if (!orgId || !creditMillicentsStr) {
     console.warn(`[stripe webhook] checkout.session.completed without metadata: ${session.id}`);
     return;
   }
-  const amountMillicents = Number(amountMillicentsStr);
-  if (!Number.isFinite(amountMillicents) || amountMillicents <= 0) {
-    console.warn(`[stripe webhook] invalid amountMillicents on ${session.id}`);
+  const creditMillicents = Number(creditMillicentsStr);
+  if (!Number.isFinite(creditMillicents) || creditMillicents <= 0) {
+    console.warn(`[stripe webhook] invalid creditMillicents on ${session.id}`);
     return;
   }
 
   await recordStripeTopup({
     orgId,
     stripeEventId: event.id,
-    amountMillicents,
+    amountMillicents: creditMillicents,
     reason: "stripe_topup",
-    note: `Manual top-up via Checkout ${session.id}`,
+    note: `Manual top-up via Checkout ${session.id}${tierId ? ` (tier ${tierId})` : ""}`,
   });
 
   // First successful Checkout: Stripe attached the PaymentMethod to the
@@ -126,6 +130,8 @@ async function handlePaymentIntentSucceeded(event: Stripe.Event) {
   if (reason !== "stripe_auto_topup") return;
 
   const orgId = pi.metadata?.orgId;
+  // Auto-top-ups don't use a tier — they credit exactly what was charged
+  // (no bonus). The `amountMillicents` field is stamped by triggerAutoTopup.
   const amountMillicentsStr = pi.metadata?.amountMillicents;
   if (!orgId || !amountMillicentsStr) return;
 

@@ -11,6 +11,7 @@ import type Stripe from "stripe";
 import { getDb } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
 import { getStripe } from "@/lib/stripe";
+import { type TopupTier } from "@/lib/billing/topupTiers";
 
 // --- customer -------------------------------------------------------------
 
@@ -53,21 +54,22 @@ export async function getOrCreateStripeCustomer(orgId: string): Promise<string> 
 
 interface CreateCheckoutArgs {
   orgId: string;
-  amountMillicents: number;
+  tier: TopupTier;
   returnUrl: string;
   customerEmail?: string;
 }
 
 /**
- * Create a Stripe Checkout Session for a one-time top-up. `amount_millicents`
- * is converted to Stripe's integer cents for the line item. We pass
- * `payment_intent_data.setup_future_usage = "off_session"` so the payment
- * method is saved on the Customer and can be used by triggerAutoTopup()
- * for subsequent auto-top-ups.
+ * Create a Stripe Checkout Session for a one-time top-up of the given
+ * tier. `tier.dollarAmount` is what Stripe charges; `tier.creditMillicents`
+ * is what we'll credit on success — for tiers above $5 the latter exceeds
+ * the former (the bonus). Both are stamped into Stripe metadata so the
+ * webhook credits the right amount idempotently. We don't rely on
+ * `amount_total` — that's in Stripe cents and round-tripping through it
+ * loses precision plus skips the bonus entirely.
  *
- * metadata.orgId + metadata.amountMillicents is how the webhook knows who to
- * credit. We don't rely on amount_total — Stripe's number is in cents and
- * conversion back to millicents could lose precision.
+ * `payment_intent_data.setup_future_usage = "off_session"` saves the
+ * payment method on the Customer so triggerAutoTopup() can charge it later.
  */
 export async function createTopupCheckoutSession(
   args: CreateCheckoutArgs
@@ -75,11 +77,15 @@ export async function createTopupCheckoutSession(
   const stripe = getStripe();
   const customerId = await getOrCreateStripeCustomer(args.orgId);
 
-  // Millicents → Stripe cents. Round down to be safe; 1000 millicents/cent.
-  const amountCents = Math.floor(args.amountMillicents / 1000);
+  const amountCents = args.tier.dollarAmount * 100;
   if (amountCents < 50) {
-    throw new Error(`Top-up amount ${amountCents}¢ below Stripe's $0.50 minimum`);
+    throw new Error(`Tier ${args.tier.id} below Stripe's $0.50 minimum`);
   }
+
+  const bonusLine =
+    args.tier.bonusPct > 0
+      ? ` (+${args.tier.bonusPct}% bonus)`
+      : "";
 
   return stripe.checkout.sessions.create({
     mode: "payment",
@@ -93,8 +99,8 @@ export async function createTopupCheckoutSession(
           currency: "usd",
           unit_amount: amountCents,
           product_data: {
-            name: "Speakist credit top-up",
-            description: `Adds $${(amountCents / 100).toFixed(2)} of transcription credit.`,
+            name: `Speakist top-up — $${args.tier.dollarAmount}${bonusLine}`,
+            description: `Adds $${(args.tier.creditMillicents / 100_000).toFixed(2)} of transcription credit to your account.`,
           },
         },
       },
@@ -103,13 +109,15 @@ export async function createTopupCheckoutSession(
       setup_future_usage: "off_session",
       metadata: {
         orgId: args.orgId,
-        amountMillicents: String(args.amountMillicents),
+        tierId: args.tier.id,
+        creditMillicents: String(args.tier.creditMillicents),
         reason: "stripe_topup",
       },
     },
     metadata: {
       orgId: args.orgId,
-      amountMillicents: String(args.amountMillicents),
+      tierId: args.tier.id,
+      creditMillicents: String(args.tier.creditMillicents),
     },
   });
 }
