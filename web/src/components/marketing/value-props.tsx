@@ -41,7 +41,7 @@ export function ValueProps() {
           <Card
             icon={<Lock className="size-5" />}
             title="Your voice stays on your Mac."
-            body="Audio is sent to Deepgram for transcription and immediately discarded. We never see or store your voice or your text."
+            body="Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved to disk in the cloud — only on your device."
           />
         </div>
       </div>

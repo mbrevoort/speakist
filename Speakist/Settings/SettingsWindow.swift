@@ -442,7 +442,7 @@ struct TranscriptionSettingsView: View {
                     Text("English").tag("en")
                     Text("Auto-detect").tag("")
                 }
-                Text("English uses the fastest Whisper model. Other languages and Auto-detect use the multilingual Whisper Large model.")
+                Text("Choosing English uses a transcription engine optimized for speed and English accuracy. Other languages and Auto-detect use a multilingual engine.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
@@ -679,7 +679,7 @@ struct VocabularySettingsView: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            Text("Corrections are applied two ways per transcription: proper-noun entries bias Deepgram's acoustic model (so the mistake is less likely to happen again), and every entry is applied as a post-transcription find/replace so any remaining miss still gets fixed in the final text.")
+            Text("Corrections are applied two ways per transcription: proper-noun entries bias the transcription engine when it supports keyterm boosts (so the mistake is less likely to happen again), and every entry is applied as a post-transcription find/replace so any remaining miss still gets fixed in the final text.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
@@ -831,8 +831,10 @@ struct AboutSettingsView: View {
 
                 Divider()
 
-                // Privacy copy
-                Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to Deepgram (via a short-lived per-transcription key minted by our backend) for transcription only; neither the audio nor the transcript is stored on our servers.")
+                // Privacy copy. Deliberately provider-agnostic — the
+                // backend can swap upstream STT providers without
+                // requiring a Mac release to update this string.
+                Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved or written to disk in the cloud — only on your device.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

@@ -164,7 +164,7 @@ private struct MicPermissionPane: View {
                 .foregroundStyle(.speakistPeach)
             Text("Microphone")
                 .font(.title2.weight(.semibold))
-            Text("Speakist records while your Speak Session is active and sends audio to our servers for transcription.")
+            Text("Speakist records while your Speak Session is active. Audio is sent to our backend for transcription and the result is returned. Neither the audio nor the transcript is ever saved in the cloud — only on your device.")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)

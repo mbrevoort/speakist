@@ -47,8 +47,8 @@ export async function Pricing() {
             One rate. Priced by the word.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            We charge a little more than Deepgram charges us, and that&apos;s it.
-            No seats, no tiers, no enterprise upsell.
+            We charge a little more than the underlying transcription costs
+            us, and that&apos;s it. No seats, no tiers, no enterprise upsell.
           </p>
         </div>
 
@@ -89,8 +89,8 @@ export async function Pricing() {
               <PricingRow>Unlimited team members, no per-seat fee</PricingRow>
               <PricingRow>Top up $10 or $25 at a time (or auto-top-up)</PricingRow>
               <PricingRow>Custom vocabulary for names and jargon</PricingRow>
-              <PricingRow>Your transcripts stay on your Mac</PricingRow>
-              <PricingRow>Deepgram Nova-3 STT under the hood</PricingRow>
+              <PricingRow>Audio and transcripts never saved in the cloud</PricingRow>
+              <PricingRow>Best-in-class transcription under the hood</PricingRow>
             </ul>
 
             <div className="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
