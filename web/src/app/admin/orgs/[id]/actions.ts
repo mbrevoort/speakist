@@ -8,8 +8,9 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { creditLedger, organizations } from "@/lib/db/schema";
+import { organizations } from "@/lib/db/schema";
 import { requireSuperAdmin } from "@/lib/authz";
+import { appendLedger } from "@/lib/credits";
 import { encryptSecret } from "@/lib/crypto";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
@@ -73,8 +74,7 @@ export async function adjustCredit(formData: FormData): Promise<ActionResult> {
     }
     const deltaMillicents = Math.round(dollars * 100_000);
 
-    const db = getDb();
-    await db.insert(creditLedger).values({
+    await appendLedger({
       orgId: parsed.data.orgId,
       deltaMillicents,
       reason: "adjustment",

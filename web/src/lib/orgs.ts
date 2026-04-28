@@ -12,11 +12,10 @@
 // they don't do authz. Route handlers are expected to wrap them with the
 // `require*` helpers from src/lib/authz.ts.
 
-import { and, eq, isNull, sql, sum } from "drizzle-orm";
+import { and, eq, isNull, sum } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   appSettings,
-  creditLedger,
   invitations,
   organizations,
   orgMembers,
@@ -24,6 +23,7 @@ import {
   users,
   type OrgRole,
 } from "@/lib/db/schema";
+import { appendLedger } from "@/lib/credits";
 
 // --- slug generation -------------------------------------------------------
 
@@ -244,7 +244,7 @@ async function createOrgAndGrantBonusIfFirstTime(
       .limit(1);
     const bonusAmount = cfg?.amount ?? 60_000;
     if (bonusAmount > 0) {
-      await db.insert(creditLedger).values({
+      await appendLedger({
         orgId,
         deltaMillicents: bonusAmount,
         reason: "signup_bonus",
@@ -392,18 +392,20 @@ export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg |
 // --- credit balance --------------------------------------------------------
 
 /**
- * Current credit balance for an org in millicents. Sum of credit_ledger
- * deltas. For comped orgs the balance is meaningless (they don't debit)
- * but we still compute it so the UI can show history.
+ * Current credit balance for an org in millicents. Reads the
+ * materialized `organizations.balance_millicents` column maintained
+ * by `appendLedger` in lib/credits.ts — every ledger write bumps
+ * this number atomically with the same delta. Cheap O(1) lookup
+ * regardless of how long the org's ledger has grown. For comped
+ * orgs the balance is informational only (they don't debit).
  */
 export async function getOrgCreditBalance(orgId: string): Promise<number> {
   const db = getDb();
   const [row] = await db
-    .select({
-      balance: sql<number>`COALESCE(SUM(${creditLedger.deltaMillicents}), 0)`,
-    })
-    .from(creditLedger)
-    .where(eq(creditLedger.orgId, orgId));
+    .select({ balance: organizations.balanceMillicents })
+    .from(organizations)
+    .where(eq(organizations.id, orgId))
+    .limit(1);
   return Number(row?.balance ?? 0);
 }
 

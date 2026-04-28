@@ -175,6 +175,15 @@ export const organizations = sqliteTable(
     autoTopupMaxMonthlyMillicents: integer("auto_topup_max_monthly_millicents"),
     stripeDefaultPaymentMethodId: text("stripe_default_payment_method_id"),
 
+    // Materialized credit balance (millicents). Equal to the SUM of
+    // every `credit_ledger.delta_millicents` for this org. Maintained
+    // by `appendLedger` in lib/credits.ts so every ledger write also
+    // bumps this column atomically. Read by `getOrgCreditBalance`
+    // in O(1) instead of scanning the ledger every transcribe call.
+    // The migration backfilled it from the ledger; if it ever drifts,
+    // re-running the same backfill SQL recomputes it.
+    balanceMillicents: integer("balance_millicents").notNull().default(0),
+
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
     updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
   },
@@ -334,6 +343,43 @@ export const usageEvents = sqliteTable(
     orgIdx: index("usage_events_org_idx").on(t.orgId, t.createdAt),
     userIdx: index("usage_events_user_idx").on(t.userId, t.createdAt),
     unique: uniqueIndex("usage_events_unique").on(t.orgId, t.transcriptionClientId),
+  })
+);
+
+// ---- Daily usage rollup ---------------------------------------------------
+// One row per (org, user, UTC-day) — each transcription's debit path
+// UPSERTs the matching row (see `recordDailyUsage` in lib/credits.ts).
+// Replaces the SUM-on-read pattern that admin charts and dashboard
+// "by-day" series previously used against the raw `usage_events` table.
+// Migration 0016 backfilled it from the existing events.
+//
+// `day_ts` is UTC midnight in ms — computed as
+// `(created_at / 86400000) * 86400000` (SQLite integer division).
+// Storing it as the canonical timestamp_ms lets us range-filter on
+// the same shape as `created_at` everywhere else.
+
+export const usageDaily = sqliteTable(
+  "usage_daily",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    dayTs: timestampMs("day_ts").notNull(),
+    events: integer("events").notNull().default(0),
+    wordCount: integer("word_count").notNull().default(0),
+    audioMs: integer("audio_ms").notNull().default(0),
+    costMillicents: integer("cost_millicents").notNull().default(0),
+    upstreamCostMillicents: integer("upstream_cost_millicents").notNull().default(0),
+    polishEvents: integer("polish_events").notNull().default(0),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.orgId, t.userId, t.dayTs] }),
+    orgDayIdx: index("usage_daily_org_day_idx").on(t.orgId, t.dayTs),
+    dayIdx: index("usage_daily_day_idx").on(t.dayTs),
+    userDayIdx: index("usage_daily_user_day_idx").on(t.userId, t.dayTs),
   })
 );
 
@@ -509,6 +555,7 @@ export type Invitation = typeof invitations.$inferSelect;
 export type VocabularyEntry = typeof vocabularyEntries.$inferSelect;
 export type CreditLedgerRow = typeof creditLedger.$inferSelect;
 export type UsageEvent = typeof usageEvents.$inferSelect;
+export type UsageDailyRow = typeof usageDaily.$inferSelect;
 export type PricingConfig = typeof pricingConfig.$inferSelect;
 export type AppSettings = typeof appSettings.$inferSelect;
 export type DeviceAuthCode = typeof deviceAuthCodes.$inferSelect;

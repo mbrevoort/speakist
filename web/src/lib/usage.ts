@@ -1,12 +1,16 @@
 // Usage queries for the dashboard.
 //
-// The Mac app will populate usage_events via POST /api/usage in Phase 6.
-// Until then all these queries return empty/zero — pages render a friendly
-// empty state.
+// The hot tables are `usage_events` (one row per transcription) and the
+// per-(org, user, day) rollup `usage_daily` populated by
+// `recordDailyUsage` in lib/credits.ts. Aggregate queries (summary
+// tiles, by-day chart, top users) read the rollup so they scale with
+// active-user count rather than total event volume. Single-event
+// reads (recent events feed) still hit `usage_events` because we want
+// the individual rows + per-event metadata (provider/model/polish).
 
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
-import { usageEvents, users } from "@/lib/db/schema";
+import { usageDaily, usageEvents, users } from "@/lib/db/schema";
 
 // --- summary tiles ---------------------------------------------------------
 
@@ -20,6 +24,10 @@ export interface UsageSummary {
  * Summary-tile rollup for an org. Pass `userId` to scope to a single
  * user's activity — used on the member's self-view of /dashboard/usage.
  * Without it, the rollup sums the whole org (admin view).
+ *
+ * Reads `usage_daily` — one row per (org, user, day). 7-day and
+ * 30-day clauses filter on `day_ts`; the all-time roll has no
+ * filter. All three queries hit the (org_id, day_ts) index.
  */
 export async function getUsageSummary(
   orgId: string,
@@ -32,16 +40,16 @@ export async function getUsageSummary(
   const since30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
   async function rollup(since?: Date) {
-    const conds = [eq(usageEvents.orgId, orgId)];
-    if (since) conds.push(gte(usageEvents.createdAt, since));
-    if (userId) conds.push(eq(usageEvents.userId, userId));
+    const conds = [eq(usageDaily.orgId, orgId)];
+    if (since) conds.push(gte(usageDaily.dayTs, since));
+    if (userId) conds.push(eq(usageDaily.userId, userId));
     const [row] = await db
       .select({
-        events: sql<number>`COUNT(*)`,
-        words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
-        cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
+        events: sql<number>`COALESCE(SUM(${usageDaily.events}), 0)`,
+        words: sql<number>`COALESCE(SUM(${usageDaily.wordCount}), 0)`,
+        cost: sql<number>`COALESCE(SUM(${usageDaily.costMillicents}), 0)`,
       })
-      .from(usageEvents)
+      .from(usageDaily)
       .where(and(...conds));
     return {
       events: Number(row?.events ?? 0),
@@ -68,7 +76,12 @@ export interface DayPoint {
 }
 
 /** Word+cost totals for each of the last N days (including today).
- *  Pass `userId` to scope to a single member's activity. */
+ *  Pass `userId` to scope to a single member's activity.
+ *
+ *  Reads `usage_daily` — already grouped by (org, user, day), so we
+ *  GROUP BY `day_ts` to merge users when no `userId` filter is set
+ *  and produce one point per day. The dense fill below ensures the
+ *  chart has zero rows for inactive days. */
 export async function getUsageByDay(
   orgId: string,
   days = 14,
@@ -76,49 +89,30 @@ export async function getUsageByDay(
 ): Promise<DayPoint[]> {
   const db = getDb();
   const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000;
-
-  // Fetch raw events in the window and bucket them in JavaScript. The
-  // previous two revisions both tried SQL-side `GROUP BY strftime(...)`
-  // — first with an alias (D1 rejected), then with the expression
-  // inlined in groupBy/orderBy (ran without error but returned zero
-  // rows in practice, for reasons we couldn't pin down between
-  // Drizzle's timestamp_ms serialization and D1's strftime handling).
-  //
-  // Doing the grouping in JS sidesteps both. For realistic traffic a
-  // 14-day window is a few hundred events at most; moving that over
-  // the D1 wire is trivial, and the JS aggregation is straightforward
-  // to reason about and test.
-  //
-  // Use `gte(col, Date)` for the date filter (not raw `sql\`col >=
-  // ${ms}\``) — matches the exact pattern `getUsageSummary.rollup`
-  // uses to filter "last 7 days" / "last 30 days", which is verified
-  // to work against D1's timestamp_ms columns.
   const since = new Date(sinceMs);
-  const conds = [
-    eq(usageEvents.orgId, orgId),
-    gte(usageEvents.createdAt, since),
-  ];
-  if (userId) conds.push(eq(usageEvents.userId, userId));
-  const events = await db
-    .select({
-      createdAt: usageEvents.createdAt,
-      wordCount: usageEvents.wordCount,
-      costMillicents: usageEvents.costMillicents,
-    })
-    .from(usageEvents)
-    .where(and(...conds));
 
+  const conds = [
+    eq(usageDaily.orgId, orgId),
+    gte(usageDaily.dayTs, since),
+  ];
+  if (userId) conds.push(eq(usageDaily.userId, userId));
+  const rows = await db
+    .select({
+      dayTs: usageDaily.dayTs,
+      words: sql<number>`COALESCE(SUM(${usageDaily.wordCount}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageDaily.costMillicents}), 0)`,
+    })
+    .from(usageDaily)
+    .where(and(...conds))
+    .groupBy(usageDaily.dayTs);
 
   const byDay = new Map<string, { words: number; cost: number }>();
-  for (const e of events) {
-    // Drizzle unboxes timestamp_ms to Date on read; guard against
-    // a raw number just in case a future driver revision changes that.
-    const d = e.createdAt instanceof Date ? e.createdAt : new Date(Number(e.createdAt));
+  for (const r of rows) {
+    const d = r.dayTs instanceof Date ? r.dayTs : new Date(Number(r.dayTs));
     const key = d.toISOString().slice(0, 10);
-    const prev = byDay.get(key) ?? { words: 0, cost: 0 };
     byDay.set(key, {
-      words: prev.words + Number(e.wordCount ?? 0),
-      cost: prev.cost + Number(e.costMillicents ?? 0),
+      words: Number(r.words ?? 0),
+      cost: Number(r.cost ?? 0),
     });
   }
 
@@ -151,22 +145,31 @@ export interface TopUserRow {
   costMillicents: number;
 }
 
+/**
+ * Top contributors in an org over the trailing 30 days. Reads the
+ * rollup grouped by user; was previously an unbounded GROUP BY against
+ * the raw events table. The 30-day bound is fixed (rather than
+ * configurable) because the dashboard renders this as "this month"
+ * context — a longer window is what the org admin would look at on
+ * the per-user admin pages, not here.
+ */
 export async function getTopUsers(orgId: string, limit = 10): Promise<TopUserRow[]> {
   const db = getDb();
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const rows = await db
     .select({
       userId: users.id,
       email: users.email,
       displayName: users.displayName,
-      events: sql<number>`COUNT(*)`,
-      words: sql<number>`COALESCE(SUM(${usageEvents.wordCount}), 0)`,
-      cost: sql<number>`COALESCE(SUM(${usageEvents.costMillicents}), 0)`,
+      events: sql<number>`COALESCE(SUM(${usageDaily.events}), 0)`,
+      words: sql<number>`COALESCE(SUM(${usageDaily.wordCount}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageDaily.costMillicents}), 0)`,
     })
-    .from(usageEvents)
-    .innerJoin(users, eq(users.id, usageEvents.userId))
-    .where(eq(usageEvents.orgId, orgId))
+    .from(usageDaily)
+    .innerJoin(users, eq(users.id, usageDaily.userId))
+    .where(and(eq(usageDaily.orgId, orgId), gte(usageDaily.dayTs, since30)))
     .groupBy(users.id)
-    .orderBy(desc(sql`COALESCE(SUM(${usageEvents.wordCount}), 0)`))
+    .orderBy(desc(sql`COALESCE(SUM(${usageDaily.wordCount}), 0)`))
     .limit(limit);
   return rows.map((r) => ({
     userId: r.userId,
@@ -179,6 +182,12 @@ export async function getTopUsers(orgId: string, limit = 10): Promise<TopUserRow
 }
 
 // --- recent events feed ----------------------------------------------------
+//
+// Stays on `usage_events` — we want the individual transcription rows
+// (provider/model/polish flag/processingMs) which the rollup intentionally
+// doesn't preserve. Bounded by `limit` (default 20), so even with
+// millions of events the read is constant-time via the
+// (org_id, created_at) index.
 
 export interface RecentEvent {
   id: string;

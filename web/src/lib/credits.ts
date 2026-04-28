@@ -19,12 +19,168 @@ import {
   creditLedger,
   organizations,
   pricingConfig,
+  usageDaily,
   usageEvents,
   type CreditReason,
 } from "@/lib/db/schema";
 import { getOrgCreditBalance } from "@/lib/orgs";
 import { computeCost, getProviderPricing } from "@/lib/transcription/pricing";
 import type { ProviderId } from "@/lib/transcription/types";
+
+// --- shared helpers --------------------------------------------------------
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** UTC midnight of the day containing `t`, as a Date. Mirrors the
+ *  `(created_at / 86400000) * 86400000` expression the migration's
+ *  rollup backfill used, so day boundaries always match. */
+function dayStart(t: Date): Date {
+  return new Date(Math.floor(t.getTime() / MS_PER_DAY) * MS_PER_DAY);
+}
+
+interface AppendLedgerArgs {
+  orgId: string;
+  deltaMillicents: number;
+  reason: CreditReason;
+  /** Set for Stripe-driven writes; UNIQUE on credit_ledger so replayed
+   *  webhooks return `duplicate: true` rather than double-crediting. */
+  stripeEventId?: string;
+  usageEventId?: string;
+  createdBy?: string;
+  note?: string;
+}
+
+/**
+ * Append a row to `credit_ledger` and atomically bump
+ * `organizations.balance_millicents` by the same delta. Single seam
+ * for every credit-balance mutation in the codebase — recordStripeTopup,
+ * the two debitForUsage paths, the signup bonus, and the admin manual
+ * adjustment — so the materialized balance and the ledger can never
+ * disagree about anything we wrote.
+ *
+ * Idempotency: when `stripeEventId` is set we catch the UNIQUE
+ * constraint failure and return `{ duplicate: true }` without
+ * touching the balance — that path was already credited by the
+ * original event.
+ *
+ * Failure modes: the ledger insert and the balance update are two
+ * round-trips, not a transaction. If the second fails, the balance
+ * column drifts by `delta` until someone reruns the recompute SQL
+ * the migration documented. Rare in practice (same-Worker writes,
+ * D1 ack on each); logged loudly when it happens so we can recover.
+ */
+export async function appendLedger(
+  args: AppendLedgerArgs
+): Promise<{ duplicate: boolean }> {
+  const db = getDb();
+  try {
+    await db.insert(creditLedger).values({
+      orgId: args.orgId,
+      deltaMillicents: args.deltaMillicents,
+      reason: args.reason,
+      stripeEventId: args.stripeEventId,
+      usageEventId: args.usageEventId,
+      createdBy: args.createdBy,
+      note: args.note,
+    });
+  } catch (err) {
+    if (
+      args.stripeEventId &&
+      (String(err).includes("UNIQUE") || String(err).includes("unique"))
+    ) {
+      return { duplicate: true };
+    }
+    throw err;
+  }
+
+  // Arithmetic update — `balance + delta` is one statement, atomic at the
+  // row level under SQLite's serializable isolation. Concurrent debits on
+  // the same org don't lose updates.
+  try {
+    await db
+      .update(organizations)
+      .set({
+        balanceMillicents: sql`${organizations.balanceMillicents} + ${args.deltaMillicents}`,
+      })
+      .where(eq(organizations.id, args.orgId));
+  } catch (err) {
+    console.error(
+      `[appendLedger] balance update failed for org=${args.orgId} delta=${args.deltaMillicents}:`,
+      err
+    );
+    throw err;
+  }
+
+  return { duplicate: false };
+}
+
+interface RecordDailyUsageArgs {
+  orgId: string;
+  userId: string;
+  /** Used to bucket by UTC day. Pass the event's createdAt. */
+  occurredAt: Date;
+  wordCount: number;
+  audioMs: number | null;
+  retailCostMillicents: number;
+  upstreamCostMillicents: number | null;
+  polishApplied: boolean;
+}
+
+/**
+ * UPSERT one transcription's contribution into `usage_daily`. Called
+ * by the debit paths after a successful (non-duplicate) usage_event
+ * insert. The rollup feeds the dashboard's by-day chart, the platform-
+ * wide admin queries, and the per-user admin views — anywhere we used
+ * to scan the raw events table to bucket by day.
+ *
+ * On conflict (existing row for the (org, user, day) tuple) we add the
+ * incoming numbers to the stored ones. SQLite's `excluded` pseudo-table
+ * inside `ON CONFLICT DO UPDATE` references the row we tried to insert,
+ * so the increment expressions read the new contribution from there.
+ */
+export async function recordDailyUsage(args: RecordDailyUsageArgs): Promise<void> {
+  const db = getDb();
+  const day = dayStart(args.occurredAt);
+  const audioMs = args.audioMs ?? 0;
+  const upstream = args.upstreamCostMillicents ?? 0;
+  const polish = args.polishApplied ? 1 : 0;
+
+  try {
+    await db
+      .insert(usageDaily)
+      .values({
+        orgId: args.orgId,
+        userId: args.userId,
+        dayTs: day,
+        events: 1,
+        wordCount: args.wordCount,
+        audioMs,
+        costMillicents: args.retailCostMillicents,
+        upstreamCostMillicents: upstream,
+        polishEvents: polish,
+      })
+      .onConflictDoUpdate({
+        target: [usageDaily.orgId, usageDaily.userId, usageDaily.dayTs],
+        set: {
+          events: sql`${usageDaily.events} + 1`,
+          wordCount: sql`${usageDaily.wordCount} + ${args.wordCount}`,
+          audioMs: sql`${usageDaily.audioMs} + ${audioMs}`,
+          costMillicents: sql`${usageDaily.costMillicents} + ${args.retailCostMillicents}`,
+          upstreamCostMillicents: sql`${usageDaily.upstreamCostMillicents} + ${upstream}`,
+          polishEvents: sql`${usageDaily.polishEvents} + ${polish}`,
+        },
+      });
+  } catch (err) {
+    // Non-fatal: a failed rollup write means the dashboard chart for
+    // this (org, user, day) is short by one event until the next
+    // recompute. Logged so it's visible; raw event was already
+    // recorded successfully.
+    console.error(
+      `[recordDailyUsage] failed for org=${args.orgId} user=${args.userId}:`,
+      err
+    );
+  }
+}
 
 export interface LedgerRow {
   id: string;
@@ -76,24 +232,13 @@ export async function recordStripeTopup({
   note,
   reason = "stripe_topup",
 }: RecordStripeTopupArgs): Promise<{ duplicate: boolean }> {
-  const db = getDb();
-  try {
-    await db.insert(creditLedger).values({
-      orgId,
-      deltaMillicents: amountMillicents,
-      reason,
-      stripeEventId,
-      note,
-    });
-    return { duplicate: false };
-  } catch (err) {
-    // SQLite UNIQUE violation on stripe_event_id — means we've already
-    // processed this event. Treat as success.
-    if (String(err).includes("UNIQUE") || String(err).includes("unique")) {
-      return { duplicate: true };
-    }
-    throw err;
-  }
+  return appendLedger({
+    orgId,
+    deltaMillicents: amountMillicents,
+    reason,
+    stripeEventId,
+    note,
+  });
 }
 
 // --- auto-topup helpers ----------------------------------------------------
@@ -287,13 +432,28 @@ export async function debitForUsage(args: DebitForUsageArgs): Promise<DebitResul
   // Debit — comped orgs skip the ledger so their balance stays at its seed
   // value for display.
   if (!org.isComped && costMc > 0) {
-    await db.insert(creditLedger).values({
+    await appendLedger({
       orgId: args.orgId,
       deltaMillicents: -costMc,
       reason: "usage",
       usageEventId,
     });
   }
+
+  // Roll up into the daily aggregate. We do this for every event
+  // (including comped ones at cost 0) so the rollup matches what the
+  // raw `usage_events` table holds. Failure here is logged but
+  // non-fatal — the raw event was already recorded.
+  await recordDailyUsage({
+    orgId: args.orgId,
+    userId: args.userId,
+    occurredAt: new Date(),
+    wordCount: args.wordCount,
+    audioMs: args.audioMs ?? null,
+    retailCostMillicents: org.isComped ? 0 : costMc,
+    upstreamCostMillicents: null,
+    polishApplied: false,
+  });
 
   // Check auto-topup trigger conditions AFTER the debit so the threshold test
   // uses the just-debited balance.
@@ -448,13 +608,24 @@ export async function debitForAudioTranscription(
   }
 
   if (!org.isComped && retailMc > 0) {
-    await db.insert(creditLedger).values({
+    await appendLedger({
       orgId: args.orgId,
       deltaMillicents: -retailMc,
       reason: "usage",
       usageEventId,
     });
   }
+
+  await recordDailyUsage({
+    orgId: args.orgId,
+    userId: args.userId,
+    occurredAt: new Date(),
+    wordCount: args.wordCount,
+    audioMs: Math.round(args.audioSeconds * 1000),
+    retailCostMillicents: org.isComped ? 0 : retailMc,
+    upstreamCostMillicents: upstreamMc,
+    polishApplied: args.polishApplied ?? false,
+  });
 
   const newBalance = await getOrgCreditBalance(args.orgId);
 
