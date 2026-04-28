@@ -1,12 +1,14 @@
-// Dictionary editor for the Settings page. Mirrors the Mac app's
-// Vocabulary tab: a list of (from, to) corrections plus a row to add new
-// ones. Each entry can flip "proper noun" — that flag biases the
-// transcription engine's keyterm boost in addition to the post-transcript
-// find/replace pass that every entry contributes to.
+// Vocabulary editor for the Settings page. Same surface (and same
+// label) as the Mac app's Settings → Vocabulary tab: a list of
+// (from, to) corrections plus a row to add new ones. Each entry can
+// flip "proper noun" — that flag biases the transcription engine's
+// keyterm boost in addition to the post-transcript find/replace pass
+// that every entry contributes to.
 //
-// Source of truth is `vocabulary_entries`. Server actions live alongside
-// the rest of the settings actions so the policy (ownership scope, soft
-// delete, unique-constraint handling) is in one place.
+// Source of truth is `vocabulary_entries`, the same table the Mac syncs
+// to via /api/vocabulary. Server actions live alongside the rest of the
+// settings actions so the policy (ownership scope, soft delete,
+// unique-constraint handling) is in one place.
 //
 // Edit UX: From/To are inline text inputs that save on blur when their
 // value actually changes. Proper-noun is a Switch that saves on every
@@ -35,17 +37,17 @@ export interface VocabEntry {
   isProperNoun: boolean;
 }
 
-export function DictionaryCard({ entries }: { entries: VocabEntry[] }) {
+export function VocabularyCard({ entries }: { entries: VocabEntry[] }) {
   return (
     <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
-      <h3 className="text-lg font-semibold tracking-tight">Dictionary</h3>
+      <h3 className="text-lg font-semibold tracking-tight">Vocabulary</h3>
       <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
         Corrections apply two ways per transcription: proper-noun entries
         bias the transcription engine when it supports keyterm boosts (so
         the mistake is less likely to happen in the first place), and
         every entry runs as a post-transcription find/replace so any
-        remaining miss still gets fixed in the final text. Edits sync to
-        the Mac app on next launch.
+        remaining miss still gets fixed in the final text. Edits sync
+        with the Mac app the next time it&apos;s in the foreground.
       </p>
 
       <div className="mt-6 rounded-xl border border-border/60 overflow-hidden">

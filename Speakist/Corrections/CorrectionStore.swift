@@ -23,6 +23,15 @@ final class CorrectionStore: ObservableObject {
 
     private var dbQueue: DatabaseQueue?
 
+    /// API client used to mirror local edits up to the server. Bound
+    /// from `AppEnvironment` after construction so the store can stay
+    /// network-agnostic at the file level. Nil = no push (local-only).
+    private var apiClient: SpeakistAPIClient?
+
+    func bind(api: SpeakistAPIClient) {
+        self.apiClient = api
+    }
+
     func bootstrap() {
         do {
             let url = try Self.databaseURL()
@@ -57,6 +66,9 @@ final class CorrectionStore: ObservableObject {
                 }
             }
             reload()
+            // Mirror the touched rows up to the server so the web view
+            // shows what the Mac just learned.
+            pushTouchedPairs(pairs)
         } catch {
             Logger.shared.error("ingest corrections failed: \(error.localizedDescription)")
         }
@@ -90,6 +102,7 @@ final class CorrectionStore: ObservableObject {
                 }
             }
             reload()
+            pushUpsert(row)
         } catch {
             Logger.shared.error("upsert correction failed: \(error.localizedDescription)")
         }
@@ -102,6 +115,7 @@ final class CorrectionStore: ObservableObject {
                 try db.execute(literal: "DELETE FROM corrections WHERE id = \(id)")
             }
             reload()
+            pushDelete(from: row.fromText, to: row.toText)
         } catch {
             Logger.shared.error("delete correction failed: \(error.localizedDescription)")
         }
@@ -171,21 +185,120 @@ final class CorrectionStore: ObservableObject {
     }
 
     /// Pull the latest server-side vocabulary and merge it into the
-    /// local store. Safe to call on a no-op state — silently returns if
-    /// the user is signed out or the request fails.
+    /// local store, then push any local entries the server hasn't seen
+    /// (back-fill for entries that existed locally before push-on-edit
+    /// was wired up). Safe to call on a no-op state — silently returns
+    /// if the user is signed out or the request fails.
     ///
     /// Called from app launch and `didBecomeActive`, so anything edited
     /// in the web dashboard appears on the Mac the next time the app
-    /// comes to the foreground.
+    /// comes to the foreground, and anything edited (or auto-learned)
+    /// on the Mac before sync was wired up shows up on the web.
     func syncFromServer(api: SpeakistAPIClient) async {
         do {
             let response = try await api.fetchVocabulary()
             merge(serverEntries: response.entries)
+
+            // Back-fill: any local entry whose (from, to) pair never
+            // made it to the server (server has no row, alive or
+            // tombstoned) gets pushed once. The server's POST is
+            // idempotent so a duplicate push is harmless if we ever
+            // double-fire this path.
+            let serverKeys: Set<String> = Set(response.entries.map { wireKey(from: $0.from, to: $0.to) })
+            let toPush = all.compactMap { row -> SpeakistAPIClient.VocabEntryWire? in
+                let key = wireKey(from: row.fromText, to: row.toText)
+                guard !serverKeys.contains(key) else { return nil }
+                return makeWire(from: row)
+            }
+            if !toPush.isEmpty {
+                _ = try? await api.pushVocabulary(entries: toPush)
+            }
         } catch SpeakistAPIClient.Error.notSignedIn {
             // Silent — nothing to sync.
         } catch {
             Logger.shared.warn("vocab sync failed: \(String(describing: error))")
         }
+    }
+
+    // MARK: - Push helpers (best-effort, fire-and-forget)
+
+    /// Push a single locally-edited row up to the server. Called after
+    /// the local DB write so the web dashboard sees the change without
+    /// waiting for the next sync.
+    private func pushUpsert(_ row: CorrectionRow) {
+        guard let api = apiClient else { return }
+        let wire = makeWire(from: row)
+        Task {
+            do {
+                _ = try await api.pushVocabulary(entries: [wire])
+            } catch SpeakistAPIClient.Error.notSignedIn {
+                // Silent — nothing to push.
+            } catch {
+                Logger.shared.warn("push vocab upsert failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// Push a tombstone for a `(from, to)` pair the user just deleted.
+    private func pushDelete(from fromText: String, to toText: String) {
+        guard let api = apiClient else { return }
+        let wire = SpeakistAPIClient.VocabEntryWire(
+            from: fromText,
+            to: toText,
+            count: nil,
+            isProperNoun: nil,
+            lastSeen: nil,
+            updatedAt: nil,
+            deleted: true
+        )
+        Task {
+            do {
+                _ = try await api.pushVocabulary(entries: [wire])
+            } catch SpeakistAPIClient.Error.notSignedIn {
+            } catch {
+                Logger.shared.warn("push vocab delete failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    /// Push the rows touched by a recent `ingest(pairs:)` so auto-
+    /// learned corrections show up on the web alongside manual ones.
+    private func pushTouchedPairs(_ pairs: [CorrectionPair]) {
+        guard let api = apiClient, !pairs.isEmpty else { return }
+        let touchedKeys: Set<String> = Set(pairs.map { pair in
+            wireKey(
+                from: pair.from.trimmingCharacters(in: .whitespacesAndNewlines),
+                to: pair.to.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        })
+        let wire = all
+            .filter { touchedKeys.contains(wireKey(from: $0.fromText, to: $0.toText)) }
+            .map(makeWire(from:))
+        guard !wire.isEmpty else { return }
+        Task {
+            do {
+                _ = try await api.pushVocabulary(entries: wire)
+            } catch SpeakistAPIClient.Error.notSignedIn {
+            } catch {
+                Logger.shared.warn("push vocab ingest failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    private func makeWire(from row: CorrectionRow) -> SpeakistAPIClient.VocabEntryWire {
+        SpeakistAPIClient.VocabEntryWire(
+            from: row.fromText,
+            to: row.toText,
+            count: row.count,
+            isProperNoun: row.isProperNoun,
+            lastSeen: ISO8601DateFormatter().string(from: row.lastSeen),
+            updatedAt: nil,
+            deleted: nil
+        )
+    }
+
+    private func wireKey(from: String, to: String) -> String {
+        "\(from)|\(to)"
     }
 
     /// Top-ranked proper-noun-like corrections for STT custom vocab.

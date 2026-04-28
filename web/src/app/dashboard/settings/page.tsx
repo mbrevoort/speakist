@@ -1,8 +1,8 @@
 // Combined account + org settings, grouped into:
-//   * Personal     — polish prefs + the user's dictionary (vocabulary)
+//   * Personal     — polish prefs + the user's vocabulary
 //   * Organization — name, auto-join domain, leave/delete (admin gating)
 //
-// The vocabulary editor mirrors the Mac app's Settings → Dictionary tab
+// The vocabulary editor mirrors the Mac app's Settings → Vocabulary tab
 // so users can manage the same per-user list of corrections from either
 // surface. Source of truth is the `vocabulary_entries` table, the same
 // rows the Mac syncs to via /api/vocabulary.
@@ -46,7 +46,7 @@ export default async function SettingsPage() {
 
   const polishMode: PolishMode = (polishRow?.mode as PolishMode) ?? "prescriptive";
 
-  // Live (non-tombstoned) dictionary entries for this user, newest-used
+  // Live (non-tombstoned) vocabulary entries for this user, newest-used
   // first. Same row scope the Mac app fetches via GET /api/vocabulary.
   const vocabRows = await db
     .select({
