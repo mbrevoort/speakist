@@ -16,6 +16,7 @@ overview.
 | **Trigger a release** (or understand what CI ships automatically) | [cicd.md](cicd.md) |
 | **Manually ship a Mac DMG** to beta or stable | [releasing.md](releasing.md) |
 | Build + run the Mac or iOS app from Xcode during development | [../README.md#build-the-mac-app](../README.md#build-the-mac-app) |
+| Track iOS App Store submission readiness (audit findings, what's done, what's left) | [ios-app-store-submission.md](ios-app-store-submission.md) |
 
 ## Environments at a glance
 

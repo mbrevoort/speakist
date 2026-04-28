@@ -229,6 +229,26 @@ final class SpeakistAPIClient {
         try await perform(path: "/api/me", method: "GET", body: nil, auth: true)
     }
 
+    /// Permanently delete the signed-in user's account. The server
+    /// cascades the user's data (vocabulary, sessions, sole-member
+    /// orgs, etc.); the caller is responsible for clearing the local
+    /// keychain token after a 200. Required for App Review compliance
+    /// on iOS (5.1.1(v) — apps that allow account creation must allow
+    /// in-app account deletion).
+    func deleteAccount() async throws {
+        let (data, response) = try await rawRequest(
+            path: "/api/me",
+            method: "DELETE",
+            body: nil,
+            auth: true
+        )
+        guard let http = response as? HTTPURLResponse else { throw Error.badResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 401 { throw Error.notSignedIn }
+            throw Error.server(status: http.statusCode, body: String(data: data, encoding: .utf8))
+        }
+    }
+
     // MARK: - Polish prefs
 
     /// Two server-side polish prompt variants. `intuitive` runs the

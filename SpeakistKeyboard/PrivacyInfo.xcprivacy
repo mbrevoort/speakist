@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      The keyboard extension only reads/writes the App Group's shared
+      UserDefaults to coordinate with the containing app — no network,
+      no persistence beyond preferences, no off-device transmission.
+        - CA92.1 (UserDefaults): App Group IPC.
+    -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+
+    <!--
+      Nothing is collected by the keyboard. The user's typed text and
+      dictated audio never pass through this process — the host app's
+      text field receives keys directly via UITextDocumentProxy, and
+      dictation audio is captured + uploaded by the containing app, not
+      the extension.
+    -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+</dict>
+</plist>

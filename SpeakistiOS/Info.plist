@@ -50,12 +50,10 @@
 	<string>$(IPHONEOS_DEPLOYMENT_TARGET)</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mike Brevoort. All rights reserved.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Speakist connects to your Tailscale-accessible dev server during development.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Speakist listens when you start a Speak Session and transcribes what you say.</string>
+	<string>Speakist records your voice while a Speak Session is active and uploads the audio to our backend for transcription. Audio is processed and discarded — only your finished transcript is saved on this device.</string>
 	<key>SpeakistBuildTimestamp</key>
-	<string>0</string>
+	<string>2026-04-28T20:13:29Z</string>
 	<key>SpeakistChannel</key>
 	<string>$(SPEAKIST_CHANNEL)</string>
 	<key>SpeakistDefaultAPIBaseURL</key>
