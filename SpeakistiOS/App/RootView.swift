@@ -244,6 +244,16 @@ private struct DashboardLink: View {
 private struct AccountRow: View {
     @EnvironmentObject private var account: SpeakistAccountManager
 
+    /// Shown after the user taps "Delete Account" — App Review wants
+    /// account deletion to be deliberate, so we gate behind a native
+    /// alert with a destructive confirm.
+    @State private var showingDeleteConfirm = false
+    /// Server-side deletion is one network round-trip; the spinner
+    /// blocks the buttons so the user can't double-tap.
+    @State private var deleting = false
+    /// Surfaces a server failure inline. Cleared on next attempt.
+    @State private var deleteError: String?
+
     var body: some View {
         switch account.state {
         case .signedOut:
@@ -351,8 +361,76 @@ private struct AccountRow: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
+            .disabled(deleting)
+
+            // Account deletion. Required by App Review 5.1.1(v) — must
+            // be reachable from inside the app (a "delete on the web"
+            // link doesn't satisfy the rule). Visually de-emphasized
+            // vs. Sign out (plain bordered, coral text) so users
+            // searching for "log out" don't fat-finger their way into
+            // a permanent action; the alert is the second confirmation.
+            Button {
+                deleteError = nil
+                showingDeleteConfirm = true
+            } label: {
+                if deleting {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Deleting…")
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    Text("Delete Account")
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(.speakistCoral)
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(deleting)
+            .alert("Delete your Speakist account?", isPresented: $showingDeleteConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Delete", role: .destructive) {
+                    Task { await performDeleteAccount() }
+                }
+            } message: {
+                // Word the message so users understand the scope of
+                // deletion. Including "balance" + "history" anchors
+                // the irreversibility — most users delete their
+                // account thinking only the email-and-password is
+                // gone; we want them to know the credit balance goes
+                // too.
+                Text("This permanently deletes your account, balance, vocabulary, and dictation history, and signs you out everywhere. This cannot be undone.")
+            }
+
+            if let err = deleteError {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.speakistCoral)
+            }
         }
         .padding(.vertical, 4)
+    }
+
+    private func performDeleteAccount() async {
+        deleting = true
+        deleteError = nil
+        defer { deleting = false }
+        do {
+            try await account.deleteAccount()
+            // Account is gone server-side and the manager already
+            // flipped state to .signedOut — the parent view reacts
+            // via @EnvironmentObject, no extra UI work needed here.
+        } catch {
+            // Surface the message inline rather than throwing the
+            // user back to a sign-in flow with no context. They can
+            // retry; the server route is idempotent enough that a
+            // retry after partial failure is safe.
+            if let api = error as? SpeakistAPIClient.Error {
+                deleteError = api.description
+            } else {
+                deleteError = error.localizedDescription
+            }
+        }
     }
 
     private func formatBalance(millicents: Int) -> String {

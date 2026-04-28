@@ -311,6 +311,34 @@ final class SpeakistAccountManager: ObservableObject {
         // can revoke from /dashboard/settings.
     }
 
+    /// Permanently delete the signed-in user's account, then locally
+    /// sign out. Throws on server-side failure with the token left
+    /// intact so the caller can surface the error and the user can
+    /// retry. On success, the keychain is cleared and `state` flips
+    /// to `.signedOut` exactly as if `signOut()` had been called —
+    /// the server-side user row is gone, so any lingering token is
+    /// already useless.
+    ///
+    /// Required for App Review on iOS (5.1.1(v)). The Mac app reuses
+    /// this same path; UI surfacing it on Mac is optional but cheap to
+    /// add later.
+    func deleteAccount() async throws {
+        guard let client else {
+            throw SpeakistAPIClient.Error.notSignedIn
+        }
+        try await client.deleteAccount()
+        // Server-side deletion succeeded — local cleanup mirrors signOut.
+        // Done explicitly (rather than calling signOut()) so the log
+        // line accurately reflects what happened.
+        pollTask?.cancel()
+        pollTask = nil
+        activeDeviceCode = nil
+        keychain.set(nil, for: .refreshToken)
+        state = .signedOut
+        lastError = nil
+        Logger.shared.info("account deleted; token cleared")
+    }
+
     // MARK: - Helpers
 
     private func deviceNameForMac() -> String {

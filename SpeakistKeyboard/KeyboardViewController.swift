@@ -2,48 +2,118 @@ import UIKit
 
 /// Speakist custom keyboard extension.
 ///
-/// Design constraints (all imposed by iOS):
+/// ## What ships
 ///
-///   * This process can NOT touch the microphone. `AVAudioSession` from
-///     an extension hard-fails — forbidden since 2014, regardless of
-///     entitlements. All recording happens in the containing app.
-///   * It CAN talk to the main Speakist app via the App Group bridge
-///     (shared UserDefaults + shared container) once the user has
-///     toggled "Allow Full Access" on the keyboard in Settings.
-///   * It CAN bring the main app foreground by walking the responder
-///     chain to a `UIScene` and calling `openURL:options:completionHandler:`
-///     — this is the only URL-open path that works from keyboard
-///     extensions on iOS 18/26. `extensionContext.open` has never
-///     worked for keyboards (Today-widget-only per Apple DTS), and
-///     the deprecated 1-arg `openURL:` selector is force-returned
-///     `false` in iOS 18+.
-///   * Once a session is live, the main app writes transcripts to
-///     shared UserDefaults and fires a Darwin notification. We observe
-///     here and call `textDocumentProxy.insertText(_:)` to type it
-///     into the app hosting the keyboard.
+/// A complete iOS keyboard (ABC / 123 / #+= layouts via `QwertyKeyboardView`)
+/// plus a slim Speakist activation strip at the top. The strip is the
+/// only thing that distinguishes us from the system keyboard visually
+/// — letters work exactly the way users expect, so the keyboard
+/// satisfies App Review guideline 4.5.5 ("provide a fully functional
+/// keyboard").
 ///
-/// UX flow (the phases the keyboard has to represent):
+/// ## Display modes
 ///
-///   1. **Cold / idle** — app isn't running, user hasn't used Speakist
-///      recently. Primary button: plum "Start Speakist" with our brand
-///      icon. Tap opens the app and writes a pending-session request.
-///   2. **Activating** — app is open and AVAudioSession is ready, but
-///      recording hasn't started yet. Primary button: peach "Begin
-///      Speaking" with a mic icon. This gates recording behind an
-///      explicit keyboard action instead of surprising the user with
-///      an open mic.
-///   3. **Listening** — recording is live. Big green ✓ (finish) and
-///      coral × (cancel) replace the primary button.
-///   4. **Transcribing / done** — status line only; primary button
-///      hidden for the moment.
+///   * `.typing` — strip + QWERTY (default).
+///   * `.startSession` / `.beginSpeaking` / `.listening` / `.transient`
+///     — strip + the Speakist controls (existing primary button + ✓/✕
+///     + waveform). QWERTY is hidden under the controls; the user can
+///     return to typing by tapping the strip's ✕ (or by completing /
+///     cancelling the session).
+///
+/// Modes flip in two directions:
+///
+///   * Explicit user action: tap-strip in `.typing` activates Speakist;
+///     tap-strip in non-listening Speakist modes returns to typing
+///     (and Darwin-cancels any in-flight session).
+///   * Reconcile from session: every Darwin `appStateChanged` and
+///     every `textDidChange` re-reads `AppGroupBridge.sessionStatus`
+///     and maps it into the correct mode. Done state in particular
+///     auto-returns to `.typing` so the user can continue editing.
+///
+/// ## Constraints (all imposed by iOS, unchanged from prior versions)
+///
+///   * This process can NOT touch the microphone — `AVAudioSession`
+///     from an extension hard-fails, regardless of entitlements. The
+///     containing app holds the audio session.
+///   * IPC with the main app requires "Allow Full Access" — without
+///     it we degrade to typing-only and surface a coral banner in the
+///     strip. We never break the keyboard.
+///   * Bringing the main app foreground from an extension uses the
+///     responder-chain walk to a `UIScene`'s
+///     `openURL:options:completionHandler:` — `extensionContext.open`
+///     is Today-widget-only and the legacy 1-arg `openURL:` is force-
+///     returned `false` on iOS 18+.
 final class KeyboardViewController: UIInputViewController {
 
-    // MARK: - Primary action button
+    // MARK: - Display mode
 
-    /// The big top-of-keyboard button. Its title + icon + color change
-    /// per phase via `applyPrimaryMode(_:)`.
+    private enum DisplayMode {
+        case typing
+        case startSession
+        case beginSpeaking
+        case listening
+        case transient
+    }
+
+    private var displayMode: DisplayMode = .typing {
+        didSet {
+            if oldValue != displayMode {
+                applyDisplayMode(animated: true)
+            }
+        }
+    }
+
+    /// Set to `true` immediately after the user taps the activation
+    /// strip and we kick the URL open. Suppresses one round of
+    /// `reconcileFromSession` so a stale `.idle` reading from
+    /// AppGroupBridge (the main app hasn't transitioned yet) doesn't
+    /// flip us right back to `.typing`. Cleared on the next
+    /// `appStateChanged` Darwin or after a 6-second safety window.
+    private var suppressReconcile = false
+    private var suppressReconcileExpiry: Date?
+
+    // MARK: - Top strip (always visible)
+
+    /// Slim 40pt strip at the top of the keyboard. Always mounted;
+    /// its appearance + tap behavior change per `displayMode`. In
+    /// `.typing` it's a peach activation pill ("Tap to dictate with
+    /// Speakist"); in `.listening` it becomes a status banner; in the
+    /// no-Full-Access state it becomes a coral warning that explains
+    /// the missing toggle.
+    private let speakistStrip = UIControl()
+    private let stripIcon = UIImageView()
+    private let stripLabel: UILabel = {
+        let l = UILabel()
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.font = .systemFont(ofSize: 14, weight: .medium)
+        l.textAlignment = .center
+        l.adjustsFontSizeToFitWidth = true
+        l.minimumScaleFactor = 0.7
+        l.numberOfLines = 1
+        return l
+    }()
+    private let stripTrailing = UIImageView()
+
+    // MARK: - Typing surface
+
+    private let qwerty = QwertyKeyboardView()
+
+    // MARK: - Speakist surface
+
+    /// Container holding the existing Speakist controls (primary CTA,
+    /// status label, footer, listening row). Sits in the same frame
+    /// as `qwerty` and gets toggled visible when `displayMode` is
+    /// anything other than `.typing`.
+    private let speakistContainer: UIView = {
+        let v = UIView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.isHidden = true
+        return v
+    }()
+
     private let primaryButton: UIButton = {
         let b = UIButton(type: .system)
+        b.translatesAutoresizingMaskIntoConstraints = false
         var cfg = UIButton.Configuration.filled()
         cfg.title = "Start Speakist"
         cfg.image = KeyboardViewController.makeBrandIcon()
@@ -56,58 +126,31 @@ final class KeyboardViewController: UIInputViewController {
             .font: UIFont.systemFont(ofSize: 17, weight: .semibold)
         ]))
         b.configuration = cfg
-        b.translatesAutoresizingMaskIntoConstraints = false
         return b
     }()
 
-    private enum PrimaryMode: Equatable {
-        /// App is cold or unknown state → tap opens the main app.
-        case startSession
-        /// App is open, audio session armed → tap starts recording.
-        case beginSpeaking
-        /// Recording is live — primary button hidden, ✓/× + waveform visible.
-        case listening
-        /// Transcribing / done — everything hidden except the status.
-        case transient
-    }
-
-    private var primaryMode: PrimaryMode = .startSession {
-        didSet { applyPrimaryMode(primaryMode) }
-    }
-
-    // MARK: - Status + footer
-
     private let statusLabel: UILabel = {
         let l = UILabel()
+        l.translatesAutoresizingMaskIntoConstraints = false
         l.textAlignment = .center
         l.font = .systemFont(ofSize: 13, weight: .medium)
         l.textColor = .secondaryLabel
         l.numberOfLines = 0
         l.text = "Tap Start Speakist to dictate"
-        l.translatesAutoresizingMaskIntoConstraints = false
         return l
     }()
 
-    /// Small grey type below the status line. Explains the iOS
-    /// microphone limitation so the two-step flow (open app → come
-    /// back → begin speaking) doesn't feel arbitrary.
     private let footerLabel: UILabel = {
         let l = UILabel()
+        l.translatesAutoresizingMaskIntoConstraints = false
         l.textAlignment = .center
         l.font = .systemFont(ofSize: 11, weight: .regular)
         l.textColor = .tertiaryLabel
         l.numberOfLines = 0
         l.text = "Apple requires Speakist to be open to use the microphone from a keyboard."
-        l.translatesAutoresizingMaskIntoConstraints = false
         return l
     }()
 
-    // MARK: - Listening controls (live only during recording)
-
-    /// Animated pulsing waveform shown while the session is in the
-    /// `.listening` state. Decorative — no real audio levels cross
-    /// the App Group — but gives the user a clear "yes, I'm
-    /// listening" signal that pairs with the status label.
     private let waveformView: WaveformView = {
         let v = WaveformView()
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -115,9 +158,9 @@ final class KeyboardViewController: UIInputViewController {
         return v
     }()
 
-    /// Big green ✓ — only visible during `.listening`.
     private let finishButton: UIButton = {
         let b = UIButton(type: .system)
+        b.translatesAutoresizingMaskIntoConstraints = false
         var cfg = UIButton.Configuration.filled()
         cfg.image = UIImage(systemName: "checkmark")?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 24, weight: .bold))
@@ -126,7 +169,6 @@ final class KeyboardViewController: UIInputViewController {
         cfg.cornerStyle = .capsule
         cfg.contentInsets = NSDirectionalEdgeInsets(top: 16, leading: 30, bottom: 16, trailing: 30)
         b.configuration = cfg
-        b.translatesAutoresizingMaskIntoConstraints = false
         b.isHidden = true
         b.accessibilityLabel = "Finish dictation"
         return b
@@ -134,6 +176,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private let cancelButton: UIButton = {
         let b = UIButton(type: .system)
+        b.translatesAutoresizingMaskIntoConstraints = false
         var cfg = UIButton.Configuration.gray()
         cfg.image = UIImage(systemName: "xmark")?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold))
@@ -141,45 +184,34 @@ final class KeyboardViewController: UIInputViewController {
         cfg.cornerStyle = .capsule
         cfg.contentInsets = NSDirectionalEdgeInsets(top: 16, leading: 22, bottom: 16, trailing: 22)
         b.configuration = cfg
-        b.translatesAutoresizingMaskIntoConstraints = false
         b.isHidden = true
         b.accessibilityLabel = "Cancel dictation"
         return b
     }()
-
-    // MARK: - Bottom key row
-
-    private let globeButton: UIButton = keyButton(icon: "globe")
-    private let spaceButton: UIButton = keyButton(title: "space")
-    private let returnButton: UIButton = keyButton(title: "return")
-    private let backspaceButton: UIButton = keyButton(icon: "delete.left")
 
     // MARK: - State
 
     private var darwinTokens: [UUID] = []
     private var lastAppliedSequence: Int = 0
 
-    /// Polls the App Group UserDefaults for the current mic level and
-    /// pumps it into the WaveformView. Runs at the display-link rate
-    /// while listening, torn down when the keyboard leaves listening
-    /// mode so we're not burning CPU during idle.
+    /// Runs at display-link cadence while listening, polls the App
+    /// Group's mic-level slot, drives the WaveformView. Torn down
+    /// outside `.listening` so we're not burning CPU.
     private var levelPollLink: CADisplayLink?
 
-    /// Pre-allocated haptic generators. `UIImpactFeedbackGenerator`
-    /// has to be `prepare()`-d before it reliably fires on the first
-    /// tap — constructing + calling `impactOccurred()` inline often
-    /// fires nothing, which is exactly what was happening for Begin
-    /// Speaking in the previous build. Keeping these as properties
-    /// and calling `prepare()` in `viewDidAppear` guarantees the
-    /// Taptic Engine is warmed up and responsive.
+    /// Pre-allocated haptic generators. `prepare()` is called both
+    /// here at construction time and in `viewDidAppear` — without
+    /// the warm-up call the first tap routinely drops on iPhones
+    /// that haven't fired the Taptic Engine recently.
     private let mediumImpact = UIImpactFeedbackGenerator(style: .medium)
     private let heavyImpact = UIImpactFeedbackGenerator(style: .heavy)
     private let lightImpact = UIImpactFeedbackGenerator(style: .light)
     private let successNotification = UINotificationFeedbackGenerator()
 
-    /// App counts as "hot" when it wrote a foreground heartbeat within
-    /// ~25 seconds, or when there's a live session. Drives the primary
-    /// button's mode: hot → beginSpeaking, cold → startSession.
+    /// App counts as "hot" when it wrote a foreground heartbeat
+    /// within ~25 seconds, or when there's a live session. Drives
+    /// whether tap-strip needs to relaunch the app (`.startSession`
+    /// CTA) or can go straight to `.beginSpeaking`.
     private var appIsHot: Bool {
         if sessionIsLive() { return true }
         guard let defaults = AppGroupBridge.defaults else { return false }
@@ -192,25 +224,31 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor.systemGray6
+        view.backgroundColor = UIColor { trait in
+            trait.userInterfaceStyle == .dark
+                ? UIColor(white: 0.13, alpha: 1)
+                : UIColor(red: 0.823, green: 0.835, blue: 0.851, alpha: 1.0)
+        }
         setupLayout()
-        wireActions()
+        wireQwerty()
+        wireSpeakistControls()
+        wireStripTap()
         observeAppState()
+        applyDisplayMode(animated: false)
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         publishHostBundleID()
-        refresh()
+        reconcileFromSession()
+        updateAutoShift()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        refresh()
-        // Warm up Taptic Engine so the first tap actually fires. Cold
-        // `UIImpactFeedbackGenerator` instances often drop their first
-        // `impactOccurred()` call — empirically this was why Begin
-        // Speaking taps felt "silent" despite having haptic code.
+        // Warm haptics so the first key tap reliably fires the Taptic
+        // Engine. Without this the very first interaction often feels
+        // silent regardless of the code path being correct.
         mediumImpact.prepare()
         heavyImpact.prepare()
         lightImpact.prepare()
@@ -219,7 +257,12 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        refresh()
+        // Driven both by our own insertions AND by the host app
+        // updating its document — either way we want auto-cap to
+        // re-evaluate and the strip to reflect any external session
+        // state changes.
+        reconcileFromSession()
+        updateAutoShift()
     }
 
     deinit {
@@ -230,21 +273,64 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - Layout
 
     private func setupLayout() {
-        // Bottom row: Globe | Space | Return | Backspace. Space gets
-        // the majority of the width via a lower hugging priority.
-        let bottomRow = UIStackView(arrangedSubviews: [globeButton, spaceButton, returnButton, backspaceButton])
-        bottomRow.axis = .horizontal
-        bottomRow.distribution = .fill
-        bottomRow.spacing = 6
-        bottomRow.translatesAutoresizingMaskIntoConstraints = false
-        globeButton.setContentHuggingPriority(.required, for: .horizontal)
-        returnButton.setContentHuggingPriority(.required, for: .horizontal)
-        backspaceButton.setContentHuggingPriority(.required, for: .horizontal)
-        spaceButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        setupSpeakistStrip()
+        setupSpeakistContainer()
 
-        // Listening controls row — cancel + waveform + finish. The
-        // waveform sits between the buttons so it's the visual
-        // centerpiece during recording.
+        view.addSubview(speakistStrip)
+        view.addSubview(qwerty)
+        view.addSubview(speakistContainer)
+
+        NSLayoutConstraint.activate([
+            speakistStrip.topAnchor.constraint(equalTo: view.topAnchor),
+            speakistStrip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            speakistStrip.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            speakistStrip.heightAnchor.constraint(equalToConstant: 42),
+
+            qwerty.topAnchor.constraint(equalTo: speakistStrip.bottomAnchor),
+            qwerty.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            qwerty.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            qwerty.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            speakistContainer.topAnchor.constraint(equalTo: speakistStrip.bottomAnchor),
+            speakistContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            speakistContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            speakistContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+    }
+
+    private func setupSpeakistStrip() {
+        speakistStrip.translatesAutoresizingMaskIntoConstraints = false
+
+        stripIcon.translatesAutoresizingMaskIntoConstraints = false
+        stripIcon.image = KeyboardViewController.makeBrandIcon().withRenderingMode(.alwaysTemplate)
+        stripIcon.contentMode = .scaleAspectFit
+
+        stripTrailing.translatesAutoresizingMaskIntoConstraints = false
+        stripTrailing.contentMode = .scaleAspectFit
+
+        speakistStrip.addSubview(stripIcon)
+        speakistStrip.addSubview(stripLabel)
+        speakistStrip.addSubview(stripTrailing)
+
+        NSLayoutConstraint.activate([
+            stripIcon.leadingAnchor.constraint(equalTo: speakistStrip.leadingAnchor, constant: 14),
+            stripIcon.centerYAnchor.constraint(equalTo: speakistStrip.centerYAnchor),
+            stripIcon.widthAnchor.constraint(equalToConstant: 22),
+            stripIcon.heightAnchor.constraint(equalToConstant: 22),
+
+            stripTrailing.trailingAnchor.constraint(equalTo: speakistStrip.trailingAnchor, constant: -14),
+            stripTrailing.centerYAnchor.constraint(equalTo: speakistStrip.centerYAnchor),
+            stripTrailing.widthAnchor.constraint(equalToConstant: 18),
+            stripTrailing.heightAnchor.constraint(equalToConstant: 18),
+
+            stripLabel.leadingAnchor.constraint(greaterThanOrEqualTo: stripIcon.trailingAnchor, constant: 8),
+            stripLabel.trailingAnchor.constraint(lessThanOrEqualTo: stripTrailing.leadingAnchor, constant: -8),
+            stripLabel.centerXAnchor.constraint(equalTo: speakistStrip.centerXAnchor),
+            stripLabel.centerYAnchor.constraint(equalTo: speakistStrip.centerYAnchor)
+        ])
+    }
+
+    private func setupSpeakistContainer() {
         let listeningRow = UIStackView(arrangedSubviews: [cancelButton, waveformView, finishButton])
         listeningRow.axis = .horizontal
         listeningRow.distribution = .fill
@@ -253,153 +339,247 @@ final class KeyboardViewController: UIInputViewController {
         listeningRow.translatesAutoresizingMaskIntoConstraints = false
         waveformView.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        view.addSubview(primaryButton)
-        view.addSubview(listeningRow)
-        view.addSubview(statusLabel)
-        view.addSubview(footerLabel)
-        view.addSubview(bottomRow)
+        speakistContainer.addSubview(primaryButton)
+        speakistContainer.addSubview(listeningRow)
+        speakistContainer.addSubview(statusLabel)
+        speakistContainer.addSubview(footerLabel)
 
         NSLayoutConstraint.activate([
-            // Primary button + listening row share the same slot — one
-            // is visible at a time so the key row below is never
-            // crowded out.
-            primaryButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            primaryButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+            // Primary CTA + listening row share the same slot — only
+            // one is visible at a time.
+            primaryButton.centerXAnchor.constraint(equalTo: speakistContainer.centerXAnchor),
+            primaryButton.topAnchor.constraint(equalTo: speakistContainer.topAnchor, constant: 14),
             primaryButton.heightAnchor.constraint(equalToConstant: 56),
             primaryButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 230),
-            primaryButton.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
-            primaryButton.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+            primaryButton.leadingAnchor.constraint(greaterThanOrEqualTo: speakistContainer.leadingAnchor, constant: 20),
+            primaryButton.trailingAnchor.constraint(lessThanOrEqualTo: speakistContainer.trailingAnchor, constant: -20),
 
-            listeningRow.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            listeningRow.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+            listeningRow.centerXAnchor.constraint(equalTo: speakistContainer.centerXAnchor),
+            listeningRow.topAnchor.constraint(equalTo: speakistContainer.topAnchor, constant: 14),
             listeningRow.heightAnchor.constraint(equalToConstant: 56),
             waveformView.widthAnchor.constraint(equalToConstant: 70),
             waveformView.heightAnchor.constraint(equalToConstant: 40),
 
-            statusLabel.topAnchor.constraint(equalTo: primaryButton.bottomAnchor, constant: 10),
-            statusLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            statusLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            statusLabel.topAnchor.constraint(equalTo: primaryButton.bottomAnchor, constant: 12),
+            statusLabel.leadingAnchor.constraint(equalTo: speakistContainer.leadingAnchor, constant: 20),
+            statusLabel.trailingAnchor.constraint(equalTo: speakistContainer.trailingAnchor, constant: -20),
 
             footerLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 6),
-            footerLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 28),
-            footerLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
-
-            bottomRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
-            bottomRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
-            bottomRow.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
-            bottomRow.heightAnchor.constraint(equalToConstant: 44),
-            bottomRow.topAnchor.constraint(greaterThanOrEqualTo: footerLabel.bottomAnchor, constant: 8),
-
-            globeButton.widthAnchor.constraint(equalToConstant: 44),
-            returnButton.widthAnchor.constraint(equalToConstant: 66),
-            backspaceButton.widthAnchor.constraint(equalToConstant: 44)
+            footerLabel.leadingAnchor.constraint(equalTo: speakistContainer.leadingAnchor, constant: 28),
+            footerLabel.trailingAnchor.constraint(equalTo: speakistContainer.trailingAnchor, constant: -28)
         ])
     }
 
-    // MARK: - Actions
+    // MARK: - Wiring
 
-    private func wireActions() {
+    private func wireQwerty() {
+        qwerty.onKey = { [weak self] key in self?.handleQwertyKey(key) }
+        qwerty.onGlobeReady = { [weak self] btn in
+            // Apple's selector on UIInputViewController handles tap
+            // (advance) and long-press (input-mode list) in one wire.
+            btn.addTarget(self,
+                          action: #selector(UIInputViewController.handleInputModeList(from:with:)),
+                          for: .allTouchEvents)
+        }
+    }
+
+    private func wireSpeakistControls() {
         primaryButton.addAction(UIAction { [weak self] _ in self?.tappedPrimary() }, for: .touchUpInside)
-        globeButton.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
-        spaceButton.addAction(UIAction { [weak self] _ in self?.textDocumentProxy.insertText(" ") }, for: .touchUpInside)
-        returnButton.addAction(UIAction { [weak self] _ in self?.textDocumentProxy.insertText("\n") }, for: .touchUpInside)
-        backspaceButton.addAction(UIAction { [weak self] _ in self?.textDocumentProxy.deleteBackward() }, for: .touchUpInside)
         finishButton.addAction(UIAction { [weak self] _ in self?.tappedFinish() }, for: .touchUpInside)
         cancelButton.addAction(UIAction { [weak self] _ in self?.tappedCancel() }, for: .touchUpInside)
     }
 
-    private func tappedPrimary() {
-        switch primaryMode {
-        case .startSession:
+    private func wireStripTap() {
+        speakistStrip.addAction(UIAction { [weak self] _ in self?.tappedStrip() }, for: .touchUpInside)
+    }
+
+    // MARK: - Strip tap
+
+    private func tappedStrip() {
+        // No-Full-Access banner: tap is informational; route to the
+        // status text so users know what to do.
+        guard hasFullAccess else {
+            return
+        }
+        switch displayMode {
+        case .typing:
+            // Activate Speakist. If the app is hot and a session is
+            // already armed, we can skip the relaunch and jump to
+            // beginSpeaking optimistically — `reconcileFromSession`
+            // will correct us if the read was stale.
             mediumImpact.impactOccurred()
-            mediumImpact.prepare()  // re-prepare for the next tap
-            startSession()
-        case .beginSpeaking:
-            // Heavy impact + success-notification combo so the "go"
-            // moment has a distinctive pattern that's impossible to
-            // miss. Both generators are pre-prepared in viewDidAppear
-            // and re-prepared here for the next use.
-            heavyImpact.impactOccurred()
-            successNotification.notificationOccurred(.success)
-            heavyImpact.prepare()
-            successNotification.prepare()
-            beginSpeaking()
-        case .listening, .transient:
-            // Primary button isn't visible in these states — this
-            // branch only runs if the user somehow taps a hidden
-            // button, so no-op is correct.
+            mediumImpact.prepare()
+            beginSpeakistFlow()
+        case .startSession, .beginSpeaking, .transient:
+            // Bail out of dictation and return to typing. Tear down
+            // any in-flight session so the main app doesn't sit on a
+            // warm mic while we type.
+            lightImpact.impactOccurred()
+            lightImpact.prepare()
+            DarwinNotifier.post(.keyboardRequestedCancel)
+            displayMode = .typing
+        case .listening:
+            // No-op during recording — user must use ✓ or ✕ to avoid
+            // accidental loss of an in-progress dictation.
             break
         }
     }
 
-    /// Cold path: tap Start Speakist → write pending request, try to
-    /// open the app, instruct user to switch manually if iOS balks.
-    private func startSession() {
+    /// Branches between hot path (post Darwin → main app starts session
+    /// with no app switch) and cold path (open the app via URL, which
+    /// kicks the user into the listening overlay so they can swipe back).
+    private func beginSpeakistFlow() {
+        if appIsHot, let raw = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.sessionStatus),
+           let status = SpeakSessionStatus(rawValue: raw),
+           status == .activating {
+            // Session already armed in the foreground app — fire the
+            // begin Darwin and flip to listening optimistically.
+            DarwinNotifier.post(.keyboardRequestedActivation)
+            displayMode = .listening
+            return
+        }
+        // Cold or warm-but-no-session: write a pending request and
+        // open the app.
         let now = Date().timeIntervalSince1970
         AppGroupBridge.defaults?.set(now, forKey: AppGroupBridge.Key.pendingSessionRequestAt)
         AppGroupBridge.defaults?.set(hostBundleID(), forKey: AppGroupBridge.Key.currentHostBundleID)
-
         let tone = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.tonePreference)
         guard let url = URLSchemeRoute.startSession(hostBundleID: hostBundleID(), tone: tone).url else {
-            setStatus("Internal error building URL", tint: .speakistCoral)
+            displayMode = .startSession
+            statusLabel.text = "Internal error building URL"
+            statusLabel.textColor = .speakistCoral
             return
         }
-        setStatus("Opening Speakist… swipe back when ready, then tap Begin Speaking", tint: .speakistPlum)
-        Logger.shared.info("keyboard: startSession tap, opening \(url.absoluteString)")
+        // Suppress one reconcile pass so the immediate stale `.idle`
+        // read from AppGroupBridge doesn't bounce us back to typing
+        // before the main app's transition lands.
+        suppressReconcile = true
+        suppressReconcileExpiry = Date().addingTimeInterval(6)
+        // Optimistically pick a mode based on the current app warmth.
+        displayMode = appIsHot ? .beginSpeaking : .startSession
+        Logger.shared.info("keyboard: tappedStrip → opening \(url.absoluteString)")
         openContainingApp(url: url)
     }
 
-    /// Hot path: app is open and activating — fire Darwin to start
-    /// recording. No app switch needed, no programmatic open.
-    /// Optimistically flip the UI to listening mode immediately so
-    /// the user sees ✓ / × right away; the next `appStateChanged`
-    /// Darwin from the main app will reconcile if anything went
-    /// wrong.
-    private func beginSpeaking() {
-        DarwinNotifier.post(.keyboardRequestedActivation)
-        primaryMode = .listening
-        setStatus("Listening — tap ✓ when done", tint: .speakistPeach)
+    // MARK: - Speakist control taps
+
+    private func tappedPrimary() {
+        switch displayMode {
+        case .startSession:
+            mediumImpact.impactOccurred()
+            mediumImpact.prepare()
+            beginSpeakistFlow()
+        case .beginSpeaking:
+            heavyImpact.impactOccurred()
+            successNotification.notificationOccurred(.success)
+            heavyImpact.prepare()
+            successNotification.prepare()
+            DarwinNotifier.post(.keyboardRequestedActivation)
+            displayMode = .listening
+        case .typing, .listening, .transient:
+            break
+        }
     }
 
     private func tappedFinish() {
         mediumImpact.impactOccurred()
         mediumImpact.prepare()
-        // Hide ✓/× immediately — the session will reach `.transcribing`
-        // a few ms later over Darwin, but reacting now removes the
-        // "why is ✓ still there" awkwardness.
-        primaryMode = .transient
-        setStatus("Transcribing…", tint: .secondaryLabel)
+        displayMode = .transient
+        statusLabel.text = "Transcribing…"
+        statusLabel.textColor = .secondaryLabel
         DarwinNotifier.post(.keyboardRequestedFinish)
     }
 
     private func tappedCancel() {
         lightImpact.impactOccurred()
         lightImpact.prepare()
-        primaryMode = .transient
-        setStatus("Cancelled", tint: .secondaryLabel)
         DarwinNotifier.post(.keyboardRequestedCancel)
+        // Return straight to typing so the user can keep going without
+        // a "Cancelled" pit-stop.
+        displayMode = .typing
+    }
+
+    // MARK: - QWERTY taps
+
+    private func handleQwertyKey(_ key: QwertyKey) {
+        switch key {
+        case .insert(let s):
+            textDocumentProxy.insertText(s)
+            // One-shot shift drops back to off after a single letter.
+            if qwerty.shiftState == .oneShot {
+                qwerty.shiftState = .off
+            }
+        case .backspace:
+            textDocumentProxy.deleteBackward()
+        case .shift:
+            switch qwerty.shiftState {
+            case .off:     qwerty.shiftState = .oneShot
+            case .oneShot: qwerty.shiftState = .locked
+            case .locked:  qwerty.shiftState = .off
+            }
+        case .space:
+            textDocumentProxy.insertText(" ")
+        case .enter:
+            textDocumentProxy.insertText("\n")
+        case .switchLayout(let target):
+            qwerty.layout = target
+            // Letters layout uses shiftState; numbers/symbols don't.
+            if target != .letters {
+                // Don't disturb shiftState — preserved for when user
+                // returns to letters.
+            }
+        case .globe:
+            // Globe key wires to `handleInputModeList` directly via
+            // `onGlobeReady` — should never reach here.
+            break
+        }
+        // Re-evaluate auto-cap after every text mutation.
+        updateAutoShift()
+    }
+
+    /// Set shift to `.oneShot` when the cursor is at a sentence start
+    /// (empty doc, leading whitespace, or after `. ! ?` followed by
+    /// whitespace). Caps lock is sticky and never overridden.
+    private func updateAutoShift() {
+        guard qwerty.layout == .letters else { return }
+        guard qwerty.shiftState != .locked else { return }
+        let ctx = textDocumentProxy.documentContextBeforeInput ?? ""
+        let shouldCap = isSentenceStart(context: ctx)
+        let target: ShiftState = shouldCap ? .oneShot : .off
+        if qwerty.shiftState != target {
+            qwerty.shiftState = target
+        }
+    }
+
+    private func isSentenceStart(context: String) -> Bool {
+        if context.isEmpty { return true }
+        // All preceding content is whitespace → still at start.
+        if context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        // Find the last non-whitespace character — if it's terminal
+        // punctuation AND the cursor is on whitespace, the next
+        // character is a new sentence.
+        guard let lastChar = context.last else { return false }
+        if !lastChar.isWhitespace { return false }
+        // Walk backwards over whitespace to find the prior glyph.
+        for ch in context.reversed() {
+            if ch.isWhitespace { continue }
+            return ch == "." || ch == "!" || ch == "?"
+        }
+        return true
     }
 
     // MARK: - Open containing app (UIScene responder path)
 
     private func openContainingApp(url: URL) {
-        guard hasFullAccess else {
-            setStatus("Enable Full Access in Settings → General → Keyboard → Speakist", tint: .speakistCoral)
-            return
-        }
+        guard hasFullAccess else { return }
         let opened = openViaSceneResponder(url: url)
         Logger.shared.info("keyboard: openViaSceneResponder returned \(opened)")
         if !opened {
-            setStatus("Couldn't open Speakist — open it from your Home screen", tint: .speakistPlum)
+            statusLabel.text = "Couldn't open Speakist — open it from your Home screen"
+            statusLabel.textColor = .speakistPlum
         }
     }
 
-    /// Walk the responder chain for a `UIScene` (or `UIApplication`)
-    /// that responds to the iOS 18+ 3-arg open selector. This is the
-    /// only URL-open path that actually works from keyboard extensions
-    /// on current iOS — the documented `extensionContext.open` is
-    /// Today-widget-only, and the deprecated 1-arg `openURL:` is
-    /// force-returned `false` by iOS 18+.
     private func openViaSceneResponder(url: URL) -> Bool {
         if #available(iOS 18.0, *) {
             let selector = sel_registerName("openURL:options:completionHandler:")
@@ -428,102 +608,112 @@ final class KeyboardViewController: UIInputViewController {
         return responder
     }
 
-    // MARK: - State-driven refresh
+    // MARK: - Display mode application
 
-    /// Single entry point that re-reads shared state and updates UI.
-    /// Called on viewDidAppear, textDidChange, and Darwin
-    /// `appStateChanged`. Keeps UI consistent without needing separate
-    /// updaters per surface.
-    private func refresh() {
+    private func applyDisplayMode(animated: Bool) {
+        updateStripAppearance()
+        let typing = (displayMode == .typing)
+        if animated {
+            UIView.transition(with: view, duration: 0.18, options: [.beginFromCurrentState, .allowUserInteraction], animations: {
+                self.qwerty.isHidden = !typing
+                self.speakistContainer.isHidden = typing
+            })
+        } else {
+            qwerty.isHidden = !typing
+            speakistContainer.isHidden = typing
+        }
+        applySpeakistContainerForMode(displayMode)
+    }
+
+    private func updateStripAppearance() {
+        // No-Full-Access takes precedence — surface the warning
+        // unconditionally so the user knows why dictation is unavailable.
         guard hasFullAccess else {
-            primaryMode = .transient
-            statusLabel.text = "Enable Full Access in Settings → General → Keyboard → Speakist"
-            statusLabel.textColor = .speakistCoral
-            footerLabel.isHidden = true
+            stripLabel.text = "Allow Full Access for Speakist Keyboard in Settings"
+            stripLabel.textColor = .white
+            stripIcon.tintColor = .white
+            stripTrailing.image = UIImage(systemName: "info.circle.fill")
+            stripTrailing.tintColor = .white
+            speakistStrip.backgroundColor = .speakistCoral
+            speakistStrip.isUserInteractionEnabled = false
             return
         }
-        // Footer is the "why do we open the app first" explainer —
-        // only useful when the user is staring at the Start Speakist
-        // button and about to be surprised by a context switch. Once
-        // the main app is already warm and the keyboard is showing
-        // Begin Speaking / ✓ / ×, the text is clutter.
-        footerLabel.isHidden = (primaryMode != .startSession)
+        speakistStrip.isUserInteractionEnabled = true
 
-        let raw = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.sessionStatus) ?? SpeakSessionStatus.idle.rawValue
-        let sessionStatus = SpeakSessionStatus(rawValue: raw) ?? .idle
-
-        switch sessionStatus {
-        case .idle:
-            primaryMode = .startSession
-            if appIsHot {
-                // App was open recently; user might be quickly
-                // re-dictating. Don't discourage tapping.
-                statusLabel.text = "Tap Start Speakist to dictate"
-            } else {
-                statusLabel.text = "Tap Start Speakist to dictate"
-            }
-            statusLabel.textColor = .secondaryLabel
-
-        case .activating:
-            // Session is armed — audio session is set up, mic is
-            // waiting. The BEGIN button is the one the user taps to
-            // actually start recording.
-            primaryMode = .beginSpeaking
-            statusLabel.text = "Ready — tap Begin Speaking when you're in position"
-            statusLabel.textColor = .speakistPeach
-
+        switch displayMode {
+        case .typing:
+            stripLabel.text = "Tap to dictate with Speakist"
+            stripLabel.textColor = .speakistPlum
+            stripIcon.tintColor = .speakistPlum
+            stripTrailing.image = UIImage(systemName: "mic.circle.fill")
+            stripTrailing.tintColor = .speakistPeach
+            speakistStrip.backgroundColor = UIColor.speakistPeach.withAlphaComponent(0.18)
+        case .startSession:
+            stripLabel.text = "Open Speakist & swipe back"
+            stripLabel.textColor = .white
+            stripIcon.tintColor = .white
+            stripTrailing.image = UIImage(systemName: "xmark.circle.fill")
+            stripTrailing.tintColor = .white.withAlphaComponent(0.9)
+            speakistStrip.backgroundColor = .speakistPlum
+        case .beginSpeaking:
+            stripLabel.text = "Ready — tap Begin Speaking"
+            stripLabel.textColor = .speakistPlum
+            stripIcon.tintColor = .speakistPlum
+            stripTrailing.image = UIImage(systemName: "xmark.circle.fill")
+            stripTrailing.tintColor = .speakistPlum.withAlphaComponent(0.7)
+            speakistStrip.backgroundColor = .speakistPeach
         case .listening:
-            primaryMode = .listening
-            statusLabel.text = "Listening — tap ✓ when done"
-            statusLabel.textColor = .speakistPeach
-
-        case .transcribing:
-            primaryMode = .transient
-            statusLabel.text = "Transcribing…"
-            statusLabel.textColor = .secondaryLabel
-
-        case .done:
-            // `.done` is a blink state — the main app auto-resets
-            // itself to `.idle` a moment later, at which point the
-            // normal `.startSession` UI returns. We render the
-            // "Inserted ✓" confirmation here and let the next
-            // `appStateChanged` Darwin handle the reset.
-            primaryMode = .transient
-            statusLabel.text = "Inserted ✓"
-            statusLabel.textColor = .speakistSage
-
-        case .error:
-            primaryMode = .startSession
-            let err = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.lastError)
-            statusLabel.text = err ?? "Something went wrong"
-            statusLabel.textColor = .speakistCoral
+            stripLabel.text = "Listening — tap ✓ when done"
+            stripLabel.textColor = .speakistPlum
+            stripIcon.tintColor = .speakistPlum
+            // No cancel-via-strip during recording — must use ✕ button
+            // to avoid surprise cancellations from miss-taps.
+            stripTrailing.image = UIImage(systemName: "waveform")
+            stripTrailing.tintColor = .speakistPlum
+            speakistStrip.backgroundColor = .speakistPeach
+        case .transient:
+            stripLabel.text = statusLabel.text ?? "Working…"
+            stripLabel.textColor = .white
+            stripIcon.tintColor = .white
+            stripTrailing.image = UIImage(systemName: "xmark.circle.fill")
+            stripTrailing.tintColor = .white.withAlphaComponent(0.9)
+            speakistStrip.backgroundColor = .speakistPlum
         }
     }
 
-    private func applyPrimaryMode(_ mode: PrimaryMode) {
-        // Footer is only shown when the primary button is the cold-
-        // start CTA — see `refresh()` for the rationale. Update here
-        // too so mode changes that bypass `refresh()` still hide it.
-        footerLabel.isHidden = (mode != .startSession)
+    private func applySpeakistContainerForMode(_ mode: DisplayMode) {
         switch mode {
+        case .typing:
+            // Container is hidden — tear down the level poll so we
+            // don't hold the display link.
+            stopLevelPolling()
+            waveformView.stopAnimating()
         case .startSession:
             primaryButton.isHidden = false
             finishButton.isHidden = true
             cancelButton.isHidden = true
             waveformView.isHidden = true
             waveformView.stopAnimating()
+            stopLevelPolling()
+            footerLabel.isHidden = false
             configurePrimary(title: "Start Speakist",
                              image: KeyboardViewController.makeBrandIcon(),
                              background: .speakistPlum)
+            statusLabel.text = "Opening Speakist… swipe back when ready"
+            statusLabel.textColor = .speakistPlum
         case .beginSpeaking:
             primaryButton.isHidden = false
             finishButton.isHidden = true
             cancelButton.isHidden = true
             waveformView.isHidden = true
             waveformView.stopAnimating()
+            stopLevelPolling()
+            footerLabel.isHidden = true
             configurePrimary(title: "Begin Speaking",
                              image: UIImage(systemName: "mic.fill"),
                              background: .speakistPeach)
+            statusLabel.text = "Ready — tap Begin Speaking when you're in position"
+            statusLabel.textColor = .speakistPeach
         case .listening:
             primaryButton.isHidden = true
             finishButton.isHidden = false
@@ -531,18 +721,101 @@ final class KeyboardViewController: UIInputViewController {
             waveformView.isHidden = false
             waveformView.startAnimating()
             startLevelPolling()
+            footerLabel.isHidden = true
+            statusLabel.text = "Listening — tap ✓ when done"
+            statusLabel.textColor = .speakistPeach
         case .transient:
-            // Transcribing / done / error — only the status line is
-            // visible. Everything else goes away so the user isn't
-            // staring at stale controls.
             primaryButton.isHidden = true
             finishButton.isHidden = true
             cancelButton.isHidden = true
             waveformView.isHidden = true
             waveformView.stopAnimating()
             stopLevelPolling()
+            footerLabel.isHidden = true
+            // statusLabel text was set by caller (Transcribing…, error
+            // message, etc.); leave it alone here.
         }
     }
+
+    private func configurePrimary(title: String, image: UIImage?, background: UIColor) {
+        var cfg = primaryButton.configuration ?? UIButton.Configuration.filled()
+        cfg.image = image
+        cfg.baseBackgroundColor = background
+        cfg.baseForegroundColor = .white
+        cfg.attributedTitle = AttributedString(title, attributes: AttributeContainer([
+            .font: UIFont.systemFont(ofSize: 17, weight: .semibold)
+        ]))
+        primaryButton.configuration = cfg
+    }
+
+    // MARK: - Reconcile from session
+
+    /// Map external session state to display mode. Called from
+    /// viewWillAppear, textDidChange, and Darwin `appStateChanged`.
+    /// Idempotent and cheap.
+    private func reconcileFromSession() {
+        // One-shot suppression so the activation-strip tap can pin
+        // the display mode through the ~6 second app-launch round-
+        // trip without a stale .idle reading flipping us back.
+        if suppressReconcile {
+            if let exp = suppressReconcileExpiry, Date() > exp {
+                suppressReconcile = false
+                suppressReconcileExpiry = nil
+            } else {
+                return
+            }
+        }
+
+        guard hasFullAccess else {
+            // No IPC available — degrade to typing-only with the
+            // coral banner. Don't try to read sessionStatus.
+            if displayMode != .typing { displayMode = .typing }
+            updateStripAppearance()
+            return
+        }
+
+        let raw = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.sessionStatus)
+            ?? SpeakSessionStatus.idle.rawValue
+        let status = SpeakSessionStatus(rawValue: raw) ?? .idle
+
+        switch status {
+        case .idle:
+            // No active session externally. Anything that's not
+            // typing/startSession should drop back to typing.
+            if displayMode != .typing && displayMode != .startSession {
+                displayMode = .typing
+            }
+        case .activating:
+            // Session armed (audio session set up, mic warm) but not
+            // capturing yet — show begin speaking unless we're already
+            // recording.
+            if displayMode != .listening { displayMode = .beginSpeaking }
+        case .listening:
+            displayMode = .listening
+        case .transcribing:
+            displayMode = .transient
+            statusLabel.text = "Transcribing…"
+            statusLabel.textColor = .secondaryLabel
+        case .done:
+            // Final transcript was published; consumeFinalTranscript
+            // already inserted the text. Return to typing so the user
+            // can keep going.
+            displayMode = .typing
+        case .error:
+            displayMode = .transient
+            statusLabel.text = AppGroupBridge.defaults?.string(forKey: AppGroupBridge.Key.lastError) ?? "Something went wrong"
+            statusLabel.textColor = .speakistCoral
+            // Auto-dismiss the error after a couple seconds so the
+            // strip doesn't sit on stale red copy.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { [weak self] in
+                guard let self else { return }
+                if self.displayMode == .transient { self.displayMode = .typing }
+            }
+        }
+        updateStripAppearance()
+    }
+
+    // MARK: - Level polling
 
     private func startLevelPolling() {
         guard levelPollLink == nil else { return }
@@ -560,42 +833,12 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func pollLevel() {
         guard let defaults = AppGroupBridge.defaults else { return }
         let stamp = defaults.double(forKey: AppGroupBridge.Key.micLevelAt)
-        // If the level hasn't been updated in 250ms the main app is
-        // either between frames, suspended, or crashed — either way,
-        // feed zero so the waveform decays to the idle baseline
-        // instead of holding a stale peak.
         if stamp == 0 || Date().timeIntervalSince1970 - stamp > 0.25 {
             waveformView.setLevel(0)
             return
         }
         let level = defaults.double(forKey: AppGroupBridge.Key.micLevel)
         waveformView.setLevel(Float(level))
-    }
-
-    private func configurePrimary(title: String, image: UIImage?, background: UIColor) {
-        var cfg = primaryButton.configuration ?? UIButton.Configuration.filled()
-        cfg.image = image
-        cfg.baseBackgroundColor = background
-        cfg.baseForegroundColor = .white
-        cfg.attributedTitle = AttributedString(title, attributes: AttributeContainer([
-            .font: UIFont.systemFont(ofSize: 17, weight: .semibold)
-        ]))
-        primaryButton.configuration = cfg
-    }
-
-    /// Tint-aware status setter with a subtle scale pulse so every tap
-    /// has a visible confirmation even if the underlying action is
-    /// asynchronous or silent (e.g. iOS dropping a URL open).
-    private func setStatus(_ text: String, tint: UIColor) {
-        statusLabel.text = text
-        statusLabel.textColor = tint
-        UIView.animate(withDuration: 0.12, animations: {
-            self.statusLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
-        }, completion: { _ in
-            UIView.animate(withDuration: 0.18) {
-                self.statusLabel.transform = .identity
-            }
-        })
     }
 
     // MARK: - Shared state helpers
@@ -621,7 +864,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func hostBundleID() -> String? {
-        // iOS does not expose the host app's bundle ID to keyboard
+        // iOS doesn't expose the host app's bundle ID to keyboard
         // extensions. Reserved for future heuristic detection.
         return nil
     }
@@ -636,7 +879,9 @@ final class KeyboardViewController: UIInputViewController {
             self?.consumePartialTranscript()
         })
         darwinTokens.append(DarwinNotifier.shared.observe(.appStateChanged) { [weak self] in
-            self?.refresh()
+            self?.suppressReconcile = false
+            self?.suppressReconcileExpiry = nil
+            self?.reconcileFromSession()
         })
     }
 
@@ -645,37 +890,38 @@ final class KeyboardViewController: UIInputViewController {
         let seq = defaults.integer(forKey: AppGroupBridge.Key.transcriptSequence)
         guard seq > lastAppliedSequence else { return }
         lastAppliedSequence = seq
-        guard let text = defaults.string(forKey: AppGroupBridge.Key.finalTranscript), !text.isEmpty else { return }
+        guard let text = defaults.string(forKey: AppGroupBridge.Key.finalTranscript),
+              !text.isEmpty else { return }
         textDocumentProxy.insertText(text)
-        // Always follow the transcript with a space — saves the user
-        // a manual keystroke between consecutive dictations or when
-        // continuing typing inline. Skipped if the transcript already
-        // ends with whitespace so we don't double-space.
+        // Always follow the transcript with a space if it doesn't
+        // already end with whitespace — saves the user a manual
+        // keystroke between consecutive dictations.
         if !(text.last?.isWhitespace ?? false) {
             textDocumentProxy.insertText(" ")
         }
-        setStatus("Inserted ✓", tint: .speakistSage)
+        successNotification.notificationOccurred(.success)
+        successNotification.prepare()
+        // Drop straight back to typing so the user can keep editing.
+        displayMode = .typing
+        updateAutoShift()
     }
 
     private func consumePartialTranscript() {
-        // Streaming partials not implemented yet — scaffold's
-        // consumeFinalTranscript handles the completed transcript.
+        // Streaming partials aren't wired yet — final-only path
+        // handles delivery via consumeFinalTranscript.
     }
 
     // MARK: - Brand icon
 
-    /// Small peach-outlined waveform-in-bubble glyph rendered via
-    /// UIGraphics. Matches the Speakist menu-bar icon on macOS — the
-    /// single visual anchor users recognize across platforms. Falls
-    /// back to `waveform.badge.mic.fill` on unexpected rendering
-    /// failures so the button never renders iconless.
+    /// Small peach-outlined waveform-in-bubble glyph. Matches the Mac
+    /// menu-bar icon — single visual anchor users recognize across
+    /// platforms. Used by both the strip's leading icon and the
+    /// `.startSession` primary button.
     private static func makeBrandIcon() -> UIImage {
         let size = CGSize(width: 22, height: 22)
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { ctx in
             let c = ctx.cgContext
-            // White waveform bars (will render against the peach/plum
-            // button background).
             c.setFillColor(UIColor.white.cgColor)
             let barHeights: [CGFloat] = [8, 14, 18, 14, 8]
             let barWidth: CGFloat = 2.2
@@ -691,31 +937,5 @@ final class KeyboardViewController: UIInputViewController {
             }
         }
         return image.withRenderingMode(.alwaysOriginal)
-    }
-
-    // MARK: - Key factories
-
-    private static func keyButton(title: String) -> UIButton {
-        let b = UIButton(type: .system)
-        var cfg = UIButton.Configuration.gray()
-        cfg.attributedTitle = AttributedString(title, attributes: AttributeContainer([
-            .font: UIFont.systemFont(ofSize: 14, weight: .regular)
-        ]))
-        cfg.baseForegroundColor = .label
-        cfg.cornerStyle = .medium
-        b.configuration = cfg
-        b.translatesAutoresizingMaskIntoConstraints = false
-        return b
-    }
-
-    private static func keyButton(icon: String) -> UIButton {
-        let b = UIButton(type: .system)
-        var cfg = UIButton.Configuration.gray()
-        cfg.image = UIImage(systemName: icon)
-        cfg.baseForegroundColor = .label
-        cfg.cornerStyle = .medium
-        b.configuration = cfg
-        b.translatesAutoresizingMaskIntoConstraints = false
-        return b
     }
 }
