@@ -372,9 +372,13 @@ private struct HUDView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.ultraThinMaterial)
         )
+        // Outer border: an angular gradient that sweeps the brand
+        // palette around the panel. Replaces the previous static
+        // hairline so the HUD feels alive even before the user has
+        // started speaking. See `AnimatedGradientBorder` for the
+        // palette and timing.
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5)
+            AnimatedGradientBorder(cornerRadius: 16, lineWidth: 2)
         )
         .padding(4)
     }
@@ -434,6 +438,66 @@ private struct HUDView: View {
 // is now just the level bars + timer. Brand mark lives in the menu
 // bar icon, the dashboard, and onboarding; we don't need it competing
 // with the live waveform during a quick dictation.
+
+/// Animated multicolor border that sweeps the brand palette around
+/// the HUD panel. An `AngularGradient` mapped onto a stroked rounded
+/// rectangle, with the gradient's start angle advanced every frame
+/// via `TimelineView(.animation)` so the colors appear to chase each
+/// other clockwise around the perimeter.
+///
+/// Why an angular gradient (a.k.a. conic): it's the only built-in
+/// SwiftUI gradient that distributes color around an angle from a
+/// center point — exactly what we want for a "rainbow ring" effect.
+/// Painting it onto a `strokeBorder` confines the visible band to
+/// the panel's edge.
+///
+/// Why `TimelineView` rather than a `.animation`-modified state: the
+/// border needs to keep cycling regardless of upstream state changes
+/// (preparing → recording → transcribing) without re-triggering an
+/// animation. TimelineView drives the redraw off a wall clock and
+/// gives us a continuous phase value.
+private struct AnimatedGradientBorder: View {
+    let cornerRadius: CGFloat
+    let lineWidth: CGFloat
+
+    /// Brand palette in a sequence that produces a balanced rainbow
+    /// when wrapped around 360°. Peach is repeated at the head and
+    /// tail so the angular gradient closes seamlessly — without it
+    /// you'd see a hard color seam at 0° / 360° as the sweep wraps.
+    private let palette: [Color] = [
+        .speakistPeach,
+        .speakistCoral,
+        .speakistMustard,
+        .speakistSage,
+        .speakistPlum,
+        .speakistPeach,
+    ]
+
+    /// Seconds per full revolution. Slow enough to feel ambient
+    /// rather than urgent — six seconds reads as a calm "we're here"
+    /// rather than the spinner-of-doom you get under three.
+    private let period: Double = 6.0
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            // Continuous wrap: take t mod period, map to [0, 1), scale to 360°.
+            // Using truncatingRemainder keeps the angle bounded so we don't
+            // accumulate floating-point drift over a long session.
+            let phase = t.truncatingRemainder(dividingBy: period) / period
+            let angle = Angle.degrees(phase * 360)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(
+                    AngularGradient(
+                        colors: palette,
+                        center: .center,
+                        angle: angle
+                    ),
+                    lineWidth: lineWidth
+                )
+        }
+    }
+}
 
 /// Five peach dots bobbing up and down with phase offsets, producing
 /// a left-to-right traveling wave that feels alive without competing
