@@ -25,7 +25,7 @@ export default async function AdminOverview() {
 
       {/* Counts row */}
       <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Stat label="Organizations" value={totals.orgs.toLocaleString()} />
+        <Stat label="Workspaces" value={totals.orgs.toLocaleString()} />
         <Stat label="Users" value={totals.users.toLocaleString()} />
         <Stat label="Events (30d)" value={totals.usage30dEvents.toLocaleString()} />
         <Stat
@@ -39,7 +39,7 @@ export default async function AdminOverview() {
         <Stat
           label="Outstanding credit liability"
           value={formatDollars(totals.balanceAllOrgsMillicents)}
-          subtitle="Total credits held across all orgs"
+          subtitle="Total credits held across all workspaces"
           tint="plum"
         />
         <Stat

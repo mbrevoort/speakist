@@ -8,12 +8,10 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-
     "cf:build": "opennextjs-cloudflare build --env dev",
     "cf:preview": "opennextjs-cloudflare preview --env dev",
     "deploy:dev": "opennextjs-cloudflare build --env dev && opennextjs-cloudflare deploy --env dev",
     "deploy:prod": "opennextjs-cloudflare build --env production && opennextjs-cloudflare deploy --env production",
-
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply speakist-dev --local --env dev",
     "db:migrate:dev": "wrangler d1 migrations apply speakist-dev --remote --env dev",
@@ -21,7 +19,14 @@
     "db:studio": "drizzle-kit studio",
     "db:seed:local": "wrangler d1 execute speakist-dev --local --env dev --file=scripts/seed.sql",
     "db:seed:dev": "wrangler d1 execute speakist-dev --remote --env dev --file=scripts/seed.sql",
-    "db:seed:prod": "wrangler d1 execute speakist-prod --remote --env production --file=scripts/seed.sql"
+    "db:seed:prod": "wrangler d1 execute speakist-prod --remote --env production --file=scripts/seed.sql",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.2",
@@ -49,10 +54,12 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241022.0",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.8.1",
     "@types/react": "npm:types-react@19.0.0-rc.1",
     "@types/react-dom": "npm:types-react-dom@19.0.0-rc.1",
     "autoprefixer": "^10.4.20",
+    "better-sqlite3": "^12.9.0",
     "drizzle-kit": "^0.28.0",
     "eslint": "^9.13.0",
     "eslint-config-next": "^15.0.2",
@@ -60,6 +67,7 @@
     "tailwindcss": "^3.4.14",
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
+    "vitest": "^4.1.5",
     "wrangler": "^4.0.0"
   },
   "overrides": {

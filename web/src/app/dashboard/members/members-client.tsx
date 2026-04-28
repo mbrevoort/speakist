@@ -147,7 +147,7 @@ export function MembersClient({
                         <ActionIconForm
                           action={removeMember}
                           extra={{ userId: m.userId }}
-                          confirm={`Remove ${m.email} from this org?`}
+                          confirm={`Remove ${m.email} from this workspace?`}
                         >
                           <X className="h-4 w-4" />
                         </ActionIconForm>

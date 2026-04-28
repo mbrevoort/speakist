@@ -350,7 +350,7 @@ export async function updateAutoJoinDomain(
       message:
         parsed.data === ""
           ? "Auto-join turned off."
-          : `Anyone signing up with @${parsed.data} will now auto-join.`,
+          : `Anyone signing up with @${parsed.data} will now get a pending invitation to this workspace.`,
     };
   } catch (err) {
     console.error("updateAutoJoinDomain failed:", err);
@@ -378,7 +378,7 @@ export async function leaveOrg(): Promise<ActionResult> {
         return {
           ok: false,
           error:
-            "You're the only owner. Promote someone else to owner first, or delete the org.",
+            "You're the only owner. Promote someone else to owner first, or delete the workspace.",
         };
       }
     }
@@ -392,7 +392,7 @@ export async function leaveOrg(): Promise<ActionResult> {
     // Phase 4 will add a "create new workspace" flow for this edge case.
   } catch (err) {
     console.error("leaveOrg failed:", err);
-    return { ok: false, error: "Couldn't leave the org." };
+    return { ok: false, error: "Couldn't leave the workspace." };
   }
   redirect("/");
 }
@@ -406,12 +406,12 @@ export async function deleteOrg(formData: FormData): Promise<ActionResult> {
     if (!org) return { ok: false, error: "No current org." };
     if (org.role !== "owner") return { ok: false, error: "Owners only." };
 
-    // Double-confirm: the form must echo the org slug exactly.
+    // Double-confirm: the form must echo the workspace slug exactly.
     const confirm = (formData.get("confirm") as string | null)?.trim().toLowerCase();
     if (confirm !== org.slug.toLowerCase()) {
       return {
         ok: false,
-        error: `Type the org slug (${org.slug}) to confirm deletion.`,
+        error: `Type the workspace slug (${org.slug}) to confirm deletion.`,
       };
     }
 
@@ -421,7 +421,7 @@ export async function deleteOrg(formData: FormData): Promise<ActionResult> {
     // credit_ledger, usage_events already handle the sweep.
   } catch (err) {
     console.error("deleteOrg failed:", err);
-    return { ok: false, error: "Couldn't delete the org." };
+    return { ok: false, error: "Couldn't delete the workspace." };
   }
   redirect("/");
 }

@@ -1,6 +1,6 @@
-// Admin → single-org management page.
+// Admin → single-workspace management page.
 //
-// Shows org summary + admin-only actions: comp toggle, manual credit
+// Shows workspace summary + admin-only actions: comp toggle, manual credit
 // adjustment, Deepgram key override. Also lists recent ledger entries and
 // members so the operator has full context in one view.
 
@@ -15,7 +15,7 @@ import { listLedger } from "@/lib/credits";
 import { formatDollars } from "@/lib/utils";
 import { OrgAdminActions } from "./org-client";
 
-export const metadata = { title: "Org — Admin" };
+export const metadata = { title: "Workspace — Admin" };
 
 export default async function AdminOrgPage({
   params,
@@ -41,12 +41,12 @@ export default async function AdminOrgPage({
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          All organizations
+          All workspaces
         </Link>
         <PageHeader
           title={org.name}
           description={`${org.slug} · created ${org.createdAt.toLocaleDateString()}${
-            org.autoJoinDomain ? ` · @${org.autoJoinDomain} auto-join` : ""
+            org.autoJoinDomain ? ` · @${org.autoJoinDomain} auto-invite` : ""
           }`}
           actions={
             org.isComped ? (

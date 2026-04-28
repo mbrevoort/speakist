@@ -5,8 +5,11 @@ import { RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  sendSlackWebhookTest,
   setAllowPublicOrgCreation,
   setPolishPrompt,
+  setSlackWebhookEnabled,
+  setSlackWebhookUrl,
   setSystemDeepgramKey,
   setSystemGroqKey,
   type ActionResult,
@@ -147,8 +150,8 @@ export function SystemDeepgramKey({ hasKey }: { hasKey: boolean }) {
       providerLabel="Deepgram"
       hasKey={hasKey}
       saveAction={setSystemDeepgramKey}
-      emptyStateExplainer="Without a Deepgram system key, only orgs with their own per-org override can use Deepgram models. Default-routed orgs use Groq, so this is optional unless a super admin specifically points an org at Deepgram via the allowed-models list."
-      clearConfirmPrompt="Clear the system Deepgram key? Any org routed to Deepgram without its own override will fail to transcribe."
+      emptyStateExplainer="Without a Deepgram system key, only workspaces with their own per-workspace override can use Deepgram models. Default-routed workspaces use Groq, so this is optional unless a super admin specifically points a workspace at Deepgram via the allowed-models list."
+      clearConfirmPrompt="Clear the system Deepgram key? Any workspace routed to Deepgram without its own override will fail to transcribe."
       placeholder="Deepgram API key"
     />
   );
@@ -160,8 +163,8 @@ export function SystemGroqKey({ hasKey }: { hasKey: boolean }) {
       providerLabel="Groq"
       hasKey={hasKey}
       saveAction={setSystemGroqKey}
-      emptyStateExplainer="Without a Groq system key, every org without its own Groq override will fail to transcribe. Groq is the default provider for new orgs, so set this before inviting production users."
-      clearConfirmPrompt="Clear the system Groq key? Default-routed orgs (English → Groq Whisper Turbo, other languages → Groq Whisper Large) will fail to transcribe until you set it again."
+      emptyStateExplainer="Without a Groq system key, every workspace without its own Groq override will fail to transcribe. Groq is the default provider for new workspaces, so set this before inviting production users."
+      clearConfirmPrompt="Clear the system Groq key? Default-routed workspaces (English → Groq Whisper Turbo, other languages → Groq Whisper Large) will fail to transcribe until you set it again."
       placeholder="Groq API key (gsk_...)"
     />
   );
@@ -199,8 +202,8 @@ export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: b
         </p>
         <p className="mt-1.5 text-sm text-muted-foreground leading-relaxed">
           {enabled
-            ? "Anyone who signs in gets a workspace auto-created and $5 in signup credit. This is the production default."
-            : "New signups without an invitation or matching auto-join domain won’t get a workspace; they land on an “awaiting invitation” screen. Existing orgs can still invite members and auto-join by email domain."}
+            ? "New users without a pending invitation get their own workspace plus the signup credit. Users with a pending invitation always see Accept/Decline first. Production default."
+            : "New users without a pending invitation see the “awaiting invitation” screen instead of getting a workspace auto-created. Manual invites and per-workspace auto-invite domains still work."}
         </p>
       </div>
 
@@ -373,6 +376,176 @@ export function PolishPromptEditor({
           {bakedInDefault}
         </pre>
       </details>
+    </div>
+  );
+}
+
+// --- Slack webhook card ---------------------------------------------------
+//
+// One destination per card. Three pieces of state:
+//   * URL: encrypted-at-rest; we only know whether one is set, never the
+//     value. Rotating means pasting a new one.
+//   * Enabled: independent toggle so the URL stays put while paused.
+//   * Test: posts a one-off message bypassing the enable flag — lets an
+//     admin verify the URL before flipping the toggle on.
+//
+// The view/edit split mirrors SystemProviderKey above for consistency.
+
+interface SlackWebhookCardProps {
+  destination: "new_user" | "topup";
+  title: string;
+  description: string;
+  hasUrl: boolean;
+  enabled: boolean;
+}
+
+export function SlackWebhookCard({
+  destination,
+  title,
+  description,
+  hasUrl,
+  enabled,
+}: SlackWebhookCardProps) {
+  const [mode, setMode] = useState<"view" | "edit">("view");
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/20 p-4 sm:p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
+        <p
+          className={cn(
+            "text-xs font-medium",
+            !hasUrl
+              ? "text-mustard"
+              : enabled
+                ? "text-sage"
+                : "text-muted-foreground"
+          )}
+        >
+          {!hasUrl
+            ? "No URL configured"
+            : enabled
+              ? "Enabled"
+              : "Paused"}
+        </p>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+        {description}
+      </p>
+
+      {mode === "view" ? (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setResult(null);
+              setMode("edit");
+            }}
+          >
+            {hasUrl ? "Rotate URL" : "Set URL"}
+          </Button>
+          {hasUrl && (
+            <form
+              action={(fd) => {
+                fd.set("destination", destination);
+                fd.set("enabled", enabled ? "off" : "on");
+                setResult(null);
+                startTransition(async () =>
+                  setResult(await setSlackWebhookEnabled(fd))
+                );
+              }}
+            >
+              <Button
+                type="submit"
+                size="sm"
+                variant={enabled ? "outline" : "default"}
+                disabled={pending}
+              >
+                {pending ? "Saving…" : enabled ? "Pause" : "Enable"}
+              </Button>
+            </form>
+          )}
+          {hasUrl && (
+            <form
+              action={(fd) => {
+                fd.set("destination", destination);
+                setResult(null);
+                startTransition(async () =>
+                  setResult(await sendSlackWebhookTest(fd))
+                );
+              }}
+            >
+              <Button type="submit" size="sm" variant="outline" disabled={pending}>
+                {pending ? "Sending…" : "Send test"}
+              </Button>
+            </form>
+          )}
+          {hasUrl && (
+            <form
+              action={(fd) => {
+                if (
+                  !window.confirm(
+                    "Clear this webhook URL? Notifications will stop until a new one is saved."
+                  )
+                ) {
+                  return;
+                }
+                fd.set("destination", destination);
+                fd.set("url", "");
+                setResult(null);
+                startTransition(async () =>
+                  setResult(await setSlackWebhookUrl(fd))
+                );
+              }}
+            >
+              <Button type="submit" size="sm" variant="outline" disabled={pending}>
+                Clear
+              </Button>
+            </form>
+          )}
+          {result && <InlineResult result={result} />}
+        </div>
+      ) : (
+        <form
+          action={(fd) => {
+            fd.set("destination", destination);
+            setResult(null);
+            startTransition(async () => {
+              const r = await setSlackWebhookUrl(fd);
+              setResult(r);
+              if (r.ok) setMode("view");
+            });
+          }}
+          className="mt-4 space-y-3"
+        >
+          <input
+            type="url"
+            name="url"
+            autoComplete="off"
+            required
+            placeholder="https://hooks.slack.com/services/T0…/B0…/…"
+            className="w-full rounded-xl border border-input bg-background px-4 py-2.5 text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="submit" size="sm" disabled={pending}>
+              {pending ? "Saving…" : "Save URL"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setMode("view")}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+            {result && <InlineResult result={result} />}
+          </div>
+        </form>
+      )}
     </div>
   );
 }

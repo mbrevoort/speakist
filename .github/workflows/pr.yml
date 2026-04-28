@@ -1,0 +1,110 @@
+# PR checks — block-on-fail gate before any merge to main.
+#
+# Two jobs:
+#   * web   — pnpm typecheck + lint + vitest (in-memory better-sqlite3)
+#   * swift — xcodebuild test against the macOS Speakist scheme
+#
+# Both run on every PR and on direct pushes to main (so an after-the-
+# fact discovery from a force-push or admin merge still flags the
+# regression). Branch protection should require both checks before
+# allowing merge — see docs/cicd.md.
+#
+# Concurrency cancels an in-flight run when the same PR receives a new
+# push; turns force-push panic into one shot of CI minutes instead of
+# N stacked-up runs. Group key uses `github.run_id` as a fallback for
+# pushes (where head_ref is empty); on PRs the head_ref is what's
+# unique. Both values are platform-controlled (no untrusted input
+# reaches `run:` blocks).
+
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Web — typecheck + lint + vitest. Runs on every PR; cheap (ubuntu, no
+  # native Apple toolchain).
+  # ---------------------------------------------------------------------------
+  web:
+    name: Web (typecheck + lint + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: web
+        run: pnpm typecheck
+
+      - name: Lint
+        working-directory: web
+        run: pnpm lint
+
+      - name: Vitest
+        working-directory: web
+        run: pnpm test:run
+
+  # ---------------------------------------------------------------------------
+  # Swift — xcodebuild test on the macOS Speakist scheme. Runs without
+  # code signing (CODE_SIGNING_ALLOWED=NO) since unit tests don't need a
+  # signed binary; this avoids dragging the cert/keychain dance into PR
+  # CI and the matching secrets that would have to be wired.
+  # ---------------------------------------------------------------------------
+  swift:
+    name: Swift unit tests (Mac)
+    runs-on: macos-26
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
+          key: spm-mac-pr-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-mac-pr-
+
+      - name: Run Speakist tests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Speakist.xcodeproj \
+            -scheme Speakist \
+            -destination 'platform=macOS,arch=arm64' \
+            CODE_SIGNING_ALLOWED=NO \
+            -skipPackagePluginValidation \
+            -skipMacroValidation

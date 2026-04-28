@@ -14,6 +14,7 @@ import { bakedInPromptForMode } from "@/lib/transcription/polish";
 import {
   AllowPublicOrgToggle,
   PolishPromptEditor,
+  SlackWebhookCard,
   SystemDeepgramKey,
   SystemGroqKey,
 } from "./system-client";
@@ -30,6 +31,10 @@ export default async function AdminSystemPage() {
       polishIntuitive: appSettings.polishIntuitivePrompt,
       polishPrescriptive: appSettings.polishPrescriptivePrompt,
       allowPublicOrgCreation: appSettings.allowPublicOrgCreation,
+      slackNewUserUrl: appSettings.slackNewUserWebhookUrlEncrypted,
+      slackNewUserEnabled: appSettings.slackNewUserWebhookEnabled,
+      slackTopupUrl: appSettings.slackTopupWebhookUrlEncrypted,
+      slackTopupEnabled: appSettings.slackTopupWebhookEnabled,
     })
     .from(appSettings)
     .where(eq(appSettings.id, 1))
@@ -51,7 +56,7 @@ export default async function AdminSystemPage() {
             Generate with <code className="font-mono">openssl rand -base64 32</code>,
             put it in <code className="font-mono">.env.local</code> (or set it
             as a Worker secret for deployed environments), restart. Encrypted-
-            at-rest secrets (system key, per-org Deepgram overrides) can&apos;t
+            at-rest secrets (system key, per-workspace Deepgram overrides) can&apos;t
             be saved until it is.
           </p>
         </div>
@@ -62,8 +67,8 @@ export default async function AdminSystemPage() {
         <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
           Controls whether brand-new email signups get a workspace auto-
           created. Turning this off makes the environment invite-only — useful
-          for dev/staging. Invitations and auto-join domains still work
-          independently.
+          for dev/staging. Manual invitations and per-workspace
+          auto-invite domains still work independently.
         </p>
         <div className="mt-5">
           <AllowPublicOrgToggle
@@ -75,11 +80,11 @@ export default async function AdminSystemPage() {
       <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
         <h2 className="text-lg font-semibold tracking-tight">System Groq key</h2>
         <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-          The fallback Groq key used by any org without its own override.
-          Groq is the default provider for new orgs (English routes to
-          Whisper Turbo, other languages to Whisper Large), so this key
-          is load-bearing — without it, default-routed orgs can&apos;t
-          transcribe. Stored AES-GCM-encrypted with{" "}
+          The fallback Groq key used by any workspace without its own
+          override. Groq is the default provider for new workspaces
+          (English routes to Whisper Turbo, other languages to Whisper
+          Large), so this key is load-bearing — without it, default-
+          routed workspaces can&apos;t transcribe. Stored AES-GCM-encrypted with{" "}
           <code className="font-mono text-xs">APP_ENCRYPTION_KEY</code>.
         </p>
         <div className="mt-5">
@@ -91,8 +96,8 @@ export default async function AdminSystemPage() {
         <h2 className="text-lg font-semibold tracking-tight">System Deepgram key</h2>
         <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
           Optional fallback key used only when a super admin explicitly
-          routes an org to Deepgram via its allowed-models list. Default
-          routing is Groq, so most orgs never touch this. Stored AES-GCM-
+          routes a workspace to Deepgram via its allowed-models list.
+          Default routing is Groq, so most workspaces never touch this. Stored AES-GCM-
           encrypted with{" "}
           <code className="font-mono text-xs">APP_ENCRYPTION_KEY</code>.
         </p>
@@ -114,6 +119,43 @@ export default async function AdminSystemPage() {
             mode="intuitive"
             current={row?.polishIntuitive ?? null}
             bakedInDefault={bakedInPromptForMode("intuitive")}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
+        <h2 className="text-lg font-semibold tracking-tight">Slack notifications</h2>
+        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
+          Optional. Post to a Slack channel when a new user signs in for
+          the first time, and when a workspace tops up via Stripe
+          (manual or auto). Use any{" "}
+          <a
+            className="underline underline-offset-2"
+            href="https://api.slack.com/messaging/webhooks"
+            target="_blank"
+            rel="noreferrer"
+          >
+            incoming webhook
+          </a>
+          {" "}URL — stored AES-GCM-encrypted with{" "}
+          <code className="font-mono text-xs">APP_ENCRYPTION_KEY</code>.
+          Disable a destination to pause without losing the URL.
+        </p>
+
+        <div className="mt-5 space-y-6">
+          <SlackWebhookCard
+            destination="new_user"
+            title="New user sign-in"
+            description="Fires once per newly-provisioned user — i.e. the first magic-link sign-in. Includes their email, display name, and whether they got a fresh workspace or are awaiting acceptance of an invitation."
+            hasUrl={!!row?.slackNewUserUrl}
+            enabled={row?.slackNewUserEnabled ?? false}
+          />
+          <SlackWebhookCard
+            destination="topup"
+            title="Stripe top-up"
+            description="Fires when a Stripe payment credits a workspace — both manual Checkout top-ups and off-session auto-top-ups. Includes the workspace name, amount in dollars, and which kind."
+            hasUrl={!!row?.slackTopupUrl}
+            enabled={row?.slackTopupEnabled ?? false}
           />
         </div>
       </section>

@@ -1,10 +1,10 @@
-// Client bits for Settings. The page (RSC) fetches the current org state and
+// Client bits for Settings. The page (RSC) fetches the current workspace state and
 // passes values as defaults; this component handles submission + feedback.
 //
 // Layout: two top-level groups so the scope of each setting is obvious at
 // a glance.
 //   * Personal     — polish prefs + the user's vocabulary
-//   * Organization — name, auto-join, leave/delete (admin gating)
+//   * Workspace — name, auto-invite, leave/delete (admin gating)
 // Card titles within each group are h3; the group label itself is h2,
 // keeping the heading hierarchy semantic for screen readers.
 
@@ -64,11 +64,11 @@ export function SettingsClient({
       </Group>
 
       <Group
-        label="Organization"
-        description="Settings that apply to everyone in this organization."
+        label="Workspace"
+        description="Settings that apply to everyone in this workspace."
       >
         <Card
-          title="Organization name"
+          title="Workspace name"
           description="Shown in the sidebar and on invitation emails."
         >
           <TextFieldForm
@@ -81,8 +81,8 @@ export function SettingsClient({
         </Card>
 
         <Card
-          title="Auto-join by email domain"
-          description="Anyone signing up with a matching email domain is automatically added to this org as a member. Leave blank to turn off."
+          title="Auto-invite by email domain"
+          description="Anyone signing up with a matching email domain receives a pending invitation to this workspace and chooses Accept or Decline on first sign-in. Leave blank to turn off."
         >
           <TextFieldForm
             name="domain"
@@ -96,11 +96,11 @@ export function SettingsClient({
         </Card>
 
         <Card
-          title="Leave organization"
+          title="Leave workspace"
           description={
             isSoleOwner
-              ? "You're the only owner. Promote someone else first, or delete the org below."
-              : "Remove yourself from this org. Your transcription history on your Mac isn't affected."
+              ? "You're the only owner. Promote someone else first, or delete the workspace below."
+              : "Remove yourself from this workspace. Your transcription history on your Mac isn't affected."
           }
           danger
         >
@@ -109,8 +109,8 @@ export function SettingsClient({
 
         {role === "owner" && (
           <Card
-            title="Delete organization"
-            description="Permanently removes the org, every member, every invitation, and all usage history. Cannot be undone."
+            title="Delete workspace"
+            description="Permanently removes the workspace, every member, every invitation, and all usage history. Cannot be undone."
             danger
           >
             <DeleteForm orgSlug={orgSlug} />
@@ -252,13 +252,13 @@ function LeaveButton({ disabled }: { disabled: boolean }) {
       variant="outline"
       disabled={disabled || pending}
       onClick={() => {
-        if (!window.confirm("Leave this organization? You can be re-invited later.")) return;
+        if (!window.confirm("Leave this workspace? You can be re-invited later.")) return;
         startTransition(async () => {
           await leaveOrg();
         });
       }}
     >
-      {pending ? "Leaving…" : "Leave organization"}
+      {pending ? "Leaving…" : "Leave workspace"}
     </Button>
   );
 }
@@ -455,7 +455,7 @@ function DeleteForm({ orgSlug }: { orgSlug: string }) {
       action={(fd) => {
         if (
           !window.confirm(
-            "This deletes your org, members, invitations, and history. Continue?"
+            "This deletes your workspace, members, invitations, and history. Continue?"
           )
         ) {
           return;
@@ -474,7 +474,7 @@ function DeleteForm({ orgSlug }: { orgSlug: string }) {
       />
       <Button type="submit" variant="destructive" disabled={pending}>
         <Trash2 className="h-4 w-4" />
-        {pending ? "Deleting…" : "Delete org"}
+        {pending ? "Deleting…" : "Delete workspace"}
       </Button>
       {result && !result.ok && (
         <p className="text-sm text-destructive basis-full">{result.error}</p>

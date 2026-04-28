@@ -23,10 +23,10 @@ export default async function UsagePage() {
   const org = (await getCurrentOrgForUser(user.id))!;
 
   // Member-level users see only their own activity; owners/admins see
-  // the whole org. This feeds into three places:
+  // the whole workspace. This feeds into three places:
   //   1. The `userId` filter passed to each query.
-  //   2. Whether the "Top users" section is rendered (org-wide only).
-  //   3. Copy on the page header ("your" vs "your team's").
+  //   2. Whether the "Top users" section is rendered (workspace-wide only).
+  //   3. Copy on the page header ("your" vs "your workspace's").
   const isAdmin = org.role === "owner" || org.role === "admin";
   const scopedUserId = isAdmin ? undefined : user.id;
 
@@ -43,7 +43,7 @@ export default async function UsagePage() {
         title="Usage"
         description={
           isAdmin
-            ? "See how your team is using their word balance."
+            ? "See how your workspace is using its word balance."
             : "Your transcription activity."
         }
       />
@@ -79,9 +79,9 @@ export default async function UsagePage() {
         <UsageChart points={points} metric="words" />
       </section>
 
-      {/* Top users — org-wide view only; hidden for member-level users
-          who are looking at just their own stats and would see a table
-          with a single row (themselves). */}
+      {/* Top users — workspace-wide view only; hidden for member-level
+          users who are looking at just their own stats and would see a
+          table with a single row (themselves). */}
       {isAdmin && (
       <section>
         <h2 className="text-lg font-semibold tracking-tight mb-3">
@@ -90,7 +90,7 @@ export default async function UsagePage() {
         {topUsers.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border/70 bg-background p-10 text-center">
             <p className="text-sm text-muted-foreground">
-              No one on your team has transcribed anything yet.
+              No one in your workspace has transcribed anything yet.
             </p>
           </div>
         ) : (

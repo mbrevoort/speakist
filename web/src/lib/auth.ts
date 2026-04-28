@@ -11,6 +11,7 @@
 // Dev convenience: when RESEND_API_KEY is unset, magic links are logged to
 // the server console instead of emailed. See `sendVerificationRequest`.
 
+import { eq } from "drizzle-orm";
 import NextAuth, { type NextAuthConfig } from "next-auth";
 import Resend from "next-auth/providers/resend";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
@@ -18,11 +19,13 @@ import type { Adapter } from "next-auth/adapters";
 import { getDb } from "@/lib/db";
 import {
   accounts,
+  organizations,
   sessions,
   users,
   verificationTokens,
 } from "@/lib/db/schema";
 import { provisionNewUser } from "@/lib/orgs";
+import { notifyNewUser } from "@/lib/slack";
 
 /**
  * Build the Auth.js config. We build lazily because the Drizzle adapter needs
@@ -130,11 +133,12 @@ export function buildAuthConfig(): NextAuthConfig {
         // org, add them as owner, and grant the signup bonus. See
         // src/lib/orgs.ts for the decision tree.
         if (!user.id) return;
+        let provisionResult: Awaited<ReturnType<typeof provisionNewUser>> | null = null;
         try {
-          const result = await provisionNewUser(user.id);
+          provisionResult = await provisionNewUser(user.id);
           console.log(
-            `[auth] provisioned new user ${user.email} → ${result.kind}${
-              "orgId" in result ? ` (org=${result.orgId})` : ""
+            `[auth] provisioned new user ${user.email} → ${provisionResult.kind}${
+              "orgId" in provisionResult ? ` (org=${provisionResult.orgId})` : ""
             }`
           );
         } catch (err) {
@@ -143,6 +147,35 @@ export function buildAuthConfig(): NextAuthConfig {
           // detect the missing org and show a "Provisioning failed" state,
           // which is better than losing the session entirely.
           console.error("[auth] provisionNewUser failed:", err);
+        }
+
+        // Optional Slack notification. Resolved at this layer (rather than
+        // inside provisionNewUser) so the notifier sees the user details
+        // Auth.js already gave us — and so a partial provisioning failure
+        // above doesn't suppress the "new user signed in" signal.
+        try {
+          let orgName: string | null = null;
+          if (
+            provisionResult &&
+            "orgId" in provisionResult &&
+            provisionResult.orgId
+          ) {
+            const db = getDb();
+            const [org] = await db
+              .select({ name: organizations.name })
+              .from(organizations)
+              .where(eq(organizations.id, provisionResult.orgId))
+              .limit(1);
+            orgName = org?.name ?? null;
+          }
+          await notifyNewUser({
+            email: user.email ?? "(no email)",
+            displayName: user.name ?? null,
+            provisionKind: provisionResult?.kind ?? "skipped",
+            orgName,
+          });
+        } catch (err) {
+          console.error("[auth] notifyNewUser failed:", err);
         }
       },
     },

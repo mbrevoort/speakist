@@ -110,6 +110,14 @@ targets:
         # `Speakist Dev.app`, etc. — so users see the channel in /Applications
         # and in the Dock, not a generic "Speakist" for every channel.
         PRODUCT_NAME: $(SPEAKIST_DISPLAY_NAME)
+        # PRODUCT_MODULE_NAME pinned to "Speakist" so the Swift module
+        # identifier stays channel-agnostic — otherwise Local builds get
+        # a module called `Speakist_Local` (PRODUCT_NAME with spaces
+        # replaced by underscores) and `@testable import Speakist` in
+        # SpeakistTests fails to resolve. PRODUCT_MODULE_NAME only
+        # affects the Swift module name, not the bundle / app name /
+        # entitlements isolation, so per-channel sandboxing is unchanged.
+        PRODUCT_MODULE_NAME: Speakist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         COMBINE_HIDPI_IMAGES: YES
