@@ -9,6 +9,10 @@
 // PolishedOutput sits right after the hero — it's the visceral demo of
 // the polish value prop (raw speech → clean text), and lands the
 // "better than built-in" pitch before the abstract value-prop cards.
+//
+// FAQ lives at /faq as its own page (linked from the nav and footer)
+// rather than as a section here, to keep the home page focused on
+// conversion.
 
 import { Nav } from "@/components/marketing/nav";
 import { Hero } from "@/components/marketing/hero";

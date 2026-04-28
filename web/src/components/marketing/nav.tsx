@@ -24,13 +24,13 @@ export async function Nav() {
         </Link>
 
         <nav className="hidden md:flex items-center gap-1 text-sm text-muted-foreground">
-          <Link href="#how" className="px-3 py-2 hover:text-foreground transition-colors">
+          <Link href="/#how" className="px-3 py-2 hover:text-foreground transition-colors">
             How it works
           </Link>
-          <Link href="#pricing" className="px-3 py-2 hover:text-foreground transition-colors">
+          <Link href="/#pricing" className="px-3 py-2 hover:text-foreground transition-colors">
             Pricing
           </Link>
-          <Link href="#faq" className="px-3 py-2 hover:text-foreground transition-colors">
+          <Link href="/faq" className="px-3 py-2 hover:text-foreground transition-colors">
             FAQ
           </Link>
         </nav>
