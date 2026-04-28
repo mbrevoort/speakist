@@ -1,14 +1,18 @@
-// Combined account + org settings.
-//   * Polish prompt + enabled toggle  — per-user
-//   * Org name, auto-join domain      — admin+
-//   * Leave / delete org              — situational
+// Combined account + org settings, grouped into:
+//   * Personal     — polish prefs + the user's dictionary (vocabulary)
+//   * Organization — name, auto-join domain, leave/delete (admin gating)
+//
+// The vocabulary editor mirrors the Mac app's Settings → Dictionary tab
+// so users can manage the same per-user list of corrections from either
+// surface. Source of truth is the `vocabulary_entries` table, the same
+// rows the Mac syncs to via /api/vocabulary.
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
-import { orgMembers, users } from "@/lib/db/schema";
+import { orgMembers, users, vocabularyEntries } from "@/lib/db/schema";
 import type { PolishMode } from "@/lib/transcription/polish";
 import { SettingsClient } from "./settings-client";
 
@@ -42,11 +46,30 @@ export default async function SettingsPage() {
 
   const polishMode: PolishMode = (polishRow?.mode as PolishMode) ?? "prescriptive";
 
+  // Live (non-tombstoned) dictionary entries for this user, newest-used
+  // first. Same row scope the Mac app fetches via GET /api/vocabulary.
+  const vocabRows = await db
+    .select({
+      id: vocabularyEntries.id,
+      fromText: vocabularyEntries.fromText,
+      toText: vocabularyEntries.toText,
+      count: vocabularyEntries.count,
+      isProperNoun: vocabularyEntries.isProperNoun,
+    })
+    .from(vocabularyEntries)
+    .where(
+      and(
+        eq(vocabularyEntries.userId, user.id),
+        isNull(vocabularyEntries.deletedAt)
+      )
+    )
+    .orderBy(desc(vocabularyEntries.lastSeen));
+
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Settings"
-        description="Your account and your organization."
+        description="Your personal preferences and your organization."
       />
       <SettingsClient
         orgName={org.name}
@@ -57,6 +80,7 @@ export default async function SettingsPage() {
         role={org.role}
         polishEnabled={!!polishRow?.enabled}
         polishMode={polishMode}
+        vocabEntries={vocabRows}
       />
     </div>
   );

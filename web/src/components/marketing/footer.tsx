@@ -25,9 +25,9 @@ export function Footer() {
           </div>
 
           <FooterCol title="Product">
-            <FooterLink href="#how">How it works</FooterLink>
-            <FooterLink href="#pricing">Pricing</FooterLink>
-            <FooterLink href="#faq">FAQ</FooterLink>
+            <FooterLink href="/#how">How it works</FooterLink>
+            <FooterLink href="/#pricing">Pricing</FooterLink>
+            <FooterLink href="/faq">FAQ</FooterLink>
           </FooterCol>
 
           <FooterCol title="Account">

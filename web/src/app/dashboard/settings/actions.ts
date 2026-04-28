@@ -13,7 +13,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
-import { organizations, orgMembers, users } from "@/lib/db/schema";
+import {
+  organizations,
+  orgMembers,
+  users,
+  vocabularyEntries,
+} from "@/lib/db/schema";
 import { requireUser, requireOrgAdmin } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 
@@ -93,6 +98,170 @@ export async function setPolishMode(formData: FormData): Promise<ActionResult> {
 // Note: per-user prompt customization was removed. The two mode prompts
 // are now configured globally by super admins at /admin/system. End-user
 // Settings only exposes the toggle + mode picker.
+
+// --- dictionary (per-user) -------------------------------------------------
+//
+// CRUD over `vocabulary_entries` for the signed-in user. The API at
+// /api/vocabulary is what the Mac app talks to over HTTP; in the dashboard
+// we hit the DB directly via server actions. Both code paths preserve the
+// same invariants (soft delete via deletedAt, ownership check, unique
+// (user_id, from_text, to_text)).
+
+const fromSchema = z.string().trim().min(1).max(200);
+const toSchema = z.string().trim().min(1).max(500);
+
+const vocabAddSchema = z.object({
+  from: fromSchema,
+  to: toSchema,
+  isProperNoun: z.enum(["on", "off"]).optional(),
+});
+
+export async function addVocabEntry(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = vocabAddSchema.safeParse({
+      from: formData.get("from"),
+      to: formData.get("to"),
+      isProperNoun: formData.get("isProperNoun") ?? "off",
+    });
+    if (!parsed.success) {
+      return { ok: false, error: "Both From and To are required." };
+    }
+
+    const db = getDb();
+    const now = new Date();
+    // Mirrors the upsert semantics of POST /api/vocabulary so the same
+    // (from, to) pair re-added (or recovered from a tombstone) updates
+    // in place rather than creating a duplicate row.
+    await db
+      .insert(vocabularyEntries)
+      .values({
+        userId: user.id,
+        fromText: parsed.data.from,
+        toText: parsed.data.to,
+        isProperNoun: parsed.data.isProperNoun === "on",
+        lastSeen: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          vocabularyEntries.userId,
+          vocabularyEntries.fromText,
+          vocabularyEntries.toText,
+        ],
+        set: {
+          isProperNoun: parsed.data.isProperNoun === "on",
+          lastSeen: now,
+          updatedAt: now,
+          deletedAt: null,
+        },
+      });
+
+    revalidatePath("/dashboard/settings");
+    return { ok: true, message: "Added." };
+  } catch (err) {
+    console.error("addVocabEntry failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
+const vocabUpdateSchema = z.object({
+  id: z.string().uuid(),
+  from: fromSchema,
+  to: toSchema,
+  isProperNoun: z.enum(["on", "off"]),
+});
+
+export async function updateVocabEntry(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = vocabUpdateSchema.safeParse({
+      id: formData.get("id"),
+      from: formData.get("from"),
+      to: formData.get("to"),
+      isProperNoun: formData.get("isProperNoun") ?? "off",
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    const now = new Date();
+
+    // Ownership check before mutating so a leaked id can't update someone
+    // else's row.
+    const [existing] = await db
+      .select({ userId: vocabularyEntries.userId })
+      .from(vocabularyEntries)
+      .where(eq(vocabularyEntries.id, parsed.data.id))
+      .limit(1);
+    if (!existing || existing.userId !== user.id) {
+      return { ok: false, error: "Entry not found." };
+    }
+
+    try {
+      await db
+        .update(vocabularyEntries)
+        .set({
+          fromText: parsed.data.from,
+          toText: parsed.data.to,
+          isProperNoun: parsed.data.isProperNoun === "on",
+          updatedAt: now,
+          deletedAt: null,
+        })
+        .where(eq(vocabularyEntries.id, parsed.data.id));
+    } catch (err) {
+      // Most likely a unique-constraint collision — another row already
+      // owns the new (from, to). Return a friendly message instead of a
+      // 500 so the UI can revert.
+      console.error("updateVocabEntry conflict:", err);
+      return {
+        ok: false,
+        error: "An entry with that From → To already exists.",
+      };
+    }
+
+    revalidatePath("/dashboard/settings");
+    return { ok: true, message: "Saved." };
+  } catch (err) {
+    console.error("updateVocabEntry failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
+const vocabDeleteSchema = z.object({ id: z.string().uuid() });
+
+export async function deleteVocabEntry(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const parsed = vocabDeleteSchema.safeParse({ id: formData.get("id") });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    const now = new Date();
+
+    // Soft delete + ownership scope in one shot. If the id doesn't belong
+    // to the caller, the WHERE matches nothing and the call is a no-op.
+    await db
+      .update(vocabularyEntries)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(vocabularyEntries.id, parsed.data.id),
+          eq(vocabularyEntries.userId, user.id)
+        )
+      );
+
+    revalidatePath("/dashboard/settings");
+    return { ok: true, message: "Deleted." };
+  } catch (err) {
+    console.error("deleteVocabEntry failed:", err);
+    return { ok: false, error: "Couldn't delete." };
+  }
+}
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(80) });
 

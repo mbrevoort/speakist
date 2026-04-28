@@ -1,5 +1,12 @@
 // Client bits for Settings. The page (RSC) fetches the current org state and
 // passes values as defaults; this component handles submission + feedback.
+//
+// Layout: two top-level groups so the scope of each setting is obvious at
+// a glance.
+//   * Personal     — polish prefs + the user's dictionary
+//   * Organization — name, auto-join, leave/delete (admin gating)
+// Card titles within each group are h3; the group label itself is h2,
+// keeping the heading hierarchy semantic for screen readers.
 
 "use client";
 
@@ -17,6 +24,7 @@ import {
   setPolishMode,
   type ActionResult,
 } from "./actions";
+import { DictionaryCard, type VocabEntry } from "./dictionary-card";
 
 type PolishMode = "intuitive" | "prescriptive";
 
@@ -31,6 +39,7 @@ interface Props {
    *  has the right values without a client-side fetch. */
   polishEnabled: boolean;
   polishMode: PolishMode;
+  vocabEntries: VocabEntry[];
 }
 
 export function SettingsClient({
@@ -42,62 +51,103 @@ export function SettingsClient({
   role,
   polishEnabled,
   polishMode,
+  vocabEntries,
 }: Props) {
   return (
-    <div className="space-y-10">
-      <PolishCard enabled={polishEnabled} mode={polishMode} />
-
-      <Card title="Organization name" description="Shown in the sidebar and on invitation emails.">
-        <TextFieldForm
-          name="name"
-          defaultValue={orgName}
-          action={updateOrgName}
-          disabled={!canAdmin}
-          disabledNote={!canAdmin ? "Only owners and admins can edit." : undefined}
-        />
-      </Card>
-
-      <Card
-        title="Auto-join by email domain"
-        description="Anyone signing up with a matching email domain is automatically added to this org as a member. Leave blank to turn off."
+    <div className="space-y-12">
+      <Group
+        label="Personal"
+        description="Settings that apply only to your account. Sync to your Mac and iPhone on next launch."
       >
-        <TextFieldForm
-          name="domain"
-          defaultValue={autoJoinDomain ?? ""}
-          placeholder="acme.com"
-          action={updateAutoJoinDomain}
-          disabled={!canAdmin}
-          disabledNote={!canAdmin ? "Only owners and admins can edit." : undefined}
-          prefix="@"
-        />
-      </Card>
+        <PolishCard enabled={polishEnabled} mode={polishMode} />
+        <DictionaryCard entries={vocabEntries} />
+      </Group>
 
-      <Card
-        title="Leave organization"
-        description={
-          isSoleOwner
-            ? "You're the only owner. Promote someone else first, or delete the org below."
-            : "Remove yourself from this org. Your transcription history on your Mac isn't affected."
-        }
-        danger
+      <Group
+        label="Organization"
+        description="Settings that apply to everyone in this organization."
       >
-        <LeaveButton disabled={isSoleOwner} />
-      </Card>
-
-      {role === "owner" && (
         <Card
-          title="Delete organization"
-          description="Permanently removes the org, every member, every invitation, and all usage history. Cannot be undone."
+          title="Organization name"
+          description="Shown in the sidebar and on invitation emails."
+        >
+          <TextFieldForm
+            name="name"
+            defaultValue={orgName}
+            action={updateOrgName}
+            disabled={!canAdmin}
+            disabledNote={!canAdmin ? "Only owners and admins can edit." : undefined}
+          />
+        </Card>
+
+        <Card
+          title="Auto-join by email domain"
+          description="Anyone signing up with a matching email domain is automatically added to this org as a member. Leave blank to turn off."
+        >
+          <TextFieldForm
+            name="domain"
+            defaultValue={autoJoinDomain ?? ""}
+            placeholder="acme.com"
+            action={updateAutoJoinDomain}
+            disabled={!canAdmin}
+            disabledNote={!canAdmin ? "Only owners and admins can edit." : undefined}
+            prefix="@"
+          />
+        </Card>
+
+        <Card
+          title="Leave organization"
+          description={
+            isSoleOwner
+              ? "You're the only owner. Promote someone else first, or delete the org below."
+              : "Remove yourself from this org. Your transcription history on your Mac isn't affected."
+          }
           danger
         >
-          <DeleteForm orgSlug={orgSlug} />
+          <LeaveButton disabled={isSoleOwner} />
         </Card>
-      )}
+
+        {role === "owner" && (
+          <Card
+            title="Delete organization"
+            description="Permanently removes the org, every member, every invitation, and all usage history. Cannot be undone."
+            danger
+          >
+            <DeleteForm orgSlug={orgSlug} />
+          </Card>
+        )}
+      </Group>
     </div>
   );
 }
 
 // --- building blocks -------------------------------------------------------
+
+function Group({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-5">
+      <div className="border-b border-border/60 pb-3">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-peach-deep">
+          {label}
+        </h2>
+        {description && (
+          <p className="mt-1.5 text-sm text-muted-foreground max-w-2xl">
+            {description}
+          </p>
+        )}
+      </div>
+      <div className="space-y-6">{children}</div>
+    </div>
+  );
+}
 
 function Card({
   title,
@@ -117,7 +167,7 @@ function Card({
         danger ? "border-destructive/30 bg-destructive/[0.02]" : "border-border/70 bg-background"
       )}
     >
-      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
       {description && (
         <p className="mt-1 text-sm text-muted-foreground max-w-xl">{description}</p>
       )}
