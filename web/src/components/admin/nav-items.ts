@@ -12,7 +12,7 @@ export interface AdminNavItem {
 
 export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Overview", href: "/admin", icon: Home },
-  { label: "Organizations", href: "/admin/orgs", icon: Building2 },
+  { label: "Workspaces", href: "/admin/orgs", icon: Building2 },
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Pricing", href: "/admin/pricing", icon: DollarSign },
   { label: "System", href: "/admin/system", icon: Server },

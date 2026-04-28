@@ -7,13 +7,9 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
 import { LinkIcon } from "lucide-react";
 import { Wordmark } from "@/components/brand/logo";
 import { getAuth } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { users } from "@/lib/db/schema";
-import { getOrgsForUser } from "@/lib/orgs";
 import { LinkClient } from "./link-client";
 
 export const metadata = { title: "Link your device — Speakist" };
@@ -30,24 +26,6 @@ export default async function LinkPage({
   if (!session?.user) {
     const target = code ? `/link?code=${encodeURIComponent(code)}` : "/link";
     redirect(`/auth/signin?callbackUrl=${encodeURIComponent(target)}`);
-  }
-
-  // Fetch the user's memberships so the picker can render when there's
-  // more than one. Single-membership users see no picker — same UX as
-  // before this feature shipped.
-  const userId = (session.user as { id?: string }).id;
-  const orgs = userId ? await getOrgsForUser(userId) : [];
-  let defaultOrgId: string | null = null;
-  if (userId && orgs.length > 1) {
-    const db = getDb();
-    const [row] = await db
-      .select({ lastActiveOrgId: users.lastActiveOrgId })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    defaultOrgId =
-      (row?.lastActiveOrgId && orgs.find((o) => o.id === row.lastActiveOrgId)?.id) ||
-      orgs[0].id;
   }
 
   return (
@@ -80,8 +58,6 @@ export default async function LinkPage({
         <LinkClient
           defaultCode={code ?? ""}
           userEmail={session.user.email ?? ""}
-          orgs={orgs}
-          defaultOrgId={defaultOrgId}
         />
       </div>
 

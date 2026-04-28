@@ -69,7 +69,7 @@ export default async function SettingsPage() {
     <div className="mx-auto max-w-4xl">
       <PageHeader
         title="Settings"
-        description="Your personal preferences and your organization."
+        description="Your personal preferences and your workspace."
       />
       <SettingsClient
         orgName={org.name}

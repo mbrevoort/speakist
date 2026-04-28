@@ -9,8 +9,12 @@
 //      button that hops to /auth/signin with this URL as callback
 //   3. User signed in but with a different email → show a sign-out + retry
 //      prompt (the invitation is email-locked)
-//   4. Everything matches → show "Join {Org}" button that calls the server
-//      action and redirects to /dashboard
+//   4. User signed in as right email AND already in a different org →
+//      "Switch from {CurrentOrg} to {NewOrg}?" warning. Sole-owner branch
+//      additionally requires typing the current org's slug to confirm
+//      its deletion.
+//   5. User signed in as right email AND has no current org → simple
+//      "Join {Org}" button.
 //
 // Security note: the token is a 48-char hex. We scope every DB query by the
 // token, so even though this page is public, the only thing an unauth
@@ -18,10 +22,15 @@
 // possess.
 
 import Link from "next/link";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { CheckCircle2, MailWarning, XCircle } from "lucide-react";
 import { getDb } from "@/lib/db";
-import { invitations, organizations, users } from "@/lib/db/schema";
+import {
+  invitations,
+  organizations,
+  orgMembers,
+  users,
+} from "@/lib/db/schema";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/brand/logo";
 import { getAuth } from "@/lib/auth";
@@ -168,7 +177,19 @@ export default async function InvitePage({
     );
   }
 
-  // 4. Signed in as the right email → accept.
+  // 4 / 5. Signed in as the right email. Determine whether they already
+  // belong to a different org (and whether they're its sole owner) so we
+  // can render the appropriate confirmation UI.
+  const userId = session?.user
+    ? (session.user as { id?: string }).id
+    : undefined;
+  const currentMembership = userId
+    ? await loadCurrentMembership(userId)
+    : null;
+  const switching =
+    !!currentMembership && currentMembership.orgId !== row.orgId;
+  const soleOwner = switching ? await isSoleOwner(currentMembership) : false;
+
   return (
     <Shell>
       <InvitationSummary
@@ -176,14 +197,108 @@ export default async function InvitePage({
         inviterEmail={row.inviterEmail}
         role={row.role}
       />
-      <form action={acceptInvitation} className="mt-6">
+
+      {switching && (
+        <div className="mt-5 rounded-xl border border-mustard/40 bg-mustard/5 p-4 text-left">
+          <p className="text-sm font-medium text-mustard">
+            Heads up — you&apos;re currently in {currentMembership!.orgName}.
+          </p>
+          {soleOwner ? (
+            <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+              You&apos;re the sole owner of{" "}
+              <span className="font-mono text-foreground">
+                {currentMembership!.orgSlug}
+              </span>
+              . Joining {row.orgName} will <strong>delete that workspace</strong>{" "}
+              and everything in it (members, usage, credits). Type its slug
+              below to confirm.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+              Joining {row.orgName} will remove you from{" "}
+              {currentMembership!.orgName}. The workspace itself stays put
+              for the other members.
+            </p>
+          )}
+        </div>
+      )}
+
+      <form action={acceptInvitation} className="mt-6 space-y-3">
         <input type="hidden" name="token" value={row.token} />
+        {switching && soleOwner && (
+          <input
+            type="text"
+            name="confirm_current_org_slug"
+            required
+            autoComplete="off"
+            placeholder={`type "${currentMembership!.orgSlug}" to confirm`}
+            className="block w-full rounded-xl border border-input bg-background px-4 py-2.5 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+        )}
         <Button type="submit" size="lg" className="w-full">
-          Join {row.orgName}
+          {switching
+            ? `Switch to ${row.orgName}`
+            : `Join ${row.orgName}`}
         </Button>
       </form>
+
+      {/*
+        Escape hatch. Critical when the action is destructive (sole-owner
+        delete + switch) — the user always needs a way to back out without
+        committing to either decision. Reads "Not now" in both cases so
+        the wording stays consistent regardless of stakes; the consequence
+        is already spelled out in the warning panel above when applicable.
+        Routes to /dashboard, which renders the no-org panel for brand-new
+        users (the invitation stays pending) and the regular dashboard for
+        users already in a workspace.
+      */}
+      <div className="mt-4 text-center">
+        <Link
+          href="/dashboard"
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Not now
+        </Link>
+      </div>
     </Shell>
   );
+}
+
+// --- helpers ---------------------------------------------------------------
+
+interface CurrentMembership {
+  orgId: string;
+  orgName: string;
+  orgSlug: string;
+  role: "owner" | "admin" | "member";
+}
+
+async function loadCurrentMembership(
+  userId: string
+): Promise<CurrentMembership | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      orgId: organizations.id,
+      orgName: organizations.name,
+      orgSlug: organizations.slug,
+      role: orgMembers.role,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(organizations.id, orgMembers.orgId))
+    .where(eq(orgMembers.userId, userId))
+    .limit(1);
+  return row ?? null;
+}
+
+async function isSoleOwner(m: CurrentMembership): Promise<boolean> {
+  if (m.role !== "owner") return false;
+  const db = getDb();
+  const owners = await db
+    .select({ userId: orgMembers.userId })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, m.orgId), eq(orgMembers.role, "owner")));
+  return owners.length <= 1;
 }
 
 // --- pieces ----------------------------------------------------------------

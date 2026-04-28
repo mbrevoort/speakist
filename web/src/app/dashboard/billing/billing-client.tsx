@@ -77,8 +77,8 @@ export function BillingClient(props: Props) {
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
           {isComped
-            ? "This org is comped — usage doesn't debit your balance."
-            : "Debits in real time as your team transcribes."}
+            ? "This workspace is comped — usage doesn't debit your balance."
+            : "Debits in real time as your workspace transcribes."}
         </p>
         {!isComped && (
           <p className="mt-3 text-xs text-muted-foreground tabular-nums">
@@ -261,7 +261,7 @@ function AutoTopupCard({
           <p className="mt-1 text-sm text-muted-foreground max-w-lg">
             When your remaining words drop below the threshold, we
             automatically charge your saved payment method and add words
-            so your team never stops transcribing. The monthly cap is the
+            so your workspace never stops transcribing. The monthly cap is the
             most we&apos;ll ever auto-charge in a calendar month.
           </p>
         </div>

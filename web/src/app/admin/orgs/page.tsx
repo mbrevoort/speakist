@@ -1,7 +1,7 @@
-// Admin → Organizations list.
+// Admin → Workspaces list.
 //
-// One row per org with key stats. Search filters on name/slug/domain via
-// URL query (?q=acme) so the page stays server-rendered + linkable.
+// One row per workspace with key stats. Search filters on name/slug/domain
+// via URL query (?q=acme) so the page stays server-rendered + linkable.
 
 import Link from "next/link";
 import { ArrowRight, Gift } from "lucide-react";
@@ -10,7 +10,7 @@ import { requireSuperAdmin } from "@/lib/authz";
 import { listAllOrgs } from "@/lib/admin";
 import { formatDollars } from "@/lib/utils";
 
-export const metadata = { title: "Organizations — Admin" };
+export const metadata = { title: "Workspaces — Admin" };
 
 export default async function AdminOrgsList({
   searchParams,
@@ -24,8 +24,8 @@ export default async function AdminOrgsList({
   return (
     <div className="mx-auto max-w-6xl">
       <PageHeader
-        title="Organizations"
-        description="Every org on the platform. Click one to manage."
+        title="Workspaces"
+        description="Every workspace on the platform. Click one to manage."
       />
 
       <form className="mb-6">
@@ -41,7 +41,7 @@ export default async function AdminOrgsList({
       {orgs.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/70 bg-background p-10 text-center">
           <p className="text-sm text-muted-foreground">
-            {q ? `No orgs match "${q}".` : "No organizations yet."}
+            {q ? `No workspaces match "${q}".` : "No workspaces yet."}
           </p>
         </div>
       ) : (
@@ -49,7 +49,7 @@ export default async function AdminOrgsList({
           <table className="w-full text-sm min-w-[640px]">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground border-b border-border/70">
-                <th className="px-5 py-3 font-medium">Org</th>
+                <th className="px-5 py-3 font-medium">Workspace</th>
                 <th className="px-5 py-3 font-medium">Members</th>
                 <th className="px-5 py-3 font-medium text-right">Balance</th>
                 <th className="px-5 py-3 font-medium text-right">Lifetime spend</th>
@@ -67,7 +67,7 @@ export default async function AdminOrgsList({
                         {o.isComped && (
                           <span
                             className="inline-flex items-center gap-1 rounded-full bg-peach/15 text-peach-deep text-[10px] font-semibold px-2 py-0.5 uppercase"
-                            title="Comped org"
+                            title="Comped workspace"
                           >
                             <Gift className="h-3 w-3" /> Comp
                           </span>

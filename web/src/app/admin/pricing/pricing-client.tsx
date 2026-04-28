@@ -51,7 +51,7 @@ export function PricingEditor(p: Props) {
         label="Signup bonus ($)"
         name="signupBonusDollars"
         defaultValue={p.signupBonusDollars}
-        helper="Granted to every new org on first provisioning."
+        helper="Granted to every new workspace on first provisioning. Once-per-user lifetime; users who leave and recreate don't re-mint it."
         prefix="$"
         step="0.01"
       />

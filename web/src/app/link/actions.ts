@@ -2,7 +2,10 @@
 //
 // confirmDeviceCode validates the user_code against device_auth_codes,
 // stamps user_id + approved_at on success. /api/device/poll then hands
-// out an access token on the next Mac poll.
+// out an access token on the next Mac poll. Pre-condition: the signed-in
+// user has exactly one org (one-org-per-user invariant). If they have
+// none, we surface a friendly "set up a workspace first" error so the
+// Mac can show the right hint.
 
 "use server";
 
@@ -11,7 +14,7 @@ import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { deviceAuthCodes } from "@/lib/db/schema";
 import { requireUser } from "@/lib/authz";
-import { getOrgsForUser, setActiveOrgForUser } from "@/lib/orgs";
+import { getCurrentOrgForUser } from "@/lib/orgs";
 
 export type ConfirmResult =
   | { ok: true; message: string }
@@ -25,9 +28,6 @@ const schema = z.object({
     .trim()
     .transform((s) => s.toUpperCase().replace(/\s+/g, ""))
     .pipe(z.string().min(8).max(16)),
-  // Optional workspace selection. Required when the user has 2+ memberships
-  // — see the multi-org check below. Single-membership users can omit it.
-  workspace_org_id: z.string().min(1).optional(),
 });
 
 export async function confirmDeviceCode(
@@ -37,33 +37,23 @@ export async function confirmDeviceCode(
 
   const parsed = schema.safeParse({
     user_code: formData.get("user_code"),
-    workspace_org_id: formData.get("workspace_org_id") || undefined,
   });
   if (!parsed.success) {
     return { ok: false, error: "That doesn't look like a valid code." };
   }
   const userCode = parsed.data.user_code;
-  const workspaceOrgId = parsed.data.workspace_org_id;
 
-  // Multi-org gate: if the user belongs to 2+ orgs, they must explicitly
-  // pick one before approving the device. Otherwise the Mac would land
-  // on whichever org the resolver fell back to, which is not what the
-  // user thinks they're authorizing.
-  const memberships = await getOrgsForUser(user.id);
-  if (memberships.length >= 2 && !workspaceOrgId) {
+  // No-org guard. With one-org-per-user, anyone authorizing a device must
+  // already be in an org — otherwise the Mac wouldn't have anywhere to
+  // bill against. Send them back to /dashboard where the no-org panel
+  // will offer to create a workspace or accept a pending invite.
+  const org = await getCurrentOrgForUser(user.id);
+  if (!org) {
     return {
       ok: false,
-      error: "Pick which workspace this Mac should sign into.",
+      error:
+        "You don't have a workspace yet. Set one up on the dashboard first, then try linking again.",
     };
-  }
-  if (workspaceOrgId) {
-    const r = await setActiveOrgForUser(user.id, workspaceOrgId);
-    if (!r.ok) {
-      return {
-        ok: false,
-        error: "That workspace isn't one of yours. Pick again.",
-      };
-    }
   }
 
   const db = getDb();

@@ -22,6 +22,7 @@ import { getStripe, getWebhookCryptoProvider } from "@/lib/stripe";
 import { recordStripeTopup } from "@/lib/credits";
 import { getDb } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
+import { notifyTopup } from "@/lib/slack";
 
 export async function POST(req: Request): Promise<Response> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -103,7 +104,7 @@ async function handleCheckoutCompleted(event: Stripe.Event) {
     return;
   }
 
-  await recordStripeTopup({
+  const { duplicate } = await recordStripeTopup({
     orgId,
     stripeEventId: event.id,
     amountMillicents: creditMillicents,
@@ -116,6 +117,15 @@ async function handleCheckoutCompleted(event: Stripe.Event) {
   // the default so auto-top-up can use it next time.
   if (session.payment_intent) {
     await captureDefaultPaymentMethod(orgId, session.payment_intent as string);
+  }
+
+  if (!duplicate) {
+    await notifyTopupForOrg({
+      orgId,
+      amountMillicents: creditMillicents,
+      kind: "manual",
+      userEmail: session.customer_details?.email ?? null,
+    });
   }
 }
 
@@ -135,13 +145,23 @@ async function handlePaymentIntentSucceeded(event: Stripe.Event) {
   const amountMillicentsStr = pi.metadata?.amountMillicents;
   if (!orgId || !amountMillicentsStr) return;
 
-  await recordStripeTopup({
+  const amountMillicents = Number(amountMillicentsStr);
+  const { duplicate } = await recordStripeTopup({
     orgId,
     stripeEventId: event.id,
-    amountMillicents: Number(amountMillicentsStr),
+    amountMillicents,
     reason: "stripe_auto_topup",
     note: `Auto top-up via PaymentIntent ${pi.id}`,
   });
+
+  if (!duplicate) {
+    await notifyTopupForOrg({
+      orgId,
+      amountMillicents,
+      kind: "auto",
+      userEmail: null,
+    });
+  }
 }
 
 async function handlePaymentIntentFailed(event: Stripe.Event) {
@@ -159,6 +179,38 @@ async function handlePaymentIntentFailed(event: Stripe.Event) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+interface NotifyTopupForOrgArgs {
+  orgId: string;
+  amountMillicents: number;
+  kind: "manual" | "auto";
+  userEmail: string | null;
+}
+
+/**
+ * Look up the org's display name and post a Slack top-up notification.
+ * Failures are logged but never propagated — Stripe's webhook retry
+ * shouldn't fire just because Slack was flaky, and the credit has
+ * already landed in the ledger by the time we get here.
+ */
+async function notifyTopupForOrg(args: NotifyTopupForOrgArgs) {
+  try {
+    const db = getDb();
+    const [org] = await db
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.id, args.orgId))
+      .limit(1);
+    await notifyTopup({
+      orgName: org?.name ?? `(unknown org ${args.orgId})`,
+      kind: args.kind,
+      amountMillicents: args.amountMillicents,
+      userEmail: args.userEmail,
+    });
+  } catch (err) {
+    console.error("[stripe webhook] notifyTopup failed:", err);
+  }
+}
 
 async function captureDefaultPaymentMethod(orgId: string, paymentIntentId: string) {
   try {

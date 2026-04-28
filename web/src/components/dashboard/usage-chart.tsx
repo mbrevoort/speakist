@@ -98,8 +98,8 @@ export function UsageChart({ points, metric, className }: Props) {
       </div>
       {total === 0 && (
         <p className="mt-4 text-center text-sm text-muted-foreground">
-          No usage yet. Transcriptions will appear here once your team starts
-          dictating.
+          No usage yet. Transcriptions will appear here once your workspace
+          starts dictating.
         </p>
       )}
     </div>

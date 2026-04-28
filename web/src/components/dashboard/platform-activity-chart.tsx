@@ -60,7 +60,7 @@ export function PlatformActivityChart({ points, className }: Props) {
       />
       {totalWords === 0 && totalEvents > 0 && (
         <p className="text-center text-sm text-muted-foreground">
-          No platform activity yet. Charts populate once orgs start
+          No platform activity yet. Charts populate once workspaces start
           transcribing.
         </p>
       )}

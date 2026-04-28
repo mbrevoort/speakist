@@ -71,15 +71,13 @@ export const users = sqliteTable("users", {
   polishMode: text("polish_mode", { enum: ["intuitive", "prescriptive"] })
     .notNull()
     .default("prescriptive"),
-  // Active workspace for users who belong to multiple orgs. NULL means
-  // "no explicit choice yet — use earliest-joined as fallback". Set
-  // when the user picks a workspace at sign-in (/link), accepts an
-  // invitation (auto-set to the newly-joined org), or uses the
-  // workspace switcher in the dashboard topbar. Read by
-  // `getCurrentOrgForUser`, which self-heals to earliest-joined-other
-  // if the persisted org is no longer one the user is a member of
-  // (e.g., an admin removed them).
-  lastActiveOrgId: text("last_active_org_id"),
+  // One-shot per-user gate on the signup bonus. Stamped the first time
+  // the user gets an org provisioned (whether by `provisionNewUser` on
+  // first sign-in or by the dashboard "create your own workspace" CTA
+  // after leaving a previous org). Once non-null, no future org
+  // creation by this user grants the bonus again — preventing a
+  // leave-and-recreate loop from minting credit endlessly.
+  signupBonusGrantedAt: timestampMs("signup_bonus_granted_at"),
   createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
@@ -199,7 +197,10 @@ export const orgMembers = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.orgId, t.userId] }),
-    userIdx: index("org_members_user_idx").on(t.userId),
+    // Enforced one-org-per-user invariant. Migration 0015 added the
+    // matching UNIQUE INDEX at the SQL layer; reflecting it here keeps
+    // Drizzle introspection in sync.
+    userUnique: uniqueIndex("org_members_user_unique").on(t.userId),
   })
 );
 
@@ -412,6 +413,16 @@ export const appSettings = sqliteTable("app_settings", {
   // Used to lock down dev/staging to invite-only access. Production stays
   // at true (the default) — random signups are the business model.
   allowPublicOrgCreation: bool("allow_public_org_creation").notNull().default(true),
+  // Optional Slack incoming-webhook destinations, configured at
+  // /admin/system. Each has an encrypted URL and an enable flag —
+  // disabling preserves the URL so an admin can flip it back on
+  // without re-pasting. URLs are AES-GCM encrypted with
+  // APP_ENCRYPTION_KEY (same envelope as the system provider keys).
+  // See lib/slack.ts for posting.
+  slackNewUserWebhookUrlEncrypted: text("slack_new_user_webhook_url_encrypted"),
+  slackNewUserWebhookEnabled: bool("slack_new_user_webhook_enabled").notNull().default(false),
+  slackTopupWebhookUrlEncrypted: text("slack_topup_webhook_url_encrypted"),
+  slackTopupWebhookEnabled: bool("slack_topup_webhook_enabled").notNull().default(false),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
 

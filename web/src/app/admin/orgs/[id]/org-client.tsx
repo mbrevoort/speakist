@@ -61,8 +61,8 @@ function CompCard({ orgId, isComped }: { orgId: string; isComped: boolean }) {
 
   return (
     <Card
-      title="Comp this org"
-      description="When comped, usage_events don't debit credit_ledger for this org. Pair with a Deepgram override if you want them billing through their own project."
+      title="Comp this workspace"
+      description="When comped, usage_events don't debit credit_ledger for this workspace. Pair with a Deepgram override if you want them billing through their own project."
       accent="peach"
       icon={<Gift className="h-4 w-4" />}
     >
@@ -91,7 +91,7 @@ function CompCard({ orgId, isComped }: { orgId: string; isComped: boolean }) {
           variant={isComped ? "outline" : "default"}
           disabled={pending}
         >
-          {pending ? "Saving…" : isComped ? "Remove comp" : "Comp this org"}
+          {pending ? "Saving…" : isComped ? "Remove comp" : "Comp this workspace"}
         </Button>
       </form>
       {result && (
@@ -189,7 +189,7 @@ function DeepgramOverrideCard({
   return (
     <Card
       title="Deepgram key override"
-      description="Point this org at its own Deepgram project key. Usage events for this org will still be recorded in our DB for billing purposes, but transcription traffic goes through their Deepgram billing, not ours."
+      description="Point this workspace at its own Deepgram project key. Usage events for this workspace will still be recorded in our DB for billing purposes, but transcription traffic goes through their Deepgram billing, not ours."
       accent="plum"
       icon={<KeyRound className="h-4 w-4" />}
     >
@@ -291,7 +291,7 @@ function GroqOverrideCard({
   return (
     <Card
       title="Groq key override"
-      description="Point this org's Groq Whisper transcriptions at their own Groq project. Usage is still billed through our credit ledger at retail; the provider-side cost goes to them."
+      description="Point this workspace's Groq Whisper transcriptions at their own Groq project. Usage is still billed through our credit ledger at retail; the provider-side cost goes to them."
       accent="plum"
       icon={<KeyRound className="h-4 w-4" />}
     >
@@ -391,7 +391,7 @@ function ClearGroqButton({
   return (
     <form
       action={async (fd) => {
-        if (!window.confirm("Clear the Groq override for this org?")) return;
+        if (!window.confirm("Clear the Groq override for this workspace?")) return;
         fd.set("orgId", orgId);
         fd.set("key", "");
         startTransition(async () => {
@@ -441,7 +441,7 @@ function AllowedModelsCard({
   return (
     <Card
       title="Allowed transcription models"
-      description="Restrict which (provider, model) pairs this org's users can dispatch from /api/transcribe. Leave everything unchecked to keep the default — no restriction, every active model is usable."
+      description="Restrict which (provider, model) pairs this workspace's users can dispatch from /api/transcribe. Leave everything unchecked to keep the default — no restriction, every active model is usable."
       accent="peach"
       icon={<CheckSquare className="h-4 w-4" />}
     >
@@ -544,7 +544,7 @@ function ClearButton({
   return (
     <form
       action={async (fd) => {
-        if (!window.confirm("Clear the Deepgram override for this org?")) return;
+        if (!window.confirm("Clear the Deepgram override for this workspace?")) return;
         fd.set("orgId", orgId);
         fd.set("key", "");
         startTransition(async () => {

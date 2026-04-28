@@ -39,8 +39,9 @@ export default async function DashboardHome() {
           Welcome to Speakist.
         </h1>
         <p className="mt-2 text-muted-foreground max-w-xl">
-          Your team is set up. Install Speakist on Mac or iPhone and start
-          dictating — every transcription draws from your word balance below.
+          Your workspace is set up. Install Speakist on Mac or iPhone and
+          start dictating — every transcription draws from the word balance
+          below.
         </p>
       </header>
 
@@ -54,11 +55,11 @@ export default async function DashboardHome() {
           <p className="mt-2 text-xs text-muted-foreground">
             {org.isComped
               ? "Comped — usage won't debit this balance."
-              : "Debits in real time as your team transcribes."}
+              : "Debits in real time as your workspace transcribes."}
           </p>
         </StatCard>
 
-        <StatCard label="Organization">
+        <StatCard label="Workspace">
           <p className="text-2xl font-semibold tracking-tight truncate">
             {org.name}
           </p>
@@ -66,7 +67,7 @@ export default async function DashboardHome() {
             You&apos;re the <span className="font-mono text-foreground">{org.role}</span>
             {org.autoJoinDomain ? (
               <>
-                {" "}· <span className="font-mono">@{org.autoJoinDomain}</span> auto-join on
+                {" "}· <span className="font-mono">@{org.autoJoinDomain}</span> auto-invite on
               </>
             ) : null}
           </p>
@@ -100,7 +101,7 @@ export default async function DashboardHome() {
             >
               <span className="flex items-center gap-2">
                 <UsersIcon className="h-4 w-4" />
-                Invite your team
+                Invite teammates
               </span>
               <ArrowRight className="h-3.5 w-3.5" />
             </Link>

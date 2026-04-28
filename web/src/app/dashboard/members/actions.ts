@@ -101,7 +101,7 @@ export async function inviteMember(formData: FormData): Promise<ActionResult> {
       .from(organizations)
       .where(eq(organizations.id, orgId))
       .limit(1);
-    const orgName = orgRow?.name ?? "your team";
+    const orgName = orgRow?.name ?? "your workspace";
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
     const acceptUrl = `${siteUrl}/invite/${token}`;
     await sendInvitationEmail({
@@ -160,7 +160,7 @@ export async function removeMember(formData: FormData): Promise<ActionResult> {
     if (!parsed.success) return { ok: false, error: "Bad request." };
 
     if (parsed.data.userId === user.id) {
-      return { ok: false, error: "Use Settings → Leave organization to remove yourself." };
+      return { ok: false, error: "Use Settings → Leave workspace to remove yourself." };
     }
 
     const db = getDb();

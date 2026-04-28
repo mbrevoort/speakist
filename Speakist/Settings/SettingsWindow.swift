@@ -239,10 +239,12 @@ struct AccountSettingsView: View {
                                 }
                                 Spacer()
                             }
-                            // Workspace selection happens at sign-in only
-                            // (the /link device-code page picker for users
-                            // with 2+ memberships). To switch workspaces
-                            // on this Mac, sign out and sign back in.
+                            // Each user belongs to exactly one workspace at
+                            // a time. To switch, leave the current
+                            // workspace from the web dashboard's settings
+                            // page (deleting it first if you're the sole
+                            // owner), then accept a pending invitation or
+                            // create a new workspace on next sign-in.
                         }
 
                         HStack {

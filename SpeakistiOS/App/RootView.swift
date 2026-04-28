@@ -328,9 +328,10 @@ private struct AccountRow: View {
                     Text(org)
                 }
                 .font(.footnote)
-                // Workspace selection happens at sign-in only (the /link
-                // device-code page picker for users with 2+ memberships).
-                // To switch on this device, sign out and sign back in.
+                // Each user belongs to exactly one workspace at a time.
+                // Switch by leaving from the web dashboard's settings
+                // page, then accepting an invitation or creating a new
+                // workspace on next sign-in.
             }
 
             if let balance = identity?.balanceMillicents {
