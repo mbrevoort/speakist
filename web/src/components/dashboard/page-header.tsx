@@ -1,6 +1,11 @@
 // Shared header for dashboard sub-pages. Title + optional description +
 // optional actions on the right. Small helper to keep the Members /
 // Settings pages from duplicating the layout.
+//
+// `description` is typed as `ReactNode` so callers can mix plain text
+// with components — particularly `<LocalTime>` for the user's-local-
+// timezone-formatted creation/joined timestamps that admin pages
+// thread through here.
 
 export function PageHeader({
   title,
@@ -8,7 +13,7 @@ export function PageHeader({
   actions,
 }: {
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
   return (
