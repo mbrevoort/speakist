@@ -85,7 +85,7 @@ export default function PrivacyPage() {
               </P>
               <P>
                 <strong>Custom vocabulary.</strong> If you add custom terms
-                to your personal dictionary (e.g., proper nouns, technical
+                to your personal vocabulary (e.g., proper nouns, technical
                 jargon), we store those terms so they sync across your
                 devices.
               </P>

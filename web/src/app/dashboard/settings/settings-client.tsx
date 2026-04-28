@@ -3,7 +3,7 @@
 //
 // Layout: two top-level groups so the scope of each setting is obvious at
 // a glance.
-//   * Personal     — polish prefs + the user's dictionary
+//   * Personal     — polish prefs + the user's vocabulary
 //   * Organization — name, auto-join, leave/delete (admin gating)
 // Card titles within each group are h3; the group label itself is h2,
 // keeping the heading hierarchy semantic for screen readers.
@@ -24,7 +24,7 @@ import {
   setPolishMode,
   type ActionResult,
 } from "./actions";
-import { DictionaryCard, type VocabEntry } from "./dictionary-card";
+import { VocabularyCard, type VocabEntry } from "./vocabulary-card";
 
 type PolishMode = "intuitive" | "prescriptive";
 
@@ -60,7 +60,7 @@ export function SettingsClient({
         description="Settings that apply only to your account. Sync to your Mac and iPhone on next launch."
       >
         <PolishCard enabled={polishEnabled} mode={polishMode} />
-        <DictionaryCard entries={vocabEntries} />
+        <VocabularyCard entries={vocabEntries} />
       </Group>
 
       <Group

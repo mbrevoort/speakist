@@ -55,6 +55,9 @@ final class AppEnvironment: ObservableObject {
         accountManager.bind(client: apiClient)
         // Lets refreshIdentity write the polish block back into Preferences.
         accountManager.bind(preferences: prefs)
+        // Lets the correction store mirror local edits + ingests up to
+        // the server so the web vocabulary view stays in sync.
+        correctionStore.bind(api: apiClient)
 
         self.transcriptionService = TranscriptionService(
             preferences: prefs,

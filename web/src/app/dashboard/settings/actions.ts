@@ -99,7 +99,7 @@ export async function setPolishMode(formData: FormData): Promise<ActionResult> {
 // are now configured globally by super admins at /admin/system. End-user
 // Settings only exposes the toggle + mode picker.
 
-// --- dictionary (per-user) -------------------------------------------------
+// --- vocabulary (per-user) -------------------------------------------------
 //
 // CRUD over `vocabulary_entries` for the signed-in user. The API at
 // /api/vocabulary is what the Mac app talks to over HTTP; in the dashboard

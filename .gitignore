@@ -35,3 +35,5 @@ web/drizzle/meta/
 
 # Local Claude Code overrides (team-wide ones go in .claude/settings.json)
 .claude/settings.local.json
+# Temporary worktrees Claude Code creates for isolated agent runs
+.claude/worktrees/
