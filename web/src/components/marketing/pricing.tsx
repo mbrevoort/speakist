@@ -102,7 +102,7 @@ export async function Pricing() {
 
             <div className="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <Button asChild size="lg" className="flex-1">
-                <Link href="/auth/signin">
+                <Link href="/auth/signin?intent=signup">
                   Start with {signupBonusWords.toLocaleString("en-US")} free words
                 </Link>
               </Button>

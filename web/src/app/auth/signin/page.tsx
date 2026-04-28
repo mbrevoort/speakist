@@ -1,9 +1,19 @@
-// Branded sign-in page.
+// Branded sign-in / sign-up page.
 //
-// Single input (email) → server action → magic link emailed → user redirected
-// to /auth/verify-request. Auth.js internally still knows the provider as
-// "resend"; we call it "Email" in the UI because the user shouldn't need to
-// know what Resend is.
+// Single magic-link form, but the *copy* is intent-aware via the
+// `?intent=signup|signin` query param so a user who just clicked
+// "Start with 3,000 free words" from the marketing page lands on
+// "Welcome to Speakist" instead of "Welcome back" — and a returning
+// user clicking "Sign in" still gets the warm-welcome-back framing.
+//
+// Why route the same form through three copy variants instead of
+// two literal pages: Auth.js's magic-link auth doesn't actually need
+// to know whether the user is new or returning — it sends a token
+// either way, and our `events.createUser` hook handles first-time
+// provisioning. Splitting at the URL layer keeps the implementation
+// trivial (one form, one server action) while removing the new-user
+// dissonance that "Welcome back" caused for everyone landing here
+// from the homepage hero / pricing / final CTA.
 //
 // Two pieces of query-param plumbing:
 //   1. If the visitor is *already* signed in (cookie valid), skip the form
@@ -22,12 +32,48 @@ export const metadata = {
   title: "Sign in — Speakist",
 };
 
+type Intent = "signup" | "signin" | "default";
+
+interface IntentCopy {
+  headline: string;
+  subhead: string;
+  /** Footnote shown under the form. Empty string ⇒ omitted (used by
+   *  the signup variant where the main subhead already covers it). */
+  footnote: string;
+}
+
+const COPY: Record<Intent, IntentCopy> = {
+  signup: {
+    headline: "Welcome to Speakist.",
+    subhead:
+      "Enter your email to claim 3,000 free words. We'll send you a one-time link — no password to remember.",
+    footnote: "",
+  },
+  signin: {
+    headline: "Welcome back.",
+    subhead: "Enter your email — we'll send you a one-time sign-in link.",
+    footnote:
+      "First time? Same form — we'll create your account and add 3,000 free words automatically.",
+  },
+  default: {
+    headline: "Sign in or create your account.",
+    subhead:
+      "Enter your email — we'll send you a one-time link. New here? You'll get 3,000 free words on us.",
+    footnote: "",
+  },
+};
+
+function parseIntent(raw: string | undefined): Intent {
+  if (raw === "signup" || raw === "signin") return raw;
+  return "default";
+}
+
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ callbackUrl?: string }>;
+  searchParams: Promise<{ callbackUrl?: string; intent?: string }>;
 }) {
-  const { callbackUrl } = await searchParams;
+  const { callbackUrl, intent: rawIntent } = await searchParams;
   const { auth } = await getAuth();
   const session = await auth();
 
@@ -37,14 +83,16 @@ export default async function SignInPage({
   }
 
   const cb = sanitizeCallback(callbackUrl) ?? "/dashboard";
+  const intent = parseIntent(rawIntent);
+  const copy = COPY[intent];
 
   return (
     <div>
       <h1 className="text-2xl font-semibold tracking-tight text-center">
-        Welcome back.
+        {copy.headline}
       </h1>
       <p className="mt-2 text-sm text-muted-foreground text-center">
-        We&apos;ll email you a one-time sign-in link. No password to remember.
+        {copy.subhead}
       </p>
 
       <form
@@ -81,14 +129,15 @@ export default async function SignInPage({
         <input type="hidden" name="redirectTo" value={cb} />
 
         <Button type="submit" size="lg" className="w-full">
-          Send sign-in link
+          Email me a link
         </Button>
       </form>
 
-      <p className="mt-6 text-xs text-muted-foreground text-center leading-relaxed">
-        New here? Use the same form — we&apos;ll create your account and add
-        3,000 free words to your balance automatically.
-      </p>
+      {copy.footnote && (
+        <p className="mt-6 text-xs text-muted-foreground text-center leading-relaxed">
+          {copy.footnote}
+        </p>
+      )}
     </div>
   );
 }

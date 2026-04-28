@@ -31,8 +31,8 @@ export function Footer() {
           </FooterCol>
 
           <FooterCol title="Account">
-            <FooterLink href="/auth/signin">Sign in</FooterLink>
-            <FooterLink href="/auth/signin">Get started</FooterLink>
+            <FooterLink href="/auth/signin?intent=signin">Sign in</FooterLink>
+            <FooterLink href="/auth/signin?intent=signup">Get started</FooterLink>
           </FooterCol>
 
           <FooterCol title="Legal">
