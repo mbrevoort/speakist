@@ -9,6 +9,7 @@
 import { eq } from "drizzle-orm";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { LocalTime } from "@/components/dashboard/local-time";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
@@ -126,7 +127,7 @@ export default async function BillingPage({
                 {ledger.map((row) => (
                   <tr key={row.id} className="border-b border-border/40 last:border-0">
                     <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
-                      {row.createdAt.toLocaleDateString()}
+                      <LocalTime value={row.createdAt} mode="date" />
                     </td>
                     <td className="px-5 py-3">
                       <ReasonLabel reason={row.reason} />

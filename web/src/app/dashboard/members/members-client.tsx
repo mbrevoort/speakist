@@ -9,6 +9,7 @@ import { useFormStatus } from "react-dom";
 import { useState, useTransition } from "react";
 import { X, Mail, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LocalTime } from "@/components/dashboard/local-time";
 import { cn, formatDollars } from "@/lib/utils"; // cn used; formatDollars re-export for parity (keep)
 import type { OrgMemberRow, PendingInvitation } from "@/lib/orgs";
 import type { OrgRole } from "@/lib/db/schema";
@@ -82,7 +83,7 @@ export function MembersClient({
                       {inv.invitedByEmail}
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">
-                      {inv.expiresAt.toLocaleDateString()}
+                      <LocalTime value={inv.expiresAt} mode="date" />
                     </td>
                     <td className="px-5 py-3 text-right">
                       <ActionIconForm action={revokeInvitation} extra={{ invitationId: inv.id }} confirm={`Revoke invitation to ${inv.email}?`}>
@@ -139,7 +140,7 @@ export function MembersClient({
                       )}
                     </td>
                     <td className="px-5 py-3 text-muted-foreground">
-                      {m.joinedAt.toLocaleDateString()}
+                      <LocalTime value={m.joinedAt} mode="date" />
                     </td>
                     <td className="px-5 py-3 text-right">
                       {!isSelf && (

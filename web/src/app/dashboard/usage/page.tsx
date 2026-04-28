@@ -5,6 +5,7 @@
 
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UsageChart } from "@/components/dashboard/usage-chart";
+import { LocalTime } from "@/components/dashboard/local-time";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import {
@@ -164,7 +165,7 @@ export default async function UsagePage() {
                 {recent.map((e) => (
                   <tr key={e.id} className="border-b border-border/40 last:border-0">
                     <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
-                      {e.createdAt.toLocaleString()}
+                      <LocalTime value={e.createdAt} />
                     </td>
                     {isAdmin && (
                       <td className="px-5 py-3">
