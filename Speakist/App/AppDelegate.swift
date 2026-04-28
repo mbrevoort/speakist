@@ -49,15 +49,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Refresh /api/me whenever the app comes back to the foreground.
-        // Picks up account-level state changes the user made in the
-        // browser — invitation accepted, workspace switched via the
-        // dashboard topbar, balance topped up, etc.
-        // refreshIdentity() is idempotent + cheap (single GET /api/me) so
-        // re-firing it on every foreground is harmless.
+        // Refresh /api/me + vocabulary whenever the app comes back to
+        // the foreground. Picks up account-level state changes the user
+        // made in the browser — invitation accepted, workspace switched
+        // via the dashboard topbar, balance topped up, dictionary
+        // entries added/edited/deleted, etc. Both calls are idempotent
+        // and cheap, so re-firing them on every foreground is harmless.
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                await self?.env.accountManager.refreshIdentity()
+                guard let self else { return }
+                await self.env.accountManager.refreshIdentity()
+                await self.env.correctionStore.syncFromServer(api: self.env.apiClient)
             }
         }
 

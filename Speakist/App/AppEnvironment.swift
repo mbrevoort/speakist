@@ -80,5 +80,13 @@ final class AppEnvironment: ObservableObject {
         historyStore.purgeExpired(days: preferences.retentionDays, maxEntries: preferences.maxHistoryEntries)
         audioArchive.pruneToKeepLast(preferences.keepAudio ? preferences.keepAudioCount : 0)
         updater.bootstrap()
+
+        // Pull any vocabulary edits made on the web (or another device)
+        // since the app last ran. No-op if the user is signed out.
+        // didBecomeActive in AppDelegate will keep us in sync after
+        // launch.
+        Task { @MainActor [correctionStore, apiClient] in
+            await correctionStore.syncFromServer(api: apiClient)
+        }
     }
 }

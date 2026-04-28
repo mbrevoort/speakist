@@ -107,6 +107,87 @@ final class CorrectionStore: ObservableObject {
         }
     }
 
+    // MARK: - Server sync
+
+    /// Apply a batch of vocabulary entries from the server. Tombstoned
+    /// rows (`deleted == true`) are deleted locally; live rows are
+    /// upserted by `(from_text, to_text)`. Used by `syncFromServer`
+    /// after a `/api/vocabulary` GET, and is what makes web edits show
+    /// up on the Mac.
+    func merge(serverEntries entries: [SpeakistAPIClient.VocabEntryWire]) {
+        guard let dbQueue else { return }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let parserNoFractional = ISO8601DateFormatter()
+        parserNoFractional.formatOptions = [.withInternetDateTime]
+
+        func parseTime(_ s: String?) -> TimeInterval {
+            guard let s else { return Date().timeIntervalSince1970 }
+            if let d = parser.date(from: s) ?? parserNoFractional.date(from: s) {
+                return d.timeIntervalSince1970
+            }
+            return Date().timeIntervalSince1970
+        }
+
+        do {
+            try dbQueue.write { db in
+                for entry in entries {
+                    let from = entry.from.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let to = entry.to.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !from.isEmpty, !to.isEmpty else { continue }
+
+                    if entry.deleted == true {
+                        // Tombstone — drop the local row if it exists.
+                        // No-op if we never had it.
+                        try db.execute(literal: """
+                            DELETE FROM corrections
+                            WHERE from_text = \(from) AND to_text = \(to)
+                        """)
+                        continue
+                    }
+
+                    let count = entry.count ?? 1
+                    let isProperNoun = entry.isProperNoun ?? false
+                    let lastSeen = parseTime(entry.lastSeen)
+
+                    // Treat server-sourced rows as user_managed so they
+                    // survive any future eviction/aging logic. The web
+                    // editor is by definition a deliberate user action.
+                    try db.execute(literal: """
+                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed)
+                        VALUES (\(from), \(to), \(count), \(lastSeen), \(isProperNoun ? 1 : 0), 1)
+                        ON CONFLICT(from_text, to_text) DO UPDATE SET
+                          count = \(count),
+                          last_seen = \(lastSeen),
+                          is_proper_noun = \(isProperNoun ? 1 : 0),
+                          user_managed = 1
+                    """)
+                }
+            }
+            reload()
+        } catch {
+            Logger.shared.error("merge corrections from server failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Pull the latest server-side vocabulary and merge it into the
+    /// local store. Safe to call on a no-op state — silently returns if
+    /// the user is signed out or the request fails.
+    ///
+    /// Called from app launch and `didBecomeActive`, so anything edited
+    /// in the web dashboard appears on the Mac the next time the app
+    /// comes to the foreground.
+    func syncFromServer(api: SpeakistAPIClient) async {
+        do {
+            let response = try await api.fetchVocabulary()
+            merge(serverEntries: response.entries)
+        } catch SpeakistAPIClient.Error.notSignedIn {
+            // Silent — nothing to sync.
+        } catch {
+            Logger.shared.warn("vocab sync failed: \(String(describing: error))")
+        }
+    }
+
     /// Top-ranked proper-noun-like corrections for STT custom vocab.
     func keyterms(limit: Int) -> [String] {
         all.filter(\.isProperNoun)

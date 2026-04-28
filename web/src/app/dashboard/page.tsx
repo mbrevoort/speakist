@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import Link from "next/link";
 import { ArrowRight, Apple, BarChart3, CreditCard, Download, ExternalLink, Users as UsersIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Greeting } from "@/components/dashboard/local-time";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
@@ -32,7 +33,7 @@ export default async function DashboardHome() {
     <div className="mx-auto max-w-5xl space-y-8">
       <header>
         <p className="text-sm text-muted-foreground">
-          {greeting()}, {user.displayName ?? user.email.split("@")[0]}.
+          <Greeting />, {user.displayName ?? user.email.split("@")[0]}.
         </p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">
           Welcome to Speakist.
@@ -178,10 +179,3 @@ function StatCard({
   );
 }
 
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h < 5) return "Late night";
-  if (h < 12) return "Good morning";
-  if (h < 18) return "Good afternoon";
-  return "Good evening";
-}
