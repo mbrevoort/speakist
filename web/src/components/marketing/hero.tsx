@@ -55,7 +55,7 @@ export function Hero() {
              *  click before the user commits. */}
             <div className="mt-10 flex">
               <Button asChild size="xl">
-                <Link href="/auth/signin">Start with 3,000 free words</Link>
+                <Link href="/auth/signin?intent=signup">Start with 3,000 free words</Link>
               </Button>
             </div>
 

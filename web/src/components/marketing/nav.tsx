@@ -5,6 +5,12 @@
 // Server component — reads session via getAuth() so signed-in users see
 // "Go to dashboard" instead of "Sign in / Get started". Keeps the landing
 // page coherent for returning users.
+//
+// Sign-in/signup intent is split at the link level: "Sign in" routes to
+// `?intent=signin` (warm-welcome-back copy on the signin page), while
+// "Get started" routes to `?intent=signup` (3K-free-words framing). Same
+// form behind either link; the page-level copy adapts so a brand-new user
+// clicking "Get started" doesn't land on "Welcome back".
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -43,10 +49,10 @@ export async function Nav() {
           ) : (
             <>
               <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
-                <Link href="/auth/signin">Sign in</Link>
+                <Link href="/auth/signin?intent=signin">Sign in</Link>
               </Button>
               <Button asChild size="sm">
-                <Link href="/auth/signin">Get started</Link>
+                <Link href="/auth/signin?intent=signup">Get started</Link>
               </Button>
             </>
           )}

@@ -22,7 +22,7 @@ export function FinalCTA() {
          *  with behavior-indicating icons (download / external link). */}
         <div className="mt-10 flex justify-center">
           <Button asChild size="xl">
-            <Link href="/auth/signin">Start with 3,000 free words</Link>
+            <Link href="/auth/signin?intent=signup">Start with 3,000 free words</Link>
           </Button>
         </div>
         <div className="mt-4 flex flex-wrap justify-center gap-3">
