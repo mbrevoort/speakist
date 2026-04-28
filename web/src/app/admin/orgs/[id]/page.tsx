@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Gift } from "lucide-react";
+import { LocalTime } from "@/components/local-time";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireSuperAdmin } from "@/lib/authz";
 import { getOrgDetail, listActiveProviderModels } from "@/lib/admin";
@@ -45,9 +46,13 @@ export default async function AdminOrgPage({
         </Link>
         <PageHeader
           title={org.name}
-          description={`${org.slug} · created ${org.createdAt.toLocaleDateString()}${
-            org.autoJoinDomain ? ` · @${org.autoJoinDomain} auto-invite` : ""
-          }`}
+          description={
+            <>
+              {org.slug} · created{" "}
+              <LocalTime value={org.createdAt} format="date" />
+              {org.autoJoinDomain ? ` · @${org.autoJoinDomain} auto-invite` : ""}
+            </>
+          }
           actions={
             org.isComped ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-peach/15 text-peach-deep text-xs font-semibold px-3 py-1">
@@ -132,7 +137,7 @@ export default async function AdminOrgPage({
                 {ledger.map((r) => (
                   <tr key={r.id} className="border-b border-border/40 last:border-0">
                     <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
-                      {r.createdAt.toLocaleString()}
+                      <LocalTime value={r.createdAt} format="datetime" />
                     </td>
                     <td className="px-5 py-3 font-mono text-xs">{r.reason}</td>
                     <td className="px-5 py-3 text-muted-foreground truncate max-w-[320px]">
@@ -177,7 +182,7 @@ export default async function AdminOrgPage({
                       {m.role}
                     </td>
                     <td className="px-5 py-3 text-right text-xs text-muted-foreground">
-                      joined {m.joinedAt.toLocaleDateString()}
+                      joined <LocalTime value={m.joinedAt} format="date" />
                     </td>
                   </tr>
                 ))}

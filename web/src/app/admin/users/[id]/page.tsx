@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, Shield } from "lucide-react";
+import { LocalTime } from "@/components/local-time";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UsageChart } from "@/components/dashboard/usage-chart";
 import { requireSuperAdmin } from "@/lib/authz";
@@ -42,11 +43,23 @@ export default async function AdminUserPage({
         </Link>
         <PageHeader
           title={user.displayName ?? user.email.split("@")[0]}
-          description={`${user.email} · joined ${user.createdAt.toLocaleDateString()}${
-            user.lastActiveAt
-              ? ` · last active ${formatRelative(user.lastActiveAt)}`
-              : " · never active"
-          }`}
+          description={
+            <>
+              {user.email} · joined{" "}
+              <LocalTime value={user.createdAt} format="date" />
+              {user.lastActiveAt ? (
+                <>
+                  {" "}· last active{" "}
+                  <LocalTime
+                    value={user.lastActiveAt}
+                    format="relative"
+                  />
+                </>
+              ) : (
+                " · never active"
+              )}
+            </>
+          }
           actions={
             user.isSuperAdmin ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-plum/10 text-plum text-xs font-semibold px-2.5 py-0.5">
@@ -134,7 +147,7 @@ export default async function AdminUserPage({
                       {m.role}
                     </td>
                     <td className="px-5 py-3 text-right text-xs text-muted-foreground whitespace-nowrap">
-                      joined {m.joinedAt.toLocaleDateString()}
+                      joined <LocalTime value={m.joinedAt} format="date" />
                     </td>
                   </tr>
                 ))}
@@ -172,7 +185,7 @@ export default async function AdminUserPage({
                     className="border-b border-border/40 last:border-0"
                   >
                     <td className="px-5 py-3 text-muted-foreground whitespace-nowrap">
-                      {e.createdAt.toLocaleString()}
+                      <LocalTime value={e.createdAt} format="datetime" />
                     </td>
                     <td className="px-5 py-3">
                       <Link
@@ -242,19 +255,3 @@ function formatAudioDuration(ms: number): string {
   return `${m}m ${s}s`;
 }
 
-/**
- * Same shape as the relative-time formatter in users-client.tsx, kept
- * separately because this page is a server component and can't import a
- * "use client" file's helpers cleanly.
- */
-function formatRelative(date: Date): string {
-  const diffMs = Date.now() - date.getTime();
-  const minutes = Math.round(diffMs / (1000 * 60));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(diffMs / (1000 * 60 * 60));
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
-  if (days < 30) return `${days}d ago`;
-  return date.toLocaleDateString();
-}
