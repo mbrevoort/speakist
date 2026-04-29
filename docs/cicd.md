@@ -382,7 +382,8 @@ these values — by the time the Worker runs, the bundle is frozen.
 
 * **Source of truth**: `web/package.json`'s `deploy:dev` and
   `deploy:prod` scripts, as inline shell exports.
-* **Examples**: `NEXT_PUBLIC_SITE_URL`.
+* **Examples**: any `NEXT_PUBLIC_*` value read **only** in client
+  components.
 * **Local dev**: `web/.env.local` (gitignored) — same names.
 
 To add a new build-time public value:
@@ -391,6 +392,31 @@ To add a new build-time public value:
    `deploy:prod` scripts in `web/package.json`.
 2. Add to `web/.env` template + your local `.env.local` for `pnpm dev`.
 3. Read in code via `process.env.NEXT_PUBLIC_FOO`.
+
+### Tier 1+2 — values read at both build and runtime
+
+Some `NEXT_PUBLIC_*` values are *also* read server-side by Server
+Components or `env.server` validation, not just inlined into the
+client bundle. Webpack only inlines literal `process.env.X`
+references at build time; runtime code that does
+`safeParse(process.env)` (e.g. `web/src/lib/env.ts`'s server schema)
+reads `process.env` as a live object on the Worker. If the value
+isn't present in **both** places, one side breaks.
+
+`NEXT_PUBLIC_SITE_URL` is the canonical example today — it's used
+by `metadataBase`, by invitation-email URL builders, and by the
+strict `z.string().url()` server-schema validation. Missing at
+runtime → schema parse throws → every page that imports
+`env.server` 500s.
+
+* **Source of truth**: declared **twice**, deliberately:
+  * Build-time: `NEXT_PUBLIC_SITE_URL=...` in
+    `web/package.json`'s `deploy:dev` / `deploy:prod` scripts.
+  * Runtime: `[env.dev.vars]` / `[env.production.vars]` in
+    `web/wrangler.toml`.
+* The two declarations should hold the same value per environment.
+
+To add a new dual-tier value: do both Tier 1 and Tier 2 steps.
 
 ### Tier 2 — Worker runtime vars (non-secret, per env)
 

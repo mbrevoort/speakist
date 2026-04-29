@@ -51,6 +51,21 @@ name = "speakist-web-dev"
 # and that differs between dev and prod. See docs/cicd.md for the
 # full config-management strategy.
 #
+#   NEXT_PUBLIC_SITE_URL        — base URL Next.js uses for SSR-side
+#                                 absolute-URL generation (metadataBase,
+#                                 invitation links, magic-link callbacks
+#                                 via env.server). Also set as a build-
+#                                 time export in package.json so Next.js
+#                                 webpack inlines it into the client
+#                                 bundle for CSR references — this is
+#                                 the one variable that legitimately
+#                                 needs both tiers (build env + runtime
+#                                 var) because it's read in both contexts.
+#                                 NEVER as a Worker secret: it's public,
+#                                 and env.server's strict z.string().url()
+#                                 validation throws on the whole schema
+#                                 if it's missing at runtime, taking
+#                                 down every page that imports env.server.
 #   RELEASE_DOWNLOAD_BASE_URL   — Mac DMG public origin (R2 custom domain)
 #   RELEASE_R2_BUCKET           — bucket release.sh uploads DMGs to
 #   IOS_TESTFLIGHT_URL          — public TestFlight invite, surfaced on
@@ -65,11 +80,11 @@ name = "speakist-web-dev"
 #
 # Secrets (API keys, AUTH_SECRET, APP_ENCRYPTION_KEY,
 # RELEASE_PUBLISH_TOKEN, etc.) go via `wrangler secret put --env X`,
-# never here. Build-time client-bundle values (NEXT_PUBLIC_*) are set
-# in package.json's deploy:dev / deploy:prod scripts so Next.js inlines
-# them into the JS bundle at build time — Worker secrets can't reach
-# the client bundle after it's built.
+# never here. Build-time-only client-bundle values (other NEXT_PUBLIC_*
+# without runtime-side reads) belong solely in package.json's deploy
+# scripts.
 [env.dev.vars]
+NEXT_PUBLIC_SITE_URL = "https://speakist-dev.brevoortstudio.com"
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads-dev.brevoortstudio.com"
 RELEASE_R2_BUCKET = "speakist-releases-dev"
 IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu"
@@ -123,6 +138,7 @@ name = "speakist-web-prod"
 workers_dev = false
 
 [env.production.vars]
+NEXT_PUBLIC_SITE_URL = "https://speakist.ai"
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads.speakist.ai"
 RELEASE_R2_BUCKET = "speakist-releases-prod"
 # TODO: replace with the prod App Store Connect TestFlight invite once
