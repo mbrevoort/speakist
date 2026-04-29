@@ -3,10 +3,14 @@
 import Link from "next/link";
 import { Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu";
+import { env } from "@/lib/env";
 
 export function FinalCTA() {
+  // Server Component — reads the per-env Worker var at SSR time so
+  // dev / prod each link to their own TestFlight invite. Schema in
+  // env.ts has a default that catches `next dev` runs without the
+  // wrangler.toml var loaded.
+  const testflightURL = env.server.IOS_TESTFLIGHT_URL;
   return (
     <section className="py-24 sm:py-32">
       <div className="container max-w-4xl text-center">
@@ -34,7 +38,7 @@ export function FinalCTA() {
           </Button>
           <Button asChild size="lg" variant="outline">
             <a
-              href={IOS_TESTFLIGHT_URL}
+              href={testflightURL}
               target="_blank"
               rel="noopener noreferrer"
               className="gap-2"

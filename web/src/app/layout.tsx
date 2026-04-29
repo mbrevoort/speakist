@@ -16,11 +16,15 @@ const inter = Inter({
 // since nothing in this app has meaningful cacheable output across users.
 export const dynamic = "force-dynamic";
 
+// metadataBase reads NEXT_PUBLIC_SITE_URL at build time — Next.js
+// inlines NEXT_PUBLIC_* into the bundle, so the value comes from
+// package.json's deploy:dev / deploy:prod env exports. Local `next
+// dev` falls back to localhost. See docs/cicd.md "Config management".
 export const metadata: Metadata = {
   title: "Speakist — push-to-talk dictation for macOS",
   description:
     "Hold a key, speak, release. Clean text appears at your cursor in any app. Usage-based pricing. Your voice never leaves your device except to be transcribed.",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://speakist-dev.brevoortstudio.com"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

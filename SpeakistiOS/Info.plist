@@ -53,7 +53,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Speakist records your voice while a Speak Session is active and uploads the audio to our backend for transcription. Audio is processed and discarded — only your finished transcript is saved on this device.</string>
 	<key>SpeakistBuildTimestamp</key>
-	<string>2026-04-29T15:24:54Z</string>
+	<string>0</string>
 	<key>SpeakistChannel</key>
 	<string>$(SPEAKIST_CHANNEL)</string>
 	<key>SpeakistDefaultAPIBaseURL</key>

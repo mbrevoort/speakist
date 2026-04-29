@@ -31,11 +31,19 @@ build: project
 # "Speakist.app" (or e.g. "Speakist Dev.app" after release.sh has rewritten
 # project.yml for a non-stable channel). Finding it by glob keeps the
 # target correct regardless of which config/channel you last built.
+#
+# `open APP_PATH` on macOS doesn't relaunch — if the app is already
+# running, `open` just brings that process forward and the new
+# binary sits on disk unused. Kill any matching instance first so
+# every `make run` actually loads the build we just produced.
 run: build
 	@APP=$$(find "$(BUILD_DIR)/Build/Products/$(CONFIG)" -maxdepth 1 -type d -name "Speakist*.app" | head -n1); \
 	if [ -z "$$APP" ]; then \
 		echo "No Speakist*.app under $(BUILD_DIR)/Build/Products/$(CONFIG)/"; exit 1; \
 	fi; \
+	NAME=$$(basename "$$APP" .app); \
+	echo "Quitting any running '$$NAME' to force a fresh launch"; \
+	pkill -f "$$NAME.app/Contents/MacOS/" 2>/dev/null || true; \
 	echo "Opening $$APP"; \
 	open "$$APP"
 

@@ -8,11 +8,13 @@
 import Link from "next/link";
 import { Download, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-// TestFlight invite for the iOS beta. External so it opens in a new tab.
-const IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu";
+import { env } from "@/lib/env";
 
 export function Hero() {
+  // Per-env TestFlight invite — wrangler.toml [env.X.vars] is the
+  // source of truth so the Speakist-Dev web links to the dev TestFlight
+  // and the prod web links to the prod TestFlight automatically.
+  const testflightURL = env.server.IOS_TESTFLIGHT_URL;
   return (
     <section className="relative overflow-hidden">
       {/* Ambient peach glow behind the headline. Fixed blur, no animation
@@ -71,7 +73,7 @@ export function Hero() {
               </Button>
               <Button asChild size="lg" variant="outline">
                 <a
-                  href={IOS_TESTFLIGHT_URL}
+                  href={testflightURL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="gap-2"

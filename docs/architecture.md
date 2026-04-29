@@ -351,13 +351,35 @@ Speakist.
 | Mac beta | `com.brevoort-studio.speakist.beta` | Speakist Beta | `speakist.ai/appcast-beta.xml` | `speakist.ai` | Same R2 |
 | Mac dev | `com.brevoort-studio.speakist.dev` | Speakist Dev | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | R2 → `downloads-dev.brevoortstudio.com` |
 | Mac local | `com.brevoort-studio.speakist.local` | Speakist Local | (none) | `localhost:3000` | Xcode Debug only |
-| iOS dev | `com.brevoort-studio.speakist.ios.dev` | Speakist Dev | (n/a) | `speakist-dev.brevoortstudio.com` | TestFlight Internal Testing |
+| iOS stable | `com.brevoort-studio.speakist.ios` | Speakist | (n/a) | `speakist.ai` | TestFlight on the "Speakist" record |
+| iOS dev | `com.brevoort-studio.speakist.ios.dev` | Speakist Dev | (n/a) | `speakist-dev.brevoortstudio.com` | TestFlight Internal on "Speakist Dev" |
 | iOS local | `com.brevoort-studio.speakist.ios.local` | Speakist Local | (none) | (configurable, defaults to `speakist-dev`) | Xcode Debug only |
 
-Dev (Mac DMG + iOS TestFlight) ships automatically on every push to
-`main` via [`docs/cicd.md`](cicd.md). Beta and stable are manual via
-[`docs/releasing.md`](releasing.md), running the same `release.sh`
-script CI uses.
+Every value above is **Tier 4** in the config model — baked into the
+app at build time, never read at runtime over the network. Source:
+`project.yml` for stable + iOS dev (first-class Xcode configurations)
+plus `scripts/release.sh`'s channel matrix for Mac beta / dev (which
+sed-rewrites the `Release` block before `xcodegen generate`). Runtime
+code reads via `Bundle.main.infoDictionary` → the
+`SpeakistChannel.current` accessors in `Shared/SpeakistChannel.swift`.
+Full tier model: [cicd.md § Config management](cicd.md#config-management).
+
+Both pipelines are automated:
+
+* **Dev** (Mac DMG + iOS TestFlight Internal on the dev record) ships
+  on every push to `main` via [`deploy-dev.yml`](../.github/workflows/deploy-dev.yml).
+* **Stable + beta** ship on **GitHub Release publish** via
+  [`deploy-prod.yml`](../.github/workflows/deploy-prod.yml). The
+  release's prerelease checkbox routes to the `beta` channel; final
+  releases route to `stable`. iOS is skipped on `beta` (no
+  `…ios.beta` bundle is provisioned by design — External TestFlight
+  on the stable record covers that role).
+
+Both workflows call the same `scripts/release.sh` entry point as
+manual `make release`, so the runbook in
+[`docs/releasing.md`](releasing.md) describes what every release
+does end-to-end. Manual `make release` remains the emergency fallback
+when CI is unavailable.
 
 ---
 

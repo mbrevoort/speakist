@@ -178,11 +178,25 @@ final class HUDPanel: NSPanel {
         self.level = .statusBar
         self.isOpaque = false
         self.backgroundColor = .clear
-        self.hasShadow = true
+        // Disable the NSWindow drop shadow. AppKit draws it as a soft
+        // gray diffusion *outside* the panel's opaque content (our
+        // rounded gradient fill), which on a light desktop reads as a
+        // dark halo bleeding past the rainbow border. The panel's
+        // visual identity is the gradient border itself; nothing
+        // outside that boundary should be visible.
+        self.hasShadow = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         self.hidesOnDeactivate = false
         self.animationBehavior = .utilityWindow
         self.ignoresMouseEvents = true
+        // Lock the panel's effective appearance to dark so SwiftUI
+        // `Material` and any NSVisualEffectView descendants resolve
+        // their dark variants regardless of the user's system
+        // appearance. Setting `.colorScheme` on the SwiftUI tree
+        // alone isn't enough — Material on macOS keys off the
+        // hosting window's `effectiveAppearance`, which is
+        // determined by NSWindow.appearance (or system, when nil).
+        self.appearance = NSAppearance(named: .darkAqua)
 
         let hosting = NSHostingView(rootView: contentView)
         hosting.frame = NSRect(origin: .zero, size: HUDPanel.panelSize)
@@ -369,8 +383,44 @@ private struct HUDView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
+            // Opaque dark fill, no vibrancy. We tried three increasingly
+            // forceful variants of "dark Material" before landing here:
+            //
+            //   1. SwiftUI `.ultraThinMaterial` with `.environment(\.colorScheme, .dark)`
+            //      — Material on macOS reads the hosting NSWindow's
+            //        effectiveAppearance and ignores SwiftUI-tree
+            //        appearance overrides.
+            //   2. (1) + `panel.appearance = NSAppearance(named: .darkAqua)`
+            //      — flipped the window's effectiveAppearance, but
+            //        SwiftUI Material still composited light on light
+            //        desktops in our tests.
+            //   3. NSVisualEffectView with `.material = .hudWindow`,
+            //      `.blendingMode = .behindWindow`, `.appearance = .darkAqua`
+            //      — `.behindWindow` samples desktop content, and on a
+            //        light desktop the dark vibrancy still let enough
+            //        brightness through that the panel read as washed
+            //        out (vibrancy attenuates background, doesn't
+            //        replace it).
+            //
+            // The actual user requirement is "always the same dark
+            // panel regardless of desktop background". Vibrancy is
+            // categorically the wrong tool for that — it's defined as
+            // a function of the underlying content. A solid fill is
+            // the only thing that's guaranteed identical on every
+            // background. The slight gradient (top→bottom) gives a
+            // hint of depth so the panel doesn't read as a flat
+            // sticker.
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.13, green: 0.10, blue: 0.16),
+                            Color(red: 0.08, green: 0.06, blue: 0.10)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
         )
         // Outer border: an angular gradient that sweeps the brand
         // palette around the panel. Replaces the previous static
@@ -381,6 +431,10 @@ private struct HUDView: View {
             AnimatedGradientBorder(cornerRadius: 16, lineWidth: 2)
         )
         .padding(4)
+        // SwiftUI semantic colors (.primary / .secondary on the time
+        // label) still need a dark colorScheme so the text reads
+        // white-on-dark even when the host system is in light mode.
+        .environment(\.colorScheme, .dark)
     }
 
     /// Single content slot — the waveform during recording, the
