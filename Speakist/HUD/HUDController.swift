@@ -377,23 +377,44 @@ private struct HUDView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            // We deliberately don't use SwiftUI's `.ultraThinMaterial`
-            // here: on macOS the SwiftUI Material primitives resolve
-            // their dark/light variant by walking up to the hosting
-            // NSWindow's `effectiveAppearance` *at composite time* and
-            // ignoring any `.environment(\.colorScheme, .dark)` /
-            // `.preferredColorScheme(.dark)` overrides set on the
-            // SwiftUI tree itself. Even pinning the NSPanel's
-            // `appearance` to `.darkAqua` didn't reliably flip
-            // `.ultraThinMaterial` to its dark variant on light
-            // desktops — it kept reading as a washed-out pale panel.
+            // Opaque dark fill, no vibrancy. We tried three increasingly
+            // forceful variants of "dark Material" before landing here:
             //
-            // Dropping down to NSVisualEffectView with an explicit
-            // `appearance = .darkAqua` is the only reliable path: the
-            // dark vibrancy is part of the view's own state, not
-            // resolved from any ancestor.
-            DarkHUDBackdrop()
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            //   1. SwiftUI `.ultraThinMaterial` with `.environment(\.colorScheme, .dark)`
+            //      — Material on macOS reads the hosting NSWindow's
+            //        effectiveAppearance and ignores SwiftUI-tree
+            //        appearance overrides.
+            //   2. (1) + `panel.appearance = NSAppearance(named: .darkAqua)`
+            //      — flipped the window's effectiveAppearance, but
+            //        SwiftUI Material still composited light on light
+            //        desktops in our tests.
+            //   3. NSVisualEffectView with `.material = .hudWindow`,
+            //      `.blendingMode = .behindWindow`, `.appearance = .darkAqua`
+            //      — `.behindWindow` samples desktop content, and on a
+            //        light desktop the dark vibrancy still let enough
+            //        brightness through that the panel read as washed
+            //        out (vibrancy attenuates background, doesn't
+            //        replace it).
+            //
+            // The actual user requirement is "always the same dark
+            // panel regardless of desktop background". Vibrancy is
+            // categorically the wrong tool for that — it's defined as
+            // a function of the underlying content. A solid fill is
+            // the only thing that's guaranteed identical on every
+            // background. The slight gradient (top→bottom) gives a
+            // hint of depth so the panel doesn't read as a flat
+            // sticker.
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.13, green: 0.10, blue: 0.16),
+                            Color(red: 0.08, green: 0.06, blue: 0.10)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
         )
         // Outer border: an angular gradient that sweeps the brand
         // palette around the panel. Replaces the previous static
@@ -483,37 +504,6 @@ private struct HUDView: View {
 /// (preparing → recording → transcribing) without re-triggering an
 /// animation. TimelineView drives the redraw off a wall clock and
 /// gives us a continuous phase value.
-/// Dark frosted backdrop for the HUD. NSVisualEffectView wrapped in
-/// NSViewRepresentable so we can pin `appearance = .darkAqua` directly
-/// on the view — that's the only reliable way to force a dark
-/// vibrancy effect on a light-mode desktop. SwiftUI's `.ultraThinMaterial`
-/// resolves its variant by reading the hosting NSWindow's
-/// effectiveAppearance and ignores `.environment(\.colorScheme, .dark)`
-/// overrides on the view tree, so we can't get there from within
-/// SwiftUI.
-///
-/// `.hudWindow` material gives a darker, more opaque frost than
-/// `.popover` or `.menu` — closest match to Apple's own HUD
-/// surfaces (Volume / Brightness overlay, etc.).
-private struct DarkHUDBackdrop: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = .hudWindow
-        v.blendingMode = .behindWindow
-        v.state = .active
-        v.appearance = NSAppearance(named: .darkAqua)
-        return v
-    }
-
-    func updateNSView(_ v: NSVisualEffectView, context: Context) {
-        // Re-apply on every layout pass — defensive against AppKit
-        // resetting appearance when the view re-parents (e.g., after
-        // a hosting window appearance change). Cheap; assignment
-        // no-ops if the value is identical.
-        v.appearance = NSAppearance(named: .darkAqua)
-    }
-}
-
 private struct AnimatedGradientBorder: View {
     let cornerRadius: CGFloat
     let lineWidth: CGFloat
