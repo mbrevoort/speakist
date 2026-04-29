@@ -178,7 +178,13 @@ final class HUDPanel: NSPanel {
         self.level = .statusBar
         self.isOpaque = false
         self.backgroundColor = .clear
-        self.hasShadow = true
+        // Disable the NSWindow drop shadow. AppKit draws it as a soft
+        // gray diffusion *outside* the panel's opaque content (our
+        // rounded gradient fill), which on a light desktop reads as a
+        // dark halo bleeding past the rainbow border. The panel's
+        // visual identity is the gradient border itself; nothing
+        // outside that boundary should be visible.
+        self.hasShadow = false
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         self.hidesOnDeactivate = false
         self.animationBehavior = .utilityWindow
