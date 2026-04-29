@@ -377,8 +377,23 @@ private struct HUDView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
+            // We deliberately don't use SwiftUI's `.ultraThinMaterial`
+            // here: on macOS the SwiftUI Material primitives resolve
+            // their dark/light variant by walking up to the hosting
+            // NSWindow's `effectiveAppearance` *at composite time* and
+            // ignoring any `.environment(\.colorScheme, .dark)` /
+            // `.preferredColorScheme(.dark)` overrides set on the
+            // SwiftUI tree itself. Even pinning the NSPanel's
+            // `appearance` to `.darkAqua` didn't reliably flip
+            // `.ultraThinMaterial` to its dark variant on light
+            // desktops — it kept reading as a washed-out pale panel.
+            //
+            // Dropping down to NSVisualEffectView with an explicit
+            // `appearance = .darkAqua` is the only reliable path: the
+            // dark vibrancy is part of the view's own state, not
+            // resolved from any ancestor.
+            DarkHUDBackdrop()
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         )
         // Outer border: an angular gradient that sweeps the brand
         // palette around the panel. Replaces the previous static
@@ -389,14 +404,9 @@ private struct HUDView: View {
             AnimatedGradientBorder(cornerRadius: 16, lineWidth: 2)
         )
         .padding(4)
-        // Lock the HUD's chrome to dark regardless of the user's
-        // system appearance. Material adapts to the surrounding
-        // colorScheme, so on a light desktop the unforced HUD reads
-        // as a washed-out light panel — the dark variant has more
-        // contrast against any background and matches our brand
-        // intention. `.primary` / `.secondary` text colors and the
-        // ultraThinMaterial fill all key off this environment value,
-        // so a single override flips the whole tree.
+        // SwiftUI semantic colors (.primary / .secondary on the time
+        // label) still need a dark colorScheme so the text reads
+        // white-on-dark even when the host system is in light mode.
         .environment(\.colorScheme, .dark)
     }
 
@@ -473,6 +483,37 @@ private struct HUDView: View {
 /// (preparing → recording → transcribing) without re-triggering an
 /// animation. TimelineView drives the redraw off a wall clock and
 /// gives us a continuous phase value.
+/// Dark frosted backdrop for the HUD. NSVisualEffectView wrapped in
+/// NSViewRepresentable so we can pin `appearance = .darkAqua` directly
+/// on the view — that's the only reliable way to force a dark
+/// vibrancy effect on a light-mode desktop. SwiftUI's `.ultraThinMaterial`
+/// resolves its variant by reading the hosting NSWindow's
+/// effectiveAppearance and ignores `.environment(\.colorScheme, .dark)`
+/// overrides on the view tree, so we can't get there from within
+/// SwiftUI.
+///
+/// `.hudWindow` material gives a darker, more opaque frost than
+/// `.popover` or `.menu` — closest match to Apple's own HUD
+/// surfaces (Volume / Brightness overlay, etc.).
+private struct DarkHUDBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .hudWindow
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.appearance = NSAppearance(named: .darkAqua)
+        return v
+    }
+
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        // Re-apply on every layout pass — defensive against AppKit
+        // resetting appearance when the view re-parents (e.g., after
+        // a hosting window appearance change). Cheap; assignment
+        // no-ops if the value is identical.
+        v.appearance = NSAppearance(named: .darkAqua)
+    }
+}
+
 private struct AnimatedGradientBorder: View {
     let cornerRadius: CGFloat
     let lineWidth: CGFloat
