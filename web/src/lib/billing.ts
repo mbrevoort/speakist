@@ -107,6 +107,12 @@ export async function createTopupCheckoutSession(
     ],
     payment_intent_data: {
       setup_future_usage: "off_session",
+      // Appended to the "Statement descriptor prefix" set in the
+      // Stripe Dashboard → Settings → Public details. With prefix
+      // "SPEAKIST" the customer's card statement reads
+      // "SPEAKIST* TOPUP". Stripe enforces a 22-char total cap on
+      // prefix + space + suffix.
+      statement_descriptor_suffix: "TOPUP",
       metadata: {
         orgId: args.orgId,
         tierId: args.tier.id,
@@ -176,5 +182,9 @@ export async function triggerAutoTopup(args: TriggerAutoTopupArgs): Promise<Stri
       reason: "stripe_auto_topup",
     },
     description: "Speakist credit auto-top-up",
+    // With Dashboard prefix "SPEAKIST", customer statements read
+    // "SPEAKIST* AUTO" so they can tell auto-debits from manual
+    // top-ups when a billing dispute or memory check happens.
+    statement_descriptor_suffix: "AUTO",
   });
 }
