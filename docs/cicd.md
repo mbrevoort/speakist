@@ -365,3 +365,117 @@ UPDATE releases SET yanked_at = unixepoch(), yanked_reason = '…'
 The dynamic appcast filters out yanked rows on the next request, so
 Sparkle clients stop seeing the bad version immediately. Already-
 upgraded clients are not affected (Sparkle doesn't downgrade).
+
+## Config management
+
+Four tiers, each with a single source-of-truth so dev-vs-prod (and
+local/dev/beta/stable on the apps) stay in lockstep without manual
+syncing:
+
+### Tier 1 — build-time client bundle (`NEXT_PUBLIC_*`)
+
+Next.js inlines `NEXT_PUBLIC_*` into the JavaScript bundle at
+`opennextjs-cloudflare build` time. A Worker secret can't reach
+these values — by the time the Worker runs, the bundle is frozen.
+
+* **Source of truth**: `web/package.json`'s `deploy:dev` and
+  `deploy:prod` scripts, as inline shell exports.
+* **Examples**: `NEXT_PUBLIC_SITE_URL`.
+* **Local dev**: `web/.env.local` (gitignored) — same names.
+
+To add a new build-time public value:
+
+1. Add `NEXT_PUBLIC_FOO=...` to **both** the `deploy:dev` and
+   `deploy:prod` scripts in `web/package.json`.
+2. Add to `web/.env` template + your local `.env.local` for `pnpm dev`.
+3. Read in code via `process.env.NEXT_PUBLIC_FOO`.
+
+### Tier 2 — Worker runtime vars (non-secret, per env)
+
+Read by Worker code at request time via `process.env.X`. Public —
+safe to commit. Server Components and API routes see them at SSR
+time, so values can flow into HTML the client receives.
+
+* **Source of truth**: `[env.dev.vars]` and `[env.production.vars]`
+  in `web/wrangler.toml`.
+* **Examples**: `RELEASE_DOWNLOAD_BASE_URL`, `RELEASE_R2_BUCKET`,
+  `IOS_TESTFLIGHT_URL`, `RESEND_FROM_EMAIL`, `SUPER_ADMIN_EMAIL`.
+
+To add a new runtime var:
+
+1. Add to **both** `[env.dev.vars]` and `[env.production.vars]` in
+   `web/wrangler.toml` (even if the value's the same on both today,
+   keeping both blocks symmetric makes future divergence one edit).
+2. Add to `web/src/lib/env.ts`'s `serverSchema` with a `next dev`
+   fallback default.
+3. Read via `env.server.FOO` (preferred) or `process.env.FOO`.
+
+### Tier 3 — Worker secrets (encrypted, per env)
+
+Sensitive values that should never sit in the repo. Encrypted at
+rest in Cloudflare; visible only to the Worker at request time.
+
+* **Source of truth**: `wrangler secret put X --env <dev|production>`.
+* **Examples**: `AUTH_SECRET`, `APP_ENCRYPTION_KEY`, `RESEND_API_KEY`,
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `DEEPGRAM_API_KEY`,
+  `DEEPGRAM_PROJECT_KEY`, `GROQ_API_KEY`, `RELEASE_PUBLISH_TOKEN`.
+
+To rotate or set a secret:
+
+```bash
+cd web
+pnpm exec wrangler secret put STRIPE_SECRET_KEY --env production
+# Paste the new value when prompted.
+```
+
+To list what's currently set on a Worker:
+
+```bash
+pnpm exec wrangler secret list --env production
+```
+
+### Tier 4 — native app channel config (Mac + iOS, baked at build)
+
+The Mac and iOS apps read their channel-specific values out of
+Info.plist at runtime, but the Info.plist is generated at build time
+from `project.yml` build settings.
+
+* **Source of truth**: `project.yml`'s per-config blocks (`Debug` →
+  `local`, `Release` → `stable`, iOS-only `Dev` → `dev`) plus
+  `scripts/release.sh`'s channel matrix (it rewrites `project.yml`'s
+  `Release` block in-place before `xcodegen generate` when shipping
+  `beta` or `dev`).
+* **Surfaced via**: Info.plist build-setting substitution
+  (`$(SPEAKIST_API_BASE_URL)`, `$(SPEAKIST_FEED_URL)`, etc.) →
+  `Bundle.main` → `SpeakistChannel.current` accessors in
+  `Shared/SpeakistChannel.swift`.
+* **Examples**: bundle ID, App Group, display name, channel tag,
+  API base URL, Sparkle feed URL.
+
+To add a new channel-specific value:
+
+1. Add a `SPEAKIST_FOO` build setting to each `configs:` block in
+   `project.yml` (Debug / Dev / Release).
+2. Add a `SpeakistFoo` key to the relevant `info: properties:` block
+   referencing `$(SPEAKIST_FOO)`.
+3. Update `scripts/release.sh`'s channel matrix + `sed` rewrite
+   patterns so beta/dev injection covers the new key.
+4. Read at runtime via a `SpeakistChannel` accessor backed by
+   `Bundle.main.object(forInfoDictionaryKey: "SpeakistFoo")`.
+
+### Anti-patterns to avoid
+
+* **Don't put env-specific URLs in code as `const`s** — they drift.
+  If a value can differ between dev and prod, it belongs in Tier 1
+  or Tier 2.
+* **Don't put secrets in Tier 1** — `NEXT_PUBLIC_*` reaches the
+  client bundle, where any user can read it. Anything sensitive
+  goes through Tier 3.
+* **Don't leave dev-flavored fallbacks in code defaults** — a
+  fallback firing in production means a config drift, not a
+  feature. Defaults in `env.ts`/code should be either prod-safe
+  (e.g., `noreply@speakist.ai`) or local-dev-only (`localhost:3000`).
+* **Don't touch the App Group ID, bundle ID prefix, or URL scheme
+  prefix per channel without auditing both Apple Developer portal
+  and `release.sh`** — they're paired registrations and a one-sided
+  change produces mysterious provisioning failures at archive time.

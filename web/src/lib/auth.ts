@@ -60,7 +60,7 @@ export function buildAuthConfig(): NextAuthConfig {
         // "Email" instead of the service we happen to buy delivery from.
         name: "Email",
         apiKey: process.env.RESEND_API_KEY ?? "resend-missing",
-        from: process.env.RESEND_FROM_EMAIL ?? "noreply@speakist-dev.brevoortstudio.com",
+        from: process.env.RESEND_FROM_EMAIL ?? "noreply@speakist.ai",
         // Intercept the outgoing email so we can (a) log the link in dev and
         // (b) swap in our branded template in Phase 3. For Phase 1, default
         // behavior is fine and we only override the dev-logging case.

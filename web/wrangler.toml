@@ -46,12 +46,35 @@ enabled = true
 [env.dev]
 name = "speakist-web-dev"
 
-# Public vars (non-secret). scripts/release.sh reads these via the web API
-# to know where to upload DMGs and what URL to register in the releases
-# table. Secrets (RELEASE_PUBLISH_TOKEN, etc.) go via `wrangler secret put`.
+# Public, env-specific values that the Worker reads at runtime via
+# process.env.X. Source of truth for everything that's not a secret
+# and that differs between dev and prod. See docs/cicd.md for the
+# full config-management strategy.
+#
+#   RELEASE_DOWNLOAD_BASE_URL   — Mac DMG public origin (R2 custom domain)
+#   RELEASE_R2_BUCKET           — bucket release.sh uploads DMGs to
+#   IOS_TESTFLIGHT_URL          — public TestFlight invite, surfaced on
+#                                 marketing pages + dashboard so the
+#                                 Speakist-Dev web links to the dev
+#                                 TestFlight and the prod web links to
+#                                 the prod TestFlight automatically
+#   RESEND_FROM_EMAIL           — magic-link "from" address. Same prod
+#                                 domain on both envs because Resend is
+#                                 only configured for speakist.ai.
+#   SUPER_ADMIN_EMAIL           — bootstrap admin (seed script promotes)
+#
+# Secrets (API keys, AUTH_SECRET, APP_ENCRYPTION_KEY,
+# RELEASE_PUBLISH_TOKEN, etc.) go via `wrangler secret put --env X`,
+# never here. Build-time client-bundle values (NEXT_PUBLIC_*) are set
+# in package.json's deploy:dev / deploy:prod scripts so Next.js inlines
+# them into the JS bundle at build time — Worker secrets can't reach
+# the client bundle after it's built.
 [env.dev.vars]
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads-dev.brevoortstudio.com"
 RELEASE_R2_BUCKET = "speakist-releases-dev"
+IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu"
+RESEND_FROM_EMAIL = "noreply@speakist.ai"
+SUPER_ADMIN_EMAIL = "mike@brevoort.com"
 
 [[env.dev.d1_databases]]
 binding = "DB"
@@ -102,6 +125,13 @@ workers_dev = false
 [env.production.vars]
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads.speakist.ai"
 RELEASE_R2_BUCKET = "speakist-releases-prod"
+# TODO: replace with the prod App Store Connect TestFlight invite once
+# the "Speakist" iOS app record + TestFlight group are provisioned (see
+# docs/cicd.md "Apple Developer portal" prod setup). Using the dev
+# invite as a temporary stand-in so the wiring works end-to-end now.
+IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu"
+RESEND_FROM_EMAIL = "noreply@speakist.ai"
+SUPER_ADMIN_EMAIL = "mike@brevoort.com"
 
 [[env.production.d1_databases]]
 binding = "DB"

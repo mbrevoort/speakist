@@ -12,6 +12,7 @@ import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { pricingConfig } from "@/lib/db/schema";
 import { millicentsToWords } from "@/lib/utils";
+import { env } from "@/lib/env";
 
 export const metadata = { title: "Dashboard — Speakist" };
 
@@ -28,6 +29,8 @@ export default async function DashboardHome() {
       .limit(1),
   ]);
   const balanceWords = millicentsToWords(balanceMc, cfg?.perWordMc ?? 20);
+  // Per-env TestFlight invite (wrangler.toml [env.X.vars]).
+  const testflightURL = env.server.IOS_TESTFLIGHT_URL;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -133,7 +136,7 @@ export default async function DashboardHome() {
               </Button>
               <Button asChild variant="outline">
                 <a
-                  href="https://testflight.apple.com/join/5jqHKMnu"
+                  href={testflightURL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="gap-2"
