@@ -70,9 +70,18 @@ EXPORT_DIR="build/ios-export-${CONFIG}"
 # pipeline). Dev builds keep whatever's in project.yml — bumping the
 # marketing version on every dev push would force a fresh CFBundleVersion
 # baseline for TestFlight, which doesn't help anyone testing internally.
-MARKETING_OVERRIDE=()
+#
+# Plain string (unquoted on expansion) rather than a bash array. The
+# array form `"${arr[@]}"` errors under `set -u` when the array is
+# empty on bash versions older than 4.4 — which is what `env bash`
+# resolves to on the GitHub macos-26 runner. Unquoted scalar
+# expansion of an empty (but defined) string is safe under `set -u`
+# because the variable IS set; it just yields zero tokens.
+# `MARKETING_VERSION=...` has no whitespace, so unquoted expansion
+# produces exactly one xcodebuild build-setting argument.
+MARKETING_FLAG=""
 if [ -n "${RELEASE_VERSION:-}" ]; then
-  MARKETING_OVERRIDE=(MARKETING_VERSION="$RELEASE_VERSION")
+  MARKETING_FLAG="MARKETING_VERSION=$RELEASE_VERSION"
 fi
 
 echo "==> Generating Xcode project (xcodegen)"
@@ -90,7 +99,7 @@ xcodebuild \
   -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
   -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
   CURRENT_PROJECT_VERSION=$CFBUNDLE_VERSION \
-  "${MARKETING_OVERRIDE[@]}" \
+  ${MARKETING_FLAG} \
   archive
 
 echo "==> xcodebuild -exportArchive"
