@@ -106,7 +106,7 @@ RELEASE_R2_BUCKET = "speakist-releases-prod"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "speakist-prod"
-database_id = "__FILL_ME_IN__"
+database_id = "b75f0baf-7acc-4795-9d2a-00cc97efadcc"
 migrations_dir = "drizzle/migrations"
 
 # See dev block above for enablement steps.

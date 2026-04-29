@@ -416,6 +416,11 @@ targets:
       - path: Speakist/App/AppIdentity.swift
       - path: Speakist/Logging/Logger.swift
       - path: Speakist/Resources/Brand.swift
+    # Asset catalog with the BrandIcon image (downsampled from the
+    # iOS app icon) used by KeyboardToolbarView. Keyboard extensions
+    # need their own copy — they can't read the host app's bundle.
+    resources:
+      - path: SpeakistKeyboard/Resources
     info:
       path: SpeakistKeyboard/Info.plist
       properties:

@@ -10,7 +10,7 @@ This doc has five parts:
 2. **Per-release runbook** — every time you ship a new version
 3. **Emergency rollback** — yanking a bad release
 4. **Troubleshooting** — the errors you'll actually hit
-5. **CI automation** — dev pipeline is live; prod still manual
+5. **CI automation** — dev pipeline + prod pipeline (GitHub Releases)
 
 ---
 
@@ -523,20 +523,30 @@ Keychain item with `security add-generic-password -s "https://sparkle-project.or
 
 ## 5. CI automation
 
-The **dev channel** is fully automated: every push to `main` builds and
-ships the Mac DMG to the dev Sparkle feed (and the iOS dev build to
-TestFlight, and the web Worker to dev). See `docs/cicd.md` for the
-secrets checklist, Apple Developer portal one-time setup, and failure
-modes.
+Both the **dev channel** (every push to `main`) and the **prod
+channels** (`stable` + `beta`, on GitHub Release publish) ship via
+GitHub Actions. Manual `make release` from a laptop is now a fallback
+for emergencies (e.g. CI is down and you need to ship a hotfix).
+
+| Channel | Trigger | Workflow |
+|---|---|---|
+| `dev` | push to `main` | `.github/workflows/deploy-dev.yml` |
+| `beta` | GitHub Release with prerelease ✓ | `.github/workflows/deploy-prod.yml` |
+| `stable` | GitHub Release (latest) | `.github/workflows/deploy-prod.yml` |
 
 `scripts/release.sh` reads opt-in env-var hooks
 (`NOTARY_API_KEY_PATH`, `SPARKLE_PRIVATE_KEY`) so the same script
 runs both on a developer's laptop (keychain credentials) and inside
 GitHub Actions (env-var credentials). The CI side wraps it in
-`scripts/release-ci.sh`, invoked by `.github/workflows/deploy-dev.yml`.
+`scripts/release-ci.sh`, parameterized by env vars (`RELEASE_CHANNEL`,
+`RELEASE_VERSION`, `RELEASE_NOTES_FILE`) so a single script drives
+both pipelines. iOS uses the parallel `scripts/release-ios-ci.sh`,
+parameterized via `RELEASE_IOS_SCHEME` / `RELEASE_IOS_CONFIG`.
 
-**Beta + stable still ship manually** via `make release VERSION=…
-CHANNEL=beta|stable` from a laptop with the keychain set up. A
-prod-flavored workflow triggered by GitHub Releases (`on: release:
-types: [published]`) is the planned next step — it'll reuse the same
-`release-ci.sh` wrapper with `--channel beta` or `--channel stable`.
+The release notes shown in Sparkle's update window come from the
+**GitHub Release body**, rendered to HTML via `gh api /markdown` and
+stored in D1's `releases.releaseNotes`. To update what users see in a
+"What's new" panel: edit the GitHub Release description.
+
+See `docs/cicd.md` for the secrets checklist, Apple Developer portal
+setup, Cloudflare prod resource provisioning, and failure modes.

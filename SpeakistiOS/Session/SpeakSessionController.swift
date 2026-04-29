@@ -54,8 +54,11 @@ final class SpeakSessionController: ObservableObject {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         wireDarwinObservers()
+        wireSystemObservers()
         pushStatusToSharedDefaults()
     }
+
+    private var systemObservers: [NSObjectProtocol] = []
 
     // MARK: - Pending-request handoff (iOS-26 workaround)
 
@@ -99,6 +102,12 @@ final class SpeakSessionController: ObservableObject {
         case .cancelSession:
             Logger.shared.info("URL scheme cancel-session")
             teardown(reason: "cancel")
+        case .openApp:
+            // Brand-icon tap from the keyboard. The URL scheme is just
+            // a transport for foreground promotion; iOS already brought
+            // the app forward by the time we got here. No session work
+            // to do — just log it.
+            Logger.shared.info("URL scheme open-app (brand-icon tap)")
         }
     }
 
@@ -388,6 +397,71 @@ final class SpeakSessionController: ObservableObject {
         darwinTokens.append(DarwinNotifier.shared.observe(.keyboardRequestedActivation) { [weak self] in
             self?.startRecordingIfReady()
         })
+    }
+
+    /// Subscribe to system audio events that can take the mic away
+    /// from us mid-flow. The big one in practice: tapping the iOS
+    /// system dictation mic that sits outside our keyboard extension
+    /// — that icon is drawn by iOS and we can't suppress it, so the
+    /// only viable defense is to detect the interruption AVAudioSession
+    /// posts when iOS seizes the mic, kill our session, and let the
+    /// keyboard re-render to typing mode so the user can re-trigger
+    /// Speakist on a clean slate. Same path covers Siri, phone calls,
+    /// and any other audio-grabbing notifier.
+    private func wireSystemObservers() {
+        let token = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            // Hop to the actor before mutating state — we declared
+            // queue: .main but Swift 6 still requires explicit isolation.
+            Task { @MainActor [weak self] in
+                self?.handleAudioInterruption(note)
+            }
+        }
+        systemObservers.append(token)
+    }
+
+    private func handleAudioInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeRaw)
+        else { return }
+
+        // Only `.began` is actionable for us. `.ended` would let us
+        // resume on Apple's nudge, but the dictation case isn't a
+        // resumable interruption — by the time iOS posts `.ended`,
+        // dictation has handed the mic back but our recorder is gone
+        // and the user has likely moved on. Better to require an
+        // explicit re-tap of Start Speakist than to fire-up a stale
+        // session in the background.
+        guard type == .began else { return }
+
+        // Idle/done sessions don't care about audio interruptions.
+        guard status == .activating || status == .listening else { return }
+
+        Logger.shared.warn("audio interrupted by system — ending Speakist session")
+
+        // Release resources immediately so we're not feeding bytes
+        // into a dead audio session. Don't call teardown() — it sets
+        // status to .idle, but we want a brief .error window so the
+        // keyboard surfaces a hint before snapping back to typing.
+        recorder?.cancel()
+        recorder = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        expiryTimer?.invalidate()
+        expiryTimer = nil
+
+        lastError = "Microphone taken by another app — tap Start Speakist to retry"
+        status = .error
+        sessionExpiresAt = nil
+        pushStatusToSharedDefaults()
+        DarwinNotifier.post(.appStateChanged)
+        // After ~2.5s the keyboard's transient banner auto-hides; the
+        // controller drops back to .idle so the next tap of Start
+        // Speakist starts a fresh session.
+        scheduleReturnToIdle(after: 2.5)
     }
 
     // MARK: - Auto-expiry

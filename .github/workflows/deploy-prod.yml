@@ -1,0 +1,337 @@
+# Production CI/CD — runs when a GitHub Release is published.
+#
+# Three jobs (no `needs:` between them, so a single job's failure
+# doesn't block the others):
+#   * web — Cloudflare Worker (speakist-web-prod) + D1 prod migrations
+#   * mac — Mac DMG, notarized + Sparkle-signed, uploaded to R2 prod,
+#           registered in D1 prod via /api/admin/releases/publish
+#   * ios — iOS Release archive, uploaded to TestFlight (Internal)
+#           under the "Speakist" App Store Connect record
+#
+# Release semantics:
+#   tag      v0.2.0          → MARKETING_VERSION 0.2.0
+#   body     (markdown)      → Sparkle <description> HTML (Mac)
+#                             — TestFlight "What to Test" set manually
+#                               in App Store Connect (altool can't push it)
+#   prerel   off (default)   → channel=stable
+#   prerel   on              → channel=beta (uses the same prod Worker
+#                              + D1, but the appcast is /appcast-beta.xml)
+#
+# Channel ↔ Apple bundle ID matrix:
+#   stable  → com.brevoort-studio.speakist        (Mac, "Speakist")
+#             com.brevoort-studio.speakist.ios    (iOS, "Speakist")
+#   beta    → com.brevoort-studio.speakist.beta   (Mac, "Speakist Beta")
+#             — iOS beta channel is intentionally not provisioned;
+#               TestFlight External Beta on the stable iOS app record
+#               serves the same role with less Apple Developer portal
+#               churn. The iOS job below skips when channel=beta.
+#
+# Security note: this workflow consumes encrypted `secrets.*` and reads
+# `github.event.release.{tag_name,body,prerelease}`. Tag and body are
+# user-controlled (whoever can publish a release) — they're passed
+# only via env vars, never interpolated into shell commands. The body
+# is rendered to HTML by `gh api /markdown` (server-side, sandboxed)
+# before reaching the Mac job, so the only thing it influences in CI
+# is what HTML lands in the Sparkle appcast `<description>`. The tag
+# is regex-validated against semver before being used as a checkout ref.
+
+name: Deploy Prod
+
+on:
+  release:
+    types: [published]
+  # Manual re-trigger for an existing release (e.g. CI flake recovery).
+  # Provide the tag of the already-published release; the workflow
+  # re-fetches its body + prerelease flag via the GitHub API.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)deploy (e.g. v0.2.0)"
+        required: true
+
+# Serialize prod runs so a back-to-back release publish doesn't kill an
+# in-flight notarization (Apple's notary queue gets unhappy and leaves
+# zombie submission UUIDs). cancel-in-progress: false → queue, don't
+# preempt.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # context → resolve tag → version, channel, and release-notes HTML
+  # ---------------------------------------------------------------------------
+  # Centralizes the "what are we shipping" decisions so each build job
+  # consumes simple env values instead of replicating tag parsing.
+  # Notes are rendered once here (markdown → HTML via gh api /markdown)
+  # and passed to the Mac job via artifact — that way iOS/web aren't
+  # burdened with a markdown toolchain they don't use.
+  context:
+    name: Resolve release context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      channel: ${{ steps.parse.outputs.channel }}
+      tag: ${{ steps.parse.outputs.tag }}
+    steps:
+      - name: Parse tag → version + channel
+        id: parse
+        env:
+          # User-controlled — pass via env var, not direct shell
+          # interpolation. Validated below.
+          RAW_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RAW_TAG:-}" ]; then
+            echo "FATAL: no tag in release payload or workflow input" >&2
+            exit 1
+          fi
+          # Strip a single leading 'v' so v0.2.0 → 0.2.0; any other
+          # prefix is left alone (helps catch bad tags loud).
+          VERSION="${RAW_TAG#v}"
+          # Reject anything that doesn't parse as semver. This both
+          # catches typos AND prevents the tag from carrying shell
+          # metacharacters into downstream jobs that consume it as
+          # an env var or checkout ref.
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$'; then
+            echo "FATAL: tag does not parse as semver after stripping v" >&2
+            exit 1
+          fi
+          # workflow_dispatch leaves IS_PRERELEASE empty; treat as not-prerelease.
+          if [ "${IS_PRERELEASE:-false}" = "true" ]; then
+            CHANNEL="beta"
+          else
+            CHANNEL="stable"
+          fi
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "==> version=$VERSION channel=$CHANNEL"
+
+      - name: Fetch + render release notes (markdown → HTML)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tag is now validated semver, but still pass via env for
+          # consistency with the parse step.
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p notes
+          # Re-fetch via API rather than reading github.event.release.body
+          # so workflow_dispatch (which has no release payload) works the
+          # same way as the on:release trigger.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' > notes/release-notes.md
+          # Render via the GitHub markdown API so the HTML matches what
+          # users see on the Releases page. mode=gfm → checkboxes,
+          # autolinks, fenced code, tables. Sparkle's update window
+          # renders this HTML directly.
+          jq -n --rawfile t notes/release-notes.md '{mode: "gfm", text: $t}' \
+            | gh api /markdown --method POST --input - > notes/release-notes.html
+          echo "==> rendered $(wc -c < notes/release-notes.md) bytes md → $(wc -c < notes/release-notes.html) bytes html"
+
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Web → Cloudflare Worker (speakist-web-prod) + D1 prod migrations
+  # ---------------------------------------------------------------------------
+  # Migrations gate deploy: a failed migrate aborts the job before
+  # `pnpm deploy:prod` runs, so prod traffic never hits a Worker built
+  # against a schema D1 doesn't have yet. release.sh later POSTs to
+  # /api/admin/releases/publish on this freshly-deployed Worker — keep
+  # that ordering in mind if you ever add a `wait-for-deploy` step.
+  web:
+    name: Deploy web to prod
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      # Check out the tagged commit, not main, so the deployed code
+      # matches what the user clicked Publish on. main may have moved
+      # forward by the time the workflow fires.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply D1 migrations (prod)
+        working-directory: web
+        run: pnpm db:migrate:prod
+
+      - name: Deploy Worker (prod)
+        working-directory: web
+        run: pnpm deploy:prod
+
+  # ---------------------------------------------------------------------------
+  # Mac → Sparkle stable feed (downloads.speakist.ai)
+  # ---------------------------------------------------------------------------
+  mac:
+    name: Build + ship Mac DMG (${{ needs.context.outputs.channel }})
+    needs: context
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Prod publish-token is the only secret that differs from the dev
+      # workflow — it matches the RELEASE_PUBLISH_TOKEN secret on the
+      # speakist-web-prod Worker (set via `wrangler secret put
+      # RELEASE_PUBLISH_TOKEN --env production`).
+      RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN_PROD }}
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      # Drive release-ci.sh in prod mode. RELEASE_VERSION comes from
+      # the validated release tag (v0.2.0 → 0.2.0); RELEASE_CHANNEL is
+      # stable for normal releases or beta for prereleases.
+      RELEASE_VERSION: ${{ needs.context.outputs.version }}
+      RELEASE_CHANNEL: ${{ needs.context.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.tag }}
+
+      - name: Download release notes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Point release-ci.sh at the rendered notes
+        run: echo "RELEASE_NOTES_FILE=$PWD/notes/release-notes.html" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        # release.sh shells out to `pnpm exec wrangler r2 …` from web/
+        # for the DMG upload, so the web target's deps must be installed.
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      - name: Install xcodegen + jq
+        run: brew install xcodegen jq
+
+      - name: Install Sparkle tools
+        # Pin to the Sparkle version we depend on for the Mac framework
+        # so sign_update output stays compatible across upgrades.
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Library/Developer/Sparkle"
+          curl -fsSL -o /tmp/sparkle.tar.xz \
+            https://github.com/sparkle-project/Sparkle/releases/download/2.6.4/Sparkle-2.6.4.tar.xz
+          tar -xf /tmp/sparkle.tar.xz -C "$HOME/Library/Developer/Sparkle"
+          ls "$HOME/Library/Developer/Sparkle/bin/sign_update"
+
+      - name: Set up Apple signing
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          p12-base64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
+          key: spm-mac-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-mac-
+
+      - name: Build, notarize, sign, upload, publish
+        run: scripts/release-ci.sh
+
+  # ---------------------------------------------------------------------------
+  # iOS → TestFlight (Internal Testing on the "Speakist" app record)
+  # ---------------------------------------------------------------------------
+  # Only runs for stable releases. Beta/prerelease tags don't ship an
+  # iOS build because the iOS beta-channel bundle ID isn't provisioned —
+  # External TestFlight on the stable iOS app record covers that role.
+  # If you ever do want to provision …ios.beta, drop the `if:` filter
+  # and set RELEASE_IOS_SCHEME/CONFIG to the beta-flavored values.
+  ios:
+    name: Build + ship iOS to TestFlight
+    needs: context
+    if: ${{ needs.context.outputs.channel == 'stable' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      # Prod iOS uses the default `SpeakistiOS` scheme + Release config
+      # (= bundle ID com.brevoort-studio.speakist.ios). RELEASE_VERSION
+      # bumps MARKETING_VERSION at xcodebuild time so the IPA's
+      # CFBundleShortVersionString matches the GitHub Release tag.
+      RELEASE_IOS_SCHEME: SpeakistiOS
+      RELEASE_IOS_CONFIG: Release
+      RELEASE_VERSION: ${{ needs.context.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.context.outputs.tag }}
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Set up Apple signing
+        # Same composite action as dev — imports the iOS Distribution
+        # P12 + drops the App Store Connect .p8 in the conventional
+        # path. Profiles for the …ios + …ios.Keyboard bundle IDs are
+        # auto-fetched by xcodebuild -allowProvisioningUpdates on first
+        # archive (provided the App IDs + App Group are registered
+        # in the Apple Developer portal — see docs/cicd.md).
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          p12-base64: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_PASSWORD }}
+          api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
+          key: spm-ios-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-ios-
+
+      - name: Build, sign, archive, upload to TestFlight
+        run: scripts/release-ios-ci.sh

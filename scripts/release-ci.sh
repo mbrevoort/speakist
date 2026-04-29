@@ -9,8 +9,14 @@
 # App Store Connect .p8 into the conventional path; this script
 # exports the env-var hooks release.sh reads (NOTARY_API_KEY_PATH /
 # NOTARY_API_KEY_ID / NOTARY_API_ISSUER / SPARKLE_PRIVATE_KEY) and
-# computes a CI-flavored version string, then exec's release.sh with
-# the dev-channel flag.
+# computes a version string, then exec's release.sh with the
+# appropriate channel.
+#
+# Drives both the dev pipeline (deploy-dev.yml, every push to main)
+# and the prod pipeline (deploy-prod.yml, every GitHub Release). The
+# default behavior — no overrides set — reproduces the dev flow
+# exactly: channel=dev, version=<project.yml>+dev.<run>, notes="CI
+# build from <sha>", token from SPEAKIST_PUBLISH_TOKEN_DEV.
 #
 # Required env (failure mode is loud — missing var → exit 1):
 #   APP_STORE_CONNECT_KEY_ID    10-char alphanumeric
@@ -19,6 +25,15 @@
 #   RELEASE_PUBLISH_TOKEN       Bearer for /api/admin/releases/publish
 #   GITHUB_RUN_NUMBER           Provided automatically by GitHub Actions
 #   GITHUB_SHA                  Provided automatically (used in release notes)
+#
+# Optional env (set by deploy-prod.yml to override defaults):
+#   RELEASE_CHANNEL             dev|beta|stable (default: dev)
+#   RELEASE_VERSION             Marketing version (default: derived
+#                               from project.yml + run number)
+#   RELEASE_NOTES_FILE          Path to release-notes file (HTML or
+#                               plain text). Contents go into the
+#                               appcast <description>. Falls back to
+#                               "CI build from <short-sha>" when unset.
 
 set -euo pipefail
 
@@ -46,24 +61,41 @@ API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_KE
   exit 1
 }
 
+# Channel selection (default: dev for the deploy-dev pipeline).
+CHANNEL="${RELEASE_CHANNEL:-dev}"
+case "$CHANNEL" in
+  dev|beta|stable) ;;
+  *) echo "FATAL: invalid RELEASE_CHANNEL='$CHANNEL' (must be dev, beta, or stable)" >&2; exit 1 ;;
+esac
+
 # Hand the env-var hooks to release.sh.
 export NOTARY_API_KEY_PATH="$API_KEY_PATH"
 export NOTARY_API_KEY_ID="$APP_STORE_CONNECT_KEY_ID"
 export NOTARY_API_ISSUER="$APP_STORE_CONNECT_ISSUER_ID"
 # SPARKLE_PRIVATE_KEY already in env from the workflow; release.sh
 # checks `${SPARKLE_PRIVATE_KEY:-}` so passing through is enough.
-# The publish-token env var has channel-specific names per the script;
-# we map the workflow's RELEASE_PUBLISH_TOKEN onto the dev-channel slot.
-export SPEAKIST_PUBLISH_TOKEN_DEV="$RELEASE_PUBLISH_TOKEN"
+# Map the workflow's RELEASE_PUBLISH_TOKEN onto the channel-specific
+# slot release.sh reads from. dev → SPEAKIST_PUBLISH_TOKEN_DEV;
+# beta and stable both → SPEAKIST_PUBLISH_TOKEN_PROD (they share
+# the prod Worker + D1 — only the channel column on the row differs).
+case "$CHANNEL" in
+  dev)          export SPEAKIST_PUBLISH_TOKEN_DEV="$RELEASE_PUBLISH_TOKEN" ;;
+  beta|stable)  export SPEAKIST_PUBLISH_TOKEN_PROD="$RELEASE_PUBLISH_TOKEN" ;;
+esac
 
-# Compute a marketing version with a CI build-meta suffix. The suffix
-# is purely cosmetic — Sparkle compares CFBundleVersion (the integer
-# build number) for ordering, not the marketing version. The "+dev.N"
-# is here so a user reading the About panel can eyeball which CI build
-# they're on.
-PROJECT_VERSION=$(awk '/^[[:space:]]*MARKETING_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' project.yml)
-[ -n "$PROJECT_VERSION" ] || { echo "FATAL: couldn't read MARKETING_VERSION from project.yml" >&2; exit 1; }
-VERSION="${PROJECT_VERSION}+dev.${GITHUB_RUN_NUMBER}"
+# Marketing version: prod pipeline passes RELEASE_VERSION (e.g. "0.2.0"
+# from the GitHub Release tag), so use it verbatim. Dev pipeline leaves
+# it unset and gets the "<project.yml>+dev.<run>" cosmetic suffix —
+# Sparkle ignores marketing version for ordering (CFBundleVersion is
+# what matters), so the "+dev.N" is purely a "which CI build is this"
+# breadcrumb in About windows.
+if [ -n "${RELEASE_VERSION:-}" ]; then
+  VERSION="$RELEASE_VERSION"
+else
+  PROJECT_VERSION=$(awk '/^[[:space:]]*MARKETING_VERSION:/ {gsub(/"/, "", $2); print $2; exit}' project.yml)
+  [ -n "$PROJECT_VERSION" ] || { echo "FATAL: couldn't read MARKETING_VERSION from project.yml" >&2; exit 1; }
+  VERSION="${PROJECT_VERSION}+dev.${GITHUB_RUN_NUMBER}"
+fi
 
 # Override CFBundleVersion to a monotonically-increasing per-CI-run
 # number. release.sh's default behavior is "+1 on the file's persisted
@@ -79,9 +111,18 @@ VERSION="${PROJECT_VERSION}+dev.${GITHUB_RUN_NUMBER}"
 # on run numbers (only ever increment, even on force-pushes).
 export RELEASE_BUILD_NUMBER=$((100000 + GITHUB_RUN_NUMBER))
 
-# Short notes for the publish-API row.
+# Release notes: prod pipeline writes the GitHub Release body (rendered
+# from markdown to HTML) to a file and points us at it via
+# RELEASE_NOTES_FILE — the contents land in the Sparkle appcast
+# <description><![CDATA[...]]> for users to see. Dev pipeline leaves
+# it unset and gets a short "CI build from <sha>" breadcrumb instead.
 SHORT_SHA=${GITHUB_SHA:0:7}
-NOTES="CI build from ${SHORT_SHA}"
+if [ -n "${RELEASE_NOTES_FILE:-}" ]; then
+  [ -f "$RELEASE_NOTES_FILE" ] || { echo "FATAL: RELEASE_NOTES_FILE not found: $RELEASE_NOTES_FILE" >&2; exit 1; }
+  NOTES=$(cat "$RELEASE_NOTES_FILE")
+else
+  NOTES="CI build from ${SHORT_SHA}"
+fi
 
-echo "==> CI release wrapper: VERSION=$VERSION CHANNEL=dev SHA=$SHORT_SHA"
-exec scripts/release.sh "$VERSION" --channel dev --notes "$NOTES"
+echo "==> CI release wrapper: VERSION=$VERSION CHANNEL=$CHANNEL SHA=$SHORT_SHA"
+exec scripts/release.sh "$VERSION" --channel "$CHANNEL" --notes "$NOTES"
