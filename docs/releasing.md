@@ -206,9 +206,9 @@ via wrangler CLI at the moment):
 1. Dashboard → R2 → `speakist-releases-dev` → **Settings** → **Custom Domains** → **Connect Domain**
 2. Enter `downloads-dev.brevoortstudio.com`
 3. Cloudflare provisions TLS + inserts a CNAME; propagation is ~1 minute
-4. Same for `speakist-releases-prod` → `downloads.speakist.ai` once that
-   zone is on Cloudflare (prod domain can be attached later — dev is
-   enough to start shipping)
+4. Same for `speakist-releases-prod` → `downloads.speakist.ai`. Both
+   custom domains are now live; prod is the prerequisite for shipping
+   any stable / beta release.
 
 ### 1.6 Publish-token secret
 
@@ -237,6 +237,14 @@ export SPEAKIST_PUBLISH_TOKEN_PROD="..."
 
 Dev-channel releases use the DEV token against the dev Worker; beta +
 stable releases use the PROD token against the prod Worker.
+
+> **What about non-secret per-env values?** The download base URL,
+> the R2 bucket name, the iOS TestFlight invite, the email "from"
+> address — those live in `web/wrangler.toml` `[env.X.vars]` blocks
+> as Tier 2 runtime vars and roll out automatically on `pnpm
+> deploy:dev` / `pnpm deploy:prod`. No `wrangler secret put` needed.
+> See [cicd.md § Config management](cicd.md#config-management) for
+> the full tier model + a recipe for adding new values.
 
 ---
 
@@ -493,11 +501,25 @@ Keychain item with `security add-generic-password -s "https://sparkle-project.or
 ### Post-release verification failures
 
 **Sparkle says "You're up to date" but I just shipped:**
-- The appcast is empty or stale. Hit the URL directly:
-  `curl -s https://speakist-dev.brevoortstudio.com/appcast-dev.xml | head -30`
-  If there are no `<item>` blocks, the publish API call didn't insert a row.
-  Check `wrangler tail speakist-web-dev --env dev --format pretty` while
-  re-running `make release` to see the `/api/admin/releases/publish` POST.
+- The appcast is empty or stale. Hit the URL directly for whichever
+  channel you shipped:
+  ```bash
+  # dev
+  curl -s https://speakist-dev.brevoortstudio.com/appcast-dev.xml | head -30
+  # beta
+  curl -s https://speakist.ai/appcast-beta.xml | head -30
+  # stable
+  curl -s https://speakist.ai/appcast.xml | head -30
+  ```
+  If there are no `<item>` blocks, the publish API call didn't insert
+  a row. Tail the relevant Worker while re-running `make release`:
+  ```bash
+  # dev
+  pnpm exec wrangler tail speakist-web-dev --env dev --format pretty
+  # beta + stable both ship to prod
+  pnpm exec wrangler tail speakist-web-prod --env production --format pretty
+  ```
+  to see the `/api/admin/releases/publish` POST.
 - Sparkle caches appcasts briefly — force-check via Settings → About →
   **Check for updates…** rather than waiting for the automatic poll.
 - Running install's `sparkle:version` is ≥ the latest release's. Sparkle

@@ -151,7 +151,9 @@ After completing the one-time setup above:
 End-to-end verification:
 
 - **Web**: visit `https://speakist-dev.brevoortstudio.com/dashboard/usage`
-  — page should reflect any UI changes from the commit.
+  (dev) or `https://speakist.ai/dashboard/usage` (prod, after a
+  GitHub Release publish) — page should reflect any UI changes
+  from the deploy.
 - **Mac**: open Speakist Dev (already-installed) → Speakist menu →
   Check for Updates… → should offer the new build.
 - **iOS**: open TestFlight on iPhone → "Speakist Dev" should show a

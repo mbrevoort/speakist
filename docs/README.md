@@ -14,7 +14,8 @@ overview.
 | **Run the backend locally** (`pnpm dev`, local D1, magic-link via console) | [../web/SETUP.md](../web/SETUP.md) |
 | **Deploy the backend** to a fresh Cloudflare environment | [../web/DEPLOYING.md](../web/DEPLOYING.md) |
 | **Trigger a release** (or understand what CI ships automatically) | [cicd.md](cicd.md) |
-| **Manually ship a Mac DMG** to beta or stable | [releasing.md](releasing.md) |
+| Understand the **four-tier config model** (build-time vars, Worker vars, secrets, native channel) | [cicd.md § Config management](cicd.md#config-management) |
+| **Manually ship a Mac DMG** (emergency / no-CI fallback) | [releasing.md](releasing.md) |
 | Build + run the Mac or iOS app from Xcode during development | [../README.md#build-the-mac-app](../README.md#build-the-mac-app) |
 | Track iOS App Store submission readiness (audit findings, what's done, what's left) | [ios-app-store-submission.md](ios-app-store-submission.md) |
 
@@ -26,24 +27,34 @@ overview.
 | D1 database | local mirror (`.wrangler/state`) | `speakist-dev` (remote) | `speakist-prod` (remote) |
 | Web URL | `http://localhost:3000` | `speakist-dev.brevoortstudio.com` | `speakist.ai` |
 | Mac DMG hosting | n/a | R2 → `downloads-dev.brevoortstudio.com` | R2 → `downloads.speakist.ai` |
-| iOS app | n/a | TestFlight Internal Testing (`com.brevoort-studio.speakist.ios.dev`) | App Store (future, `com.brevoort-studio.speakist.ios`) |
+| iOS app | n/a | TestFlight Internal Testing (`com.brevoort-studio.speakist.ios.dev`) | TestFlight on the stable record (`com.brevoort-studio.speakist.ios`) |
 | Stripe | test mode + `stripe listen` | test mode | **live mode** |
-| Auth email | logged to console | Resend | Resend |
-| Mac build | Xcode Debug / Local channel | `make release CHANNEL=dev` (or auto via CI) | `make release` (stable, manual) |
+| Auth email | logged to console | Resend (`noreply@speakist.ai`) | Resend (`noreply@speakist.ai`) |
+| Mac build | Xcode Debug / Local channel | auto via [deploy-dev.yml](../.github/workflows/deploy-dev.yml) on push to `main` | auto via [deploy-prod.yml](../.github/workflows/deploy-prod.yml) on GitHub Release publish |
 | Mac `apiBaseURL` default | `http://localhost:3000` | baked to dev URL | baked to `speakist.ai` |
-| Sparkle update channel | n/a | `appcast-dev.xml` on dev Worker | `appcast.xml` on prod Worker |
+| Sparkle update channel | n/a | `appcast-dev.xml` on dev Worker | `appcast.xml` (stable) / `appcast-beta.xml` (prerelease) on prod Worker |
 
 ## CI/CD vs manual
 
-The **dev environment ships automatically** on every push to `main` —
-web Worker, Mac DMG, and iOS TestFlight build all triggered by GitHub
-Actions, with a path filter so unrelated commits skip the Apple jobs.
-See [cicd.md](cicd.md) for the secrets checklist and failure modes.
+Both environments ship via GitHub Actions:
 
-**Production releases are still manual** because they intentionally
-require human review. See [releasing.md](releasing.md) — same
-`scripts/release.sh` entry point CI uses, just with `CHANNEL=stable`
-or `CHANNEL=beta`.
+* **Dev** auto-deploys on every push to `main` — web Worker, Mac DMG
+  (dev channel), and iOS TestFlight (Internal) all triggered by
+  [deploy-dev.yml](../.github/workflows/deploy-dev.yml), with a path
+  filter so unrelated commits skip the Apple jobs.
+* **Production** auto-deploys on **GitHub Release publish**:
+  [deploy-prod.yml](../.github/workflows/deploy-prod.yml) reads the
+  release tag → `MARKETING_VERSION`, the release body markdown →
+  Sparkle release notes (rendered via `gh api /markdown`), and the
+  prerelease checkbox → channel (`stable` vs `beta`). Drives the
+  prod Worker, Mac DMG (stable/beta), and iOS TestFlight on the
+  stable app record. iOS is skipped on prereleases (no
+  `…ios.beta` bundle is provisioned by design).
+
+See [cicd.md](cicd.md) for the secrets checklist + failure modes for
+both pipelines, and [releasing.md](releasing.md) for the manual
+`scripts/release.sh` path — kept as a fallback for emergencies (CI
+down, hotfix needs to ship before the next merge to `main`, etc.).
 
 ## First-time setup (new machine / new contributor)
 
@@ -59,9 +70,10 @@ Worker secrets, custom domain, Stripe webhook, super admin keys for
 Groq + DeepGram.
 
 ### "I want to ship a manual Mac release"
-→ [docs/releasing.md](releasing.md). Sparkle EdDSA keypair, App Store
-Connect API key for notarization, R2 buckets, publish-token secret, and
-the `make release VERSION=x.y.z CHANNEL=…` command.
+→ [docs/releasing.md](releasing.md). Both CI flows (dev: push-to-main;
+prod: GitHub Release) call the same `scripts/release.sh` entry point,
+so this doc covers what every release does end-to-end. Manual
+`make release` is the emergency fallback when CI's down.
 
 ### "I want to wire up CI for a new environment"
 → [docs/cicd.md](cicd.md). All 11 GitHub secrets, Apple Developer
@@ -87,11 +99,31 @@ Info.plist at release time and can't be changed in-place. Users
 "switch channels" by installing a different DMG. Full write-up:
 [releasing.md §0](releasing.md#0-release-channels).
 
-iOS has only one TestFlight track per environment (Internal Testing on
-the dev `…ios.dev` bundle). Production iOS is a future App Store
-submission.
+iOS has two TestFlight records — one per environment:
 
-## Credentials & secrets — where each one lives
+| Channel | App Store Connect record | Bundle ID | TestFlight track |
+|---|---|---|---|
+| dev | "Speakist Dev" | `com.brevoort-studio.speakist.ios.dev` | Internal Testing — auto-uploads on push to `main` |
+| stable | "Speakist" | `com.brevoort-studio.speakist.ios` | Internal Testing — auto-uploads on GitHub Release publish |
+
+Promoting to External Beta or App Store Review is a manual step in
+App Store Connect. There's no separate iOS beta bundle; users in
+the External Beta group on the stable record substitute for that.
+
+## Configuration & secrets — where each value lives
+
+Speakist uses a **four-tier config model** — every env-specific
+value is in exactly one of these. Full write-up + recipes for adding
+new values: [cicd.md § Config management](cicd.md#config-management).
+
+| Tier | What | Source of truth | Examples |
+|---|---|---|---|
+| 1 | Build-time client bundle (`NEXT_PUBLIC_*`) | `web/package.json`'s `deploy:dev` / `deploy:prod` scripts | `NEXT_PUBLIC_SITE_URL` |
+| 2 | Worker runtime vars (non-secret, per env) | `web/wrangler.toml` `[env.X.vars]` | `RELEASE_DOWNLOAD_BASE_URL`, `IOS_TESTFLIGHT_URL`, `RESEND_FROM_EMAIL`, `SUPER_ADMIN_EMAIL` |
+| 3 | Worker secrets (encrypted, per env) | `wrangler secret put X --env <dev\|production>` | The table below |
+| 4 | Native app channel config (Mac/iOS) | `project.yml` build settings + `scripts/release.sh` channel matrix | bundle ID, `SPEAKIST_API_BASE_URL`, `SPEAKIST_FEED_URL` |
+
+### Tier 3 secrets
 
 | Secret | Lives in | Used by | How to set |
 |---|---|---|---|

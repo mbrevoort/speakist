@@ -381,6 +381,15 @@ private struct HUDView: View {
             AnimatedGradientBorder(cornerRadius: 16, lineWidth: 2)
         )
         .padding(4)
+        // Lock the HUD's chrome to dark regardless of the user's
+        // system appearance. Material adapts to the surrounding
+        // colorScheme, so on a light desktop the unforced HUD reads
+        // as a washed-out light panel — the dark variant has more
+        // contrast against any background and matches our brand
+        // intention. `.primary` / `.secondary` text colors and the
+        // ultraThinMaterial fill all key off this environment value,
+        // so a single override flips the whole tree.
+        .environment(\.colorScheme, .dark)
     }
 
     /// Single content slot — the waveform during recording, the
