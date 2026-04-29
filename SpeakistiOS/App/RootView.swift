@@ -124,6 +124,16 @@ struct HomeView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                // Danger zone — intentionally last, behind a scroll.
+                // Only signed-in users have an account to delete; for
+                // signed-out users the section is hidden entirely so
+                // the home screen's "below the fold" stays empty
+                // rather than offering a destructive action with no
+                // target.
+                if account.isSignedIn {
+                    DangerZoneSection()
+                }
             }
             .navigationTitle("Speakist")
             .sheet(isPresented: $quickDictatePresented) {
@@ -244,16 +254,6 @@ private struct DashboardLink: View {
 private struct AccountRow: View {
     @EnvironmentObject private var account: SpeakistAccountManager
 
-    /// Shown after the user taps "Delete Account" — App Review wants
-    /// account deletion to be deliberate, so we gate behind a native
-    /// alert with a destructive confirm.
-    @State private var showingDeleteConfirm = false
-    /// Server-side deletion is one network round-trip; the spinner
-    /// blocks the buttons so the user can't double-tap.
-    @State private var deleting = false
-    /// Surfaces a server failure inline. Cleared on next attempt.
-    @State private var deleteError: String?
-
     var body: some View {
         switch account.state {
         case .signedOut:
@@ -361,14 +361,42 @@ private struct AccountRow: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .disabled(deleting)
+        }
+        .padding(.vertical, 4)
+    }
 
-            // Account deletion. Required by App Review 5.1.1(v) — must
-            // be reachable from inside the app (a "delete on the web"
-            // link doesn't satisfy the rule). Visually de-emphasized
-            // vs. Sign out (plain bordered, coral text) so users
-            // searching for "log out" don't fat-finger their way into
-            // a permanent action; the alert is the second confirmation.
+    private func formatBalance(millicents: Int) -> String {
+        // millicents → dollars. Mirrors the Mac app's credit ledger: the
+        // backend stores balances in thousandths of a cent (millicents)
+        // for sub-cent precision; we render dollars-and-cents for humans.
+        let dollars = Double(millicents) / 100_000.0
+        return String(format: "$%.2f", dollars)
+    }
+}
+
+/// Standalone "Danger Zone" section pinned to the bottom of the home
+/// list. Account deletion has its own row, its own header, and its
+/// own footer so the user has to *scroll past everything else* to
+/// reach it — the visual treatment signals "this is the irreversible
+/// option, not a setting you tweak idly".
+///
+/// Required by App Review 5.1.1(v): account deletion must be
+/// reachable from inside the app, not delegated to a web link. The
+/// destructive alert + spinner-blocked retry are unchanged from the
+/// previous inline implementation; only the location moved.
+private struct DangerZoneSection: View {
+    @EnvironmentObject private var account: SpeakistAccountManager
+
+    /// Native confirm alert — second gesture before the network call.
+    @State private var showingDeleteConfirm = false
+    /// Server-side deletion is one round-trip; the spinner blocks
+    /// double-tap during the in-flight request.
+    @State private var deleting = false
+    /// Surfaces a server failure inline. Cleared on next attempt.
+    @State private var deleteError: String?
+
+    var body: some View {
+        Section {
             Button {
                 deleteError = nil
                 showingDeleteConfirm = true
@@ -383,9 +411,9 @@ private struct AccountRow: View {
                     Text("Delete Account")
                         .frame(maxWidth: .infinity)
                         .foregroundStyle(.speakistCoral)
+                        .fontWeight(.medium)
                 }
             }
-            .buttonStyle(.bordered)
             .disabled(deleting)
             .alert("Delete your Speakist account?", isPresented: $showingDeleteConfirm) {
                 Button("Cancel", role: .cancel) {}
@@ -393,12 +421,10 @@ private struct AccountRow: View {
                     Task { await performDeleteAccount() }
                 }
             } message: {
-                // Word the message so users understand the scope of
-                // deletion. Including "balance" + "history" anchors
-                // the irreversibility — most users delete their
-                // account thinking only the email-and-password is
-                // gone; we want them to know the credit balance goes
-                // too.
+                // Spell out the scope so users understand what
+                // "delete" includes — most assume it's just the
+                // email-and-password, not the credit balance and
+                // dictation history.
                 Text("This permanently deletes your account, balance, vocabulary, and dictation history, and signs you out everywhere. This cannot be undone.")
             }
 
@@ -407,8 +433,11 @@ private struct AccountRow: View {
                     .font(.footnote)
                     .foregroundStyle(.speakistCoral)
             }
+        } header: {
+            Text("Danger Zone")
+        } footer: {
+            Text("Permanently removes your account, balance, vocabulary, and dictation history. There's no undo.")
         }
-        .padding(.vertical, 4)
     }
 
     private func performDeleteAccount() async {
@@ -420,24 +449,18 @@ private struct AccountRow: View {
             // Account is gone server-side and the manager already
             // flipped state to .signedOut — the parent view reacts
             // via @EnvironmentObject, no extra UI work needed here.
+            // The HomeView re-renders without this section because
+            // `account.isSignedIn` is now false.
         } catch {
             // Surface the message inline rather than throwing the
-            // user back to a sign-in flow with no context. They can
-            // retry; the server route is idempotent enough that a
-            // retry after partial failure is safe.
+            // user back to a sign-in flow with no context. The
+            // server route is idempotent enough that a retry after
+            // partial failure is safe.
             if let api = error as? SpeakistAPIClient.Error {
                 deleteError = api.description
             } else {
                 deleteError = error.localizedDescription
             }
         }
-    }
-
-    private func formatBalance(millicents: Int) -> String {
-        // millicents → dollars. Mirrors the Mac app's credit ledger: the
-        // backend stores balances in thousandths of a cent (millicents)
-        // for sub-cent precision; we render dollars-and-cents for humans.
-        let dollars = Double(millicents) / 100_000.0
-        return String(format: "$%.2f", dollars)
     }
 }

@@ -23,6 +23,12 @@ enum URLSchemeRoute {
     /// down on background, but belt and suspenders.
     case cancelSession
 
+    /// Bring the main app to the foreground without triggering any
+    /// session work. Used by the keyboard's brand-icon tap so users
+    /// can open Speakist for non-dictation reasons (settings, history,
+    /// etc.) without first having to leave the host app manually.
+    case openApp
+
     /// Builds the URL to hand to `extensionContext.open(_:completionHandler:)`.
     /// Never returns nil in practice — if `URLComponents` fails to resolve,
     /// we've got a bigger problem than a keyboard deep link.
@@ -38,6 +44,8 @@ enum URLSchemeRoute {
             if !items.isEmpty { components.queryItems = items }
         case .cancelSession:
             components.host = "cancel-session"
+        case .openApp:
+            components.host = "open"
         }
         return components.url
     }
@@ -68,6 +76,8 @@ enum URLSchemeBridge {
             return .startSession(hostBundleID: host, tone: tone)
         case "cancel-session":
             return .cancelSession
+        case "open":
+            return .openApp
         default:
             return nil
         }

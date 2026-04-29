@@ -1,11 +1,18 @@
 # CI/CD
 
-This doc covers the **dev environment** pipeline only — every push to
-`main` automatically deploys the web Worker, ships a Mac DMG to the
-dev Sparkle feed, and uploads an iOS build to TestFlight under the
-`com.brevoort-studio.speakist.ios.dev` bundle ID. Production releases
-remain manual for now (`make release VERSION=… CHANNEL=stable`); a
-GitHub Releases-triggered prod workflow is a future addition.
+Two pipelines, fully isolated by Cloudflare environment + Apple bundle ID:
+
+| Pipeline | Trigger | Workflow | Channel | Cloudflare env | Mac bundle ID | iOS bundle ID |
+|---|---|---|---|---|---|---|
+| **Dev** | every push to `main` | `.github/workflows/deploy-dev.yml` | `dev` | `[env.dev]` | `…speakist.dev` | `…speakist.ios.dev` |
+| **Prod** | GitHub Release published | `.github/workflows/deploy-prod.yml` | `stable` (or `beta` if prerelease) | `[env.production]` | `…speakist` (or `…speakist.beta`) | `…speakist.ios` |
+
+The two pipelines share `scripts/release-ci.sh` and
+`scripts/release-ios-ci.sh` — channel selection is driven entirely by
+env vars set in the workflow (`RELEASE_CHANNEL`, `RELEASE_VERSION`,
+`RELEASE_NOTES_FILE`, `RELEASE_IOS_SCHEME`, `RELEASE_IOS_CONFIG`),
+so dev and prod runs go down the same code path with different
+parameters. No duplicate scripts.
 
 ## Overview
 
@@ -190,18 +197,171 @@ Both scripts are designed to be runnable on a developer's machine
 with the right env vars set — no GitHub Actions-specific behavior is
 embedded in them.
 
-## Production releases (later)
+## Production pipeline (`deploy-prod.yml`)
 
-Out of scope for this dev pipeline. The plan: a sibling
-`deploy-prod.yml` workflow triggered by GitHub Releases (`on:
-release: types: [published]`). The release tag determines the
-version (`v0.2.0` → `MARKETING_VERSION=0.2.0`). Channel selection
-between `beta` and `stable` happens via the release's prerelease
-flag (or a label like `channel:beta`). The Mac side reuses
-`release-ci.sh` with `--channel beta` or `--channel stable`; the
-iOS side promotes the same TestFlight build from Internal to
-External Testing or to App Store Review.
+Fires on `release: published` (also re-triggerable manually via
+`workflow_dispatch` with a tag input). Three jobs, parallel:
 
-The composite action `setup-apple-signing` and the env-var hooks in
-`release.sh` were designed to support both flows without further
-changes — the only new piece is the prod-flavored workflow file.
+| Job | Runner | What it does | Approximate time |
+|---|---|---|---|
+| `context` | `ubuntu-latest` | Parse tag → version + channel; render release body markdown → HTML | <30 s |
+| `web` | `ubuntu-latest` | `pnpm db:migrate:prod` → `pnpm deploy:prod` (against `[env.production]`) | 3 min |
+| `mac` | `macos-26` | xcodegen → archive → notarize → DMG → Sparkle-sign → R2 prod upload → publish API on `speakist-web-prod` | 3-15 min |
+| `ios` | `macos-26` | xcodegen → archive (`SpeakistiOS` scheme, Release config, MARKETING_VERSION from tag) → export → upload to TestFlight on the **Speakist** app record | 1-8 min |
+
+### Release semantics
+
+* **Tag** `v0.2.0` → `MARKETING_VERSION=0.2.0`. Tags are
+  regex-validated as semver before any downstream job consumes them
+  as a checkout ref or env var.
+* **Body** (markdown) → rendered to HTML via `gh api /markdown` and
+  stored in D1's `releases.releaseNotes` column. Sparkle's update
+  window renders this HTML as the user-facing changelog. TestFlight's
+  "What to Test" field can't be set via `altool` — paste the same
+  release body into App Store Connect manually if you want it there.
+* **Prerelease checkbox** routes to the `beta` channel. `stable` is
+  the default. The iOS job is skipped on `beta` releases (no
+  `…speakist.ios.beta` bundle ID is provisioned — use TestFlight
+  External Beta on the stable iOS app for that role).
+* **Cloudflare**: prod uses `[env.production]` in `web/wrangler.toml`
+  → Worker `speakist-web-prod`, D1 `speakist-prod`, R2 bucket
+  `speakist-releases-prod`, served at `speakist.ai` /
+  `downloads.speakist.ai`. Zero overlap with dev's
+  `speakist-web-dev` / `speakist-dev` / `speakist-releases-dev`.
+
+### One-time prod setup
+
+Four classes of work; do them in order so each later step has its
+prerequisites ready.
+
+#### 1. Cloudflare (prod environment)
+
+```bash
+# Create the prod D1, copy the returned database_id into
+# web/wrangler.toml's [[env.production.d1_databases]] block
+# (replacing __FILL_ME_IN__).
+cd web
+pnpm exec wrangler d1 create speakist-prod
+
+# Create the prod R2 bucket.
+pnpm exec wrangler r2 bucket create speakist-releases-prod
+
+# Set the publish-API bearer secret on the prod Worker. Generate a
+# fresh token; the same value goes into the GitHub secret
+# RELEASE_PUBLISH_TOKEN_PROD below so CI can authenticate.
+openssl rand -base64 32  # copy this
+pnpm exec wrangler secret put RELEASE_PUBLISH_TOKEN --env production
+# Mirror the other dev-side Worker secrets onto prod as needed
+# (whatever's set on speakist-web-dev — Stripe keys, OpenRouter,
+# Deepgram, etc.). Inspect with:
+pnpm exec wrangler secret list --env dev
+```
+
+In the Cloudflare dashboard:
+
+* **Workers & Pages → speakist-web-prod → Settings → Domains & Routes**:
+  add `speakist.ai` (and `www.speakist.ai` if desired) as a custom
+  domain. DNS for `speakist.ai` must be on Cloudflare for this to
+  proxy correctly.
+* **R2 → speakist-releases-prod → Settings → Custom Domains**: attach
+  `downloads.speakist.ai`. This is the public origin Sparkle clients
+  hit for DMG downloads — `release.sh` hard-codes this hostname.
+* **Workers Plans**: confirm the prod Worker is on the same plan as
+  dev (Paid if you want Analytics Engine — see commented-out blocks
+  in `wrangler.toml`).
+
+#### 2. Apple Developer portal (iOS stable channel)
+
+Mirror of the dev-channel setup, but for the stable bundle IDs:
+
+1. **Identifiers → App IDs → "+"**:
+   * `com.brevoort-studio.speakist.ios` with App Groups capability.
+   * `com.brevoort-studio.speakist.ios.Keyboard` with App Groups capability.
+2. **Identifiers → App Groups → "+"**:
+   * `group.com.brevoort-studio.speakist`.
+3. **Edit each App ID → App Groups → Configure** → check the new
+   group on both bundle IDs.
+4. **App Store Connect → My Apps → "+" → New App**:
+   * Platform: iOS
+   * Name: **Speakist** (no suffix — distinct from "Speakist Dev")
+   * Bundle ID: `com.brevoort-studio.speakist.ios` (dropdown)
+   * SKU: `speakist-ios`
+5. **TestFlight → Internal Testing → "+"** — create an Internal group
+   on the new "Speakist" record. (External Beta is optional — set up
+   when ready for wider testers.)
+
+`xcodebuild -allowProvisioningUpdates` (run by CI against the App
+Store Connect API key) auto-creates `Speakist iOS` and
+`Speakist iOS Keyboard` Distribution profiles on first archive,
+exactly as the dev flow does for the `…dev` profiles.
+
+#### 3. GitHub repository secret
+
+Only one new secret on top of the dev set:
+
+| Secret | Purpose | How to obtain |
+|---|---|---|
+| `RELEASE_PUBLISH_TOKEN_PROD` | bearer for `speakist-web-prod`'s `/api/admin/releases/publish` | Same value as the `RELEASE_PUBLISH_TOKEN` Worker secret you set in step 1 above |
+
+All other secrets (Cloudflare, Apple, Sparkle) are reused from the
+dev pipeline — same Apple Developer team, same EdDSA Sparkle keypair,
+same Cloudflare account.
+
+#### 4. First release dry-run
+
+Before tagging an actual release, validate the prod path with a
+beta-prerelease tag:
+
+```bash
+git tag v0.0.0-prod-smoke
+git push origin v0.0.0-prod-smoke
+# In GitHub UI: Releases → Draft a new release → choose tag
+#   v0.0.0-prod-smoke → check "Set as a pre-release" → Publish.
+```
+
+This routes through `channel=beta`:
+
+* Web prod deploy runs (deploys to `speakist.ai`).
+* Mac job ships a `Speakist Beta` DMG to `downloads.speakist.ai`,
+  registered against `speakist.ai/appcast-beta.xml`.
+* iOS job is skipped (channel != stable).
+
+If everything's green, delete the smoke release in GitHub UI and the
+DMG from R2 (`pnpm exec wrangler r2 object delete`), then tag
+`v0.2.0` (or whatever your real version is) for a stable release.
+
+### Cutting a real release
+
+```bash
+# After whatever feature work is merged to main:
+git tag v0.2.0
+git push origin v0.2.0
+# In GitHub UI: Releases → Draft a new release → choose tag v0.2.0.
+#   Title: "v0.2.0 — <short summary>"
+#   Body: markdown changelog. This is what users see in Sparkle's
+#         "What's new" panel and what you'll paste into TestFlight's
+#         "What to Test" field manually.
+#   Set as latest release: ✓
+#   (leave prerelease unchecked for stable)
+#   Publish.
+```
+
+The workflow fires within a few seconds. End-to-end timing: web ~3
+min, mac ~12 min cold (~5 min cache-warm), ios ~8 min.
+
+### Rolling back a bad release
+
+The release.sh script is idempotent (re-running on the same tag
+overwrites the R2 object and dedupes the D1 row), so a hotfix
+re-release with a bumped patch version is the usual recovery. For
+emergency removals from the appcast without re-shipping, yank via
+the admin UI / DB:
+
+```sql
+UPDATE releases SET yanked_at = unixepoch(), yanked_reason = '…'
+  WHERE channel = 'stable' AND version = '0.2.0';
+```
+
+The dynamic appcast filters out yanked rows on the next request, so
+Sparkle clients stop seeing the bad version immediately. Already-
+upgraded clients are not affected (Sparkle doesn't downgrade).

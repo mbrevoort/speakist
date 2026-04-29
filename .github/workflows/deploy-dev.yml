@@ -26,10 +26,11 @@
 # messages, head refs) reaches `run:` blocks — all values are either
 # encrypted secrets or platform-controlled metadata.
 #
-# Production releases are NOT handled here — they'll be wired to a
-# separate workflow triggered by GitHub Releases. See docs/cicd.md
-# for the full secrets + Apple Developer portal one-time setup
-# checklist.
+# Production releases are NOT handled here — see deploy-prod.yml,
+# which fires on `release: published` and ships to the prod Worker /
+# R2 / TestFlight under the stable bundle IDs. docs/cicd.md covers
+# the full secrets + Apple Developer portal one-time setup for both
+# pipelines.
 
 name: Deploy Dev
 
