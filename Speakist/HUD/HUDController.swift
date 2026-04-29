@@ -183,6 +183,14 @@ final class HUDPanel: NSPanel {
         self.hidesOnDeactivate = false
         self.animationBehavior = .utilityWindow
         self.ignoresMouseEvents = true
+        // Lock the panel's effective appearance to dark so SwiftUI
+        // `Material` and any NSVisualEffectView descendants resolve
+        // their dark variants regardless of the user's system
+        // appearance. Setting `.colorScheme` on the SwiftUI tree
+        // alone isn't enough — Material on macOS keys off the
+        // hosting window's `effectiveAppearance`, which is
+        // determined by NSWindow.appearance (or system, when nil).
+        self.appearance = NSAppearance(named: .darkAqua)
 
         let hosting = NSHostingView(rootView: contentView)
         hosting.frame = NSRect(origin: .zero, size: HUDPanel.panelSize)
