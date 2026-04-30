@@ -79,8 +79,45 @@ export const env = {
     }
     const parsed = serverSchema.safeParse(process.env);
     if (!parsed.success) {
-      console.error("❌ Invalid server env:", parsed.error.flatten().fieldErrors);
-      throw new Error("Invalid server env");
+      // Log every issue with its path + message + code so we can
+      // actually see WHICH var is missing or malformed. The original
+      // `flatten().fieldErrors`-only log printed `{}` for any error
+      // whose path was empty (top-level shape failures, root-coerce
+      // mismatches), which is exactly the case that's hardest to
+      // debug. Issues come pre-pathed; flatten() loses that.
+      const issues = parsed.error.issues.map((i) => ({
+        path: i.path.join(".") || "(root)",
+        message: i.message,
+        code: i.code,
+      }));
+      console.error("❌ Invalid server env:");
+      console.error("  issues:", issues);
+      // Also surface which expected names ARE / ARE NOT present in
+      // process.env so a missing AUTH_SECRET vs a malformed one is
+      // distinguishable at a glance during local dev.
+      const expected = [
+        "NEXT_PUBLIC_SITE_URL",
+        "AUTH_SECRET",
+        "AUTH_URL",
+        "APP_ENCRYPTION_KEY",
+        "SUPER_ADMIN_EMAIL",
+        "RESEND_API_KEY",
+        "RESEND_FROM_EMAIL",
+        "IOS_TESTFLIGHT_URL",
+        "STRIPE_SECRET_KEY",
+        "STRIPE_WEBHOOK_SECRET",
+        "STRIPE_PUBLISHABLE_KEY",
+        "DEEPGRAM_PROJECT_ID",
+        "DEEPGRAM_PROJECT_KEY",
+      ];
+      const presence = Object.fromEntries(
+        expected.map((k) => [k, typeof process.env[k] === "string" && process.env[k]!.length > 0])
+      );
+      console.error("  presence:", presence);
+      throw new Error(
+        "Invalid server env: " +
+          issues.map((i) => `${i.path}: ${i.message}`).join("; ")
+      );
     }
     return parsed.data;
   },
