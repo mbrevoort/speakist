@@ -1,10 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { confirmDeviceCode, type ConfirmResult } from "./actions";
 
+// Why no auto-submit: the device-code flow's user_code is supposed to
+// be a per-authorization confirmation step, not a "we already know
+// who you are" silent grant. Every link request — even from a device
+// the user has authorized before — requires an explicit click here
+// so the user can:
+//   * visually compare the code shown by the Mac/iOS app against
+//     the code shown in this form (the RFC 8628 match check)
+//   * notice if they're authorizing on the wrong browser profile
+//     before access is granted
+// The URL still pre-fills the form (no retyping); only the submit
+// is gated on a deliberate click.
 export function LinkClient({
   defaultCode,
   userEmail,
@@ -15,31 +26,11 @@ export function LinkClient({
   const [result, setResult] = useState<ConfirmResult | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Auto-submit when ?code=… is in the URL — the Mac app deep-links into
-  // /link?code=XXXX so the user shouldn't have to retype anything.
-  const autoRan = useRef(false);
-  useEffect(() => {
-    if (autoRan.current) return;
-    if (!defaultCode || defaultCode.length < 8) return;
-    autoRan.current = true;
-    const fd = new FormData();
-    fd.set("user_code", defaultCode);
-    startTransition(async () => setResult(await confirmDeviceCode(fd)));
-  }, [defaultCode]);
-
   if (result?.ok) {
     return (
       <div className="mt-6 rounded-xl bg-sage/10 border border-sage/30 p-5 text-center">
         <CheckCircle2 className="mx-auto size-8 text-sage" />
         <p className="mt-3 font-medium text-sage">{result.message}</p>
-      </div>
-    );
-  }
-
-  if (pending && defaultCode && !result) {
-    return (
-      <div className="mt-6 rounded-xl bg-muted/30 border border-border/70 p-6 text-center">
-        <p className="text-sm text-muted-foreground">Linking your Mac…</p>
       </div>
     );
   }
@@ -54,7 +45,7 @@ export function LinkClient({
     >
       <div>
         <label htmlFor="user_code" className="block text-sm font-medium mb-1.5">
-          Code from your Mac
+          Confirm this matches the code on your device
         </label>
         <input
           id="user_code"
@@ -70,11 +61,11 @@ export function LinkClient({
       </div>
 
       <Button type="submit" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Confirming…" : "Authorize this Mac"}
+        {pending ? "Authorizing…" : "Authorize this device"}
       </Button>
 
       <p className="text-xs text-muted-foreground text-center">
-        You&apos;ll be linking as{" "}
+        You&apos;ll be authorizing as{" "}
         <span className="font-mono text-foreground">{userEmail}</span>.
       </p>
 
