@@ -1,10 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { confirmDeviceCode, type ConfirmResult } from "./actions";
 
+// Authorization is gated on an explicit click EVERY time. Do not
+// re-add a useEffect-based auto-submit here. The user_code in
+// RFC 8628's device-code flow is a per-authorization match check
+// — the user is supposed to compare the code on their device
+// against the code on this page before granting access. A silent
+// auto-submit (even one driven by a deep-link from the device)
+// skips that step and turns the code into useless decoration.
+//
+// The URL still pre-fills the form (no retyping); the form just
+// doesn't submit on its own. "Previously trusted" doesn't bypass
+// — that's a fingerprint concept, not what user_code is for.
 export function LinkClient({
   defaultCode,
   userEmail,
@@ -15,31 +26,11 @@ export function LinkClient({
   const [result, setResult] = useState<ConfirmResult | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Auto-submit when ?code=… is in the URL — the Mac app deep-links into
-  // /link?code=XXXX so the user shouldn't have to retype anything.
-  const autoRan = useRef(false);
-  useEffect(() => {
-    if (autoRan.current) return;
-    if (!defaultCode || defaultCode.length < 8) return;
-    autoRan.current = true;
-    const fd = new FormData();
-    fd.set("user_code", defaultCode);
-    startTransition(async () => setResult(await confirmDeviceCode(fd)));
-  }, [defaultCode]);
-
   if (result?.ok) {
     return (
       <div className="mt-6 rounded-xl bg-sage/10 border border-sage/30 p-5 text-center">
         <CheckCircle2 className="mx-auto size-8 text-sage" />
         <p className="mt-3 font-medium text-sage">{result.message}</p>
-      </div>
-    );
-  }
-
-  if (pending && defaultCode && !result) {
-    return (
-      <div className="mt-6 rounded-xl bg-muted/30 border border-border/70 p-6 text-center">
-        <p className="text-sm text-muted-foreground">Linking your Mac…</p>
       </div>
     );
   }
