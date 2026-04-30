@@ -141,11 +141,7 @@ workers_dev = false
 NEXT_PUBLIC_SITE_URL = "https://speakist.ai"
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads.speakist.ai"
 RELEASE_R2_BUCKET = "speakist-releases-prod"
-# TODO: replace with the prod App Store Connect TestFlight invite once
-# the "Speakist" iOS app record + TestFlight group are provisioned (see
-# docs/cicd.md "Apple Developer portal" prod setup). Using the dev
-# invite as a temporary stand-in so the wiring works end-to-end now.
-IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu"
+IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/jsMN1vWs"
 RESEND_FROM_EMAIL = "noreply@speakist.ai"
 SUPER_ADMIN_EMAIL = "mike@brevoort.com"
 
