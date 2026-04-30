@@ -77,7 +77,31 @@ export const env = {
     if (typeof window !== "undefined") {
       throw new Error("env.server accessed in client context");
     }
-    const parsed = serverSchema.safeParse(process.env);
+    // Coerce empty strings → undefined before validation. Zod's
+    // `.optional()` only treats undefined as "absent"; an empty
+    // string passes the `.optional()` gate but then fails the
+    // inner `.min(1)` / `.url()` / `.email()` constraint, which
+    // is unintuitive when a user has `KEY=` (no value) in their
+    // .env.local. The user reasonably expects that to mean
+    // "not set", same as omitting the line entirely.
+    //
+    // Same coercion applies to fields with defaults: `.default()`
+    // only kicks in when the value is undefined, not when it's
+    // an empty string. Empty strings would otherwise fail the
+    // upstream constraint (e.g. `z.string().email().default(...)`)
+    // before the default could replace them.
+    //
+    // Worker-deployed env (where everything legit is set or
+    // missing entirely) is unaffected — there are no empty
+    // strings in the prod runtime env. This is purely a local-
+    // dev quality-of-life fix for `.env.local` files where users
+    // leave keys-without-values as a placeholder for "I'll fill
+    // this in later".
+    const sanitized: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      sanitized[k] = typeof v === "string" && v.length === 0 ? undefined : v;
+    }
+    const parsed = serverSchema.safeParse(sanitized);
     if (!parsed.success) {
       // Log every issue with its path + message + code so we can
       // actually see WHICH var is missing or malformed. The original
