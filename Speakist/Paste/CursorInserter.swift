@@ -49,14 +49,28 @@ final class CursorInserter {
         Logger.shared.info("paste attempt bundle=\(bundleID ?? "?") hasEditableFocus=\(hasEditableFocus)")
         Self.postCommandV()
 
-        // Give the target app a beat to process the paste before
-        // restoring the clipboard.
-        try? await Task.sleep(nanoseconds: 120_000_000)
-
-        // If the user copied something in the meantime, leave it alone.
-        if pasteboard.changeCount == snapshotChangeCount + 1 {
-            Self.restore(snapshot: snapshot, on: pasteboard)
-        }
+        // Restore the snapshot in a detached task on a longer delay
+        // instead of awaiting inline. The previous 120ms inline await
+        // raced the target app's event loop in apps that batch
+        // keystrokes through a non-AppKit input pipeline (Electron
+        // hosts: Slack, Discord, VS Code; terminal hosts: Ghostty,
+        // Warp; Tauri/web-bridge apps). Their queued ⌘V wouldn't get
+        // serviced for ~200-400ms after `CGEvent.post` returns —
+        // by which point we'd already restored, and they'd then
+        // paste the *restored* old clipboard. User-visible bug:
+        // transcription pastes the previous clipboard contents.
+        //
+        // Detaching means the rest of the transcription pipeline
+        // (history write, success notifier) doesn't block on the
+        // restore window either. The user's clipboard is "wrong"
+        // for ~500ms post-paste; same brief window every other
+        // paste-and-restore utility has, including macOS's own
+        // Universal Clipboard hand-off.
+        Self.scheduleClipboardRestore(
+            snapshot: snapshot,
+            expectedChangeCount: snapshotChangeCount + 1,
+            on: pasteboard
+        )
 
         // Reflect uncertainty: if the focus probe couldn't confirm an
         // editable target, label the outcome `clipboardOnly` even
@@ -65,6 +79,30 @@ final class CursorInserter {
         // claiming success in apps where the probe is consistently
         // wrong.
         return hasEditableFocus ? .pasted : .clipboardOnly
+    }
+
+    /// Restore the previous pasteboard contents after enough time
+    /// has passed for the target app to consume our synthesized ⌘V.
+    /// 500ms covers the slow-consumer apps observed in practice
+    /// (Electron, terminal hosts) with margin; on a fast native
+    /// AppKit app the user's clipboard is "wrong" for half a second
+    /// they're not looking at. The if-changeCount-still-matches
+    /// guard skips restore when the user (or another app) wrote to
+    /// the pasteboard during the window — preserves whatever the
+    /// most recent thing they copied was.
+    private static func scheduleClipboardRestore(
+        snapshot: ClipboardSnapshot,
+        expectedChangeCount: Int,
+        on pasteboard: NSPasteboard
+    ) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard pasteboard.changeCount == expectedChangeCount else {
+                Logger.shared.info("paste restore skipped: pasteboard changed during paste window")
+                return
+            }
+            restore(snapshot: snapshot, on: pasteboard)
+        }
     }
 
     // MARK: - Clipboard snapshot / restore
