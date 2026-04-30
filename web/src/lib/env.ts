@@ -77,7 +77,25 @@ export const env = {
     if (typeof window !== "undefined") {
       throw new Error("env.server accessed in client context");
     }
-    const parsed = serverSchema.safeParse(process.env);
+    // Coerce empty-string env vars → undefined before validation.
+    // Zod's `.optional()` only treats undefined as "absent"; an empty
+    // string passes the optional gate but then fails the inner
+    // `.min(1)` / `.url()` / `.email()` constraint. That's unintuitive
+    // when a user has `KEY=` (no value) in their .env.local —
+    // they reasonably expect that to behave the same as omitting the
+    // line entirely. Same coercion lets `.default(...)` actually fire
+    // for blank-but-present keys, since `.default()` only kicks in
+    // for undefined.
+    //
+    // Worker-deployed env (where every legit value is set or absent,
+    // never empty) is unaffected. This is purely a quality-of-life
+    // fix for `.env.local` files where users leave keys-without-values
+    // as placeholders.
+    const sanitized: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      sanitized[k] = typeof v === "string" && v.length === 0 ? undefined : v;
+    }
+    const parsed = serverSchema.safeParse(sanitized);
     if (!parsed.success) {
       console.error("❌ Invalid server env:", parsed.error.flatten().fieldErrors);
       throw new Error("Invalid server env");
