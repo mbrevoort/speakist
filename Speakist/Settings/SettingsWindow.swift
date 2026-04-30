@@ -160,7 +160,13 @@ struct AccountSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Finish signing in")
                             .font(.headline)
-                        Text("Your browser should have opened. If not, visit \(url.absoluteString) and enter this code:")
+                        Text("Your browser should have opened. If you'd rather use a different browser or profile, click or copy the link below.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+
+                        SignInURLRow(url: url)
+
+                        Text("Then enter this code:")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                         Text(code)
@@ -173,10 +179,6 @@ struct AccountSettingsView: View {
                                 let pb = NSPasteboard.general
                                 pb.clearContents()
                                 pb.setString(code, forType: .string)
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Open link again") {
-                                NSWorkspace.shared.open(url)
                             }
                             .buttonStyle(.bordered)
                             Spacer()

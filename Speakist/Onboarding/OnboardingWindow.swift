@@ -237,19 +237,22 @@ private struct ProviderPane: View {
 
             case .signingIn(let code, let url, _):
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Your browser should have opened. Enter this code on the web:")
+                    Text("Your browser should have opened. To use a different browser or profile, click or copy the link below.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+
+                    SignInURLRow(url: url)
+
+                    Text("Then enter this code:")
                         .font(.callout)
                         .foregroundColor(.secondary)
                     Text(code)
                         .font(.system(size: 24, weight: .semibold, design: .monospaced))
                         .kerning(3)
-                    HStack {
-                        Button("Copy code") {
-                            let pb = NSPasteboard.general
-                            pb.clearContents()
-                            pb.setString(code, forType: .string)
-                        }
-                        Button("Open link again") { NSWorkspace.shared.open(url) }
+                    Button("Copy code") {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(code, forType: .string)
                     }
                 }
 
