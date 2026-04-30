@@ -58,6 +58,41 @@ final class Preferences: ObservableObject {
         let channelDefaultAPIBase = (Bundle.main.object(forInfoDictionaryKey: "SpeakistDefaultAPIBaseURL") as? String)
             ?? "http://localhost:3000"
 
+        // Self-heal cross-channel UserDefaults pollution before
+        // defaults.register runs. UserDefaults persists across reinstalls
+        // keyed by bundle ID, and `defaults.register(defaults:)` only
+        // provides fallbacks — any value already in the plist wins,
+        // including stale ones from a prior install of the same channel
+        // that got pointed at a different env via `defaults write` or
+        // legacy migration code.
+        //
+        // Symptom in the wild: the prod Mac app silently called the dev
+        // backend (dev D1 / dev vocabulary / dev usage) because an old
+        // entry in ~/Library/Preferences/com.brevoort-studio.speakist.plist
+        // had apiBaseURL=https://speakist-dev.brevoortstudio.com. Once
+        // we noticed via "vocabulary edits in prod app land in dev D1",
+        // we manually `defaults delete`'d to recover; this guard prevents
+        // the trap from biting again on a fresh install or for any other
+        // user who hits the same scenario.
+        //
+        // Strategy: only reset when the stored value matches a *known
+        // sibling channel*'s canonical URL. Genuine local-dev overrides
+        // (localhost on a non-port-3000, an internal staging URL set by
+        // hand) are preserved — they don't appear in this set.
+        let knownSiblingChannelURLs: Set<String> = [
+            "http://localhost:3000",
+            "https://speakist-dev.brevoortstudio.com",
+            "https://speakist.ai",
+        ]
+        if let stored = defaults.string(forKey: K.apiBaseURL),
+           stored != channelDefaultAPIBase,
+           knownSiblingChannelURLs.contains(stored) {
+            Logger.shared.warn(
+                "Cross-channel apiBaseURL pollution detected — resetting. stored=\(stored) channel-default=\(channelDefaultAPIBase)"
+            )
+            defaults.removeObject(forKey: K.apiBaseURL)
+        }
+
         defaults.register(defaults: [
             // Legacy — only consulted by the direct-Deepgram path when
             // useTranscribeProxy is OFF. Kept for backward compat.
