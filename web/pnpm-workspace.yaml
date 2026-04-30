@@ -3,3 +3,5 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   workerd: true
+overrides:
+  '@dotenvx/dotenvx@<=1.61.6': 1.61.6
