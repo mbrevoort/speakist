@@ -157,38 +157,9 @@ struct AccountSettingsView: View {
                     .padding(.vertical, 6)
 
                 case .signingIn(let code, let url, let expiresAt):
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Finish signing in")
-                            .font(.headline)
-                        Text("Your browser should have opened. If not, visit \(url.absoluteString) and enter this code:")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        Text(code)
-                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.primary)
-                            .kerning(3)
-                            .padding(.vertical, 4)
-                        HStack {
-                            Button("Copy code") {
-                                let pb = NSPasteboard.general
-                                pb.clearContents()
-                                pb.setString(code, forType: .string)
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Open link again") {
-                                NSWorkspace.shared.open(url)
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                            Button("Cancel") {
-                                manager.signOut()
-                            }
-                        }
-                        Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    SignInVerifyPanel(code: code, url: url, expiresAt: expiresAt) {
+                        manager.signOut()
                     }
-                    .padding(.vertical, 6)
 
                 case .signedIn(let identity):
                     VStack(alignment: .leading, spacing: 12) {

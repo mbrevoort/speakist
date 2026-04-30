@@ -125,7 +125,15 @@ final class SpeakistAccountManager: ObservableObject {
 
     /// Kicks off the device-code flow:
     ///   1. POST /api/device/start → gets user_code + device_code
-    ///   2. Opens the verification URL in the default browser
+    ///   2. Stores the verification URL + user_code on `state` so the
+    ///      sign-in UI can render them side by side. The Mac UI does
+    ///      NOT auto-launch the browser — auto-launch yanks the user
+    ///      into whichever browser was last in focus, which on a
+    ///      multi-browser / multi-profile machine is rarely the one
+    ///      they actually want to sign in from. They click (or copy)
+    ///      the link from the panel themselves. iOS still auto-opens
+    ///      because `UIApplication.shared.open` routes through Safari
+    ///      (the default by definition) and there's no profile picker.
     ///   3. Starts polling /api/device/poll every `interval` seconds
     ///   4. On "authorized", saves the token → state becomes .signedIn
     ///
@@ -154,9 +162,10 @@ final class SpeakistAccountManager: ObservableObject {
             }
 
             self.state = .signingIn(userCode: resp.userCode, verificationURL: url, expiresAt: expiresAt)
-            #if canImport(AppKit)
-            NSWorkspace.shared.open(url)
-            #elseif canImport(UIKit)
+            // Mac users open the link from the sign-in panel themselves
+            // (multi-browser / profile-aware UX). iOS still auto-opens —
+            // there's only one Safari + no profile picker to worry about.
+            #if canImport(UIKit) && !canImport(AppKit)
             await UIApplication.shared.open(url)
             #endif
             startPolling(deviceCode: resp.deviceCode, interval: max(1, resp.interval), expiresAt: expiresAt)

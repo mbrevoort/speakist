@@ -235,22 +235,9 @@ private struct ProviderPane: View {
                     }
                 }
 
-            case .signingIn(let code, let url, _):
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Your browser should have opened. Enter this code on the web:")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                    Text(code)
-                        .font(.system(size: 24, weight: .semibold, design: .monospaced))
-                        .kerning(3)
-                    HStack {
-                        Button("Copy code") {
-                            let pb = NSPasteboard.general
-                            pb.clearContents()
-                            pb.setString(code, forType: .string)
-                        }
-                        Button("Open link again") { NSWorkspace.shared.open(url) }
-                    }
+            case .signingIn(let code, let url, let expiresAt):
+                SignInVerifyPanel(code: code, url: url, expiresAt: expiresAt) {
+                    manager.signOut()
                 }
 
             case .signedIn:
