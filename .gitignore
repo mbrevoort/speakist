@@ -37,3 +37,7 @@ web/drizzle/meta/
 .claude/settings.local.json
 # Temporary worktrees Claude Code creates for isolated agent runs
 .claude/worktrees/
+
+# Editor swap files
+.*.swp
+*.swo
