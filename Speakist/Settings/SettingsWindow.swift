@@ -484,7 +484,7 @@ struct TranscriptionSettingsView: View {
         }
 
         do {
-            try env.audioRecorder.start()
+            try await env.audioRecorder.start()
         } catch {
             testOutput = "Couldn't start: \(error.localizedDescription)"
             return
