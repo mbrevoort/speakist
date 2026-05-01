@@ -47,6 +47,17 @@ final class AudioRecorder: ObservableObject {
     private let deviceMonitor: DeviceMonitor
 
     private let engine = AVAudioEngine()
+    /// Serial queue for AVAudioEngine state changes that block on the
+    /// audio I/O thread (`start`, `pause`). Both take 200–500ms to
+    /// drain or set up the HAL chain; running them inline would block
+    /// the main runloop and delay the HUD/transcription transition.
+    /// The queue is serial so a fast stop→start cycle can't race —
+    /// the next start() implicitly waits for the previous stop's
+    /// pause() to finish, even though stop() doesn't await it.
+    private let engineQueue = DispatchQueue(
+        label: "com.speakist.audio.engine",
+        qos: .userInitiated
+    )
     private var converter: AVAudioConverter?
     private var outputFile: AVAudioFile?
     private var outputURL: URL?
@@ -175,18 +186,28 @@ final class AudioRecorder: ObservableObject {
 
         engine.prepare()
 
-        // Hop to a background queue for engine.start — it blocks for
-        // 280–560ms while the Core Audio HAL handshakes, and we need
-        // the main runloop free during that window so the HUD's
-        // .preparing state can actually paint. The engine itself is
-        // thread-safe; AVAudioEngine documents start() as callable
-        // from any thread.
+        // Run engine.start() on the shared engine queue. It blocks
+        // for 280–560ms while the Core Audio HAL handshakes; the
+        // queue keeps the main runloop free during that window so
+        // the HUD's .preparing state can actually paint. Using the
+        // serial queue (instead of a fresh Task.detached) also
+        // serializes us behind any in-flight pause() from a recent
+        // stop() — preventing concurrent state changes on the
+        // engine, which AVAudioEngine isn't documented as
+        // thread-safe against.
         let engineRef = engine
         let inputNodeRef = inputNode
         do {
-            try await Task.detached(priority: .userInitiated) {
-                try engineRef.start()
-            }.value
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                engineQueue.async {
+                    do {
+                        try engineRef.start()
+                        cont.resume()
+                    } catch {
+                        cont.resume(throwing: error)
+                    }
+                }
+            }
         } catch {
             // Tap was installed before the failed start — clean it up
             // so the next attempt isn't carrying a dead tap.
@@ -208,15 +229,13 @@ final class AudioRecorder: ObservableObject {
     @MainActor
     func stop() -> RecordingResult? {
         guard isRecording else { return nil }
+
+        // removeTap is fast (<1ms in measurements) — keep it on main
+        // so no more tap callbacks fire after stop() returns. Tap
+        // callback writes to outputFile; we want all writes flushed
+        // before we drop the AVAudioFile reference below.
         engine.inputNode.removeTap(onBus: 0)
-        // pause() instead of stop() so the HAL connection survives
-        // between recordings — measurement showed `engine.stop()`
-        // tears the HAL down and the next `start()` pays a 400+ms
-        // handshake. pause() keeps the audio unit chain configured;
-        // a subsequent start() resumes in single-digit ms. We've
-        // verified pause() does not keep the orange mic indicator
-        // illuminated, so this is invisible to the user.
-        engine.pause()
+
         let duration = CFAbsoluteTimeGetCurrent() - startedAt
         isRecording = false
 
@@ -224,6 +243,20 @@ final class AudioRecorder: ObservableObject {
         outputFile = nil
         outputURL = nil
         converter = nil
+
+        // Drain the audio I/O thread off-main. AVAudioEngine.pause()
+        // takes ~220ms to wait through several buffer cycles + a HAL
+        // roundtrip; it's the entire stop()-cost budget when run
+        // synchronously. Hand it to the serial engine queue so the
+        // main runloop is free to flip the HUD into transcribing
+        // state and kick off the network call. The next start() also
+        // routes through engineQueue, so a fast stop→start cycle
+        // implicitly waits for this pause to finish without us
+        // needing to await it from main.
+        let engineRef = engine
+        engineQueue.async {
+            engineRef.pause()
+        }
 
         Logger.shared.info("Recording stopped: \(String(format: "%.2f", duration))s")
         guard let url else { return nil }

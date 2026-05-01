@@ -37,6 +37,8 @@ web/drizzle/meta/
 .claude/settings.local.json
 # Temporary worktrees Claude Code creates for isolated agent runs
 .claude/worktrees/
+# Scheduled-task lock written by the /loop runtime — local-only state
+.claude/scheduled_tasks.lock
 
 # Editor swap files
 .*.swp

@@ -105,12 +105,14 @@ struct SpeakistTranscribeClient: TranscriptionClient {
         // Use uploadTask(fromFile:) semantics via `upload(for:fromFile:)` —
         // the audio streams from disk instead of being loaded into memory.
         // Important for long recordings; 5-min WAV = ~9.6 MB.
+        let networkStart = CFAbsoluteTimeGetCurrent()
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.upload(for: request, fromFile: audioURL)
         } catch {
             throw TranscriptionError.network(error.localizedDescription)
         }
+        let networkMs = (CFAbsoluteTimeGetCurrent() - networkStart) * 1000
 
         guard let http = response as? HTTPURLResponse else {
             throw TranscriptionError.invalidResponse
@@ -134,6 +136,39 @@ struct SpeakistTranscribeClient: TranscriptionClient {
             throw TranscriptionError.invalidResponse
         }
 
+        // Log a unified breakdown so we can see at a glance where the
+        // 2–8s release-to-paste latency goes. Worker timings are
+        // cumulative ms relative to its own request start; the
+        // network-overhead delta is what's left after subtracting the
+        // Worker's total wall-clock from the Mac-observed network time
+        // (TLS/H2 handshake, transit both directions, body upload).
+        if let t = decoded.timings {
+            let overheadMs = max(0, networkMs - Double(t.total))
+            let upstreamDelta = max(0, t.upstream - t.body)
+            let polishDelta = max(0, t.polish - t.upstream)
+            let debitDelta = max(0, t.debit - t.polish)
+            // When polishApplied=false we want to know *why* — server
+            // logs the reason but if we don't surface it here it's
+            // invisible from the Mac log. Common values: rejected:
+            // output_too_long, rejected: assistant_preamble:..., empty_completion,
+            // http_5xx, fetch_failed, skipped_by_client.
+            let polishReason = decoded.polishErrorReason.map { " polishReason=\($0)" } ?? ""
+            Logger.shared.info(String(
+                format: "PERF transcribe net=%.0fms (overhead=%.0f) worker=%dms (auth=%d body=%d upstream=%d polish=%d debit=%d) provider=%@/%@ polish=%@%@",
+                networkMs, overheadMs,
+                t.total, t.auth, t.body - t.auth,
+                upstreamDelta, polishDelta, debitDelta,
+                decoded.provider, decoded.model,
+                decoded.polishApplied == true ? "yes" : "no",
+                polishReason
+            ))
+        } else {
+            Logger.shared.info(String(
+                format: "PERF transcribe net=%.0fms (no worker timings) provider=%@/%@",
+                networkMs, decoded.provider, decoded.model
+            ))
+        }
+
         return TranscriptionResult(
             text: decoded.text,
             providerModelLabel: decoded.model,
@@ -146,8 +181,25 @@ struct SpeakistTranscribeClient: TranscriptionClient {
         let audioSeconds: Double
         let provider: String
         let model: String
+        let polishApplied: Bool?
+        let polishErrorReason: String?
         let usageEventId: String?
         let newBalanceMillicents: Int?
         let duplicate: Bool?
+        let timings: WorkerTimings?
+    }
+
+    /// Per-stage cumulative ms reported by the Worker. See route.ts —
+    /// `auth` is auth+org resolution, `body` adds reading audio off the
+    /// wire, `upstream` adds the STT provider round-trip, `polish` adds
+    /// the optional LLM pass (==upstream if polish was skipped), `debit`
+    /// adds the credit-ledger write, `total` is end-to-end Worker time.
+    private struct WorkerTimings: Decodable {
+        let auth: Int
+        let body: Int
+        let upstream: Int
+        let polish: Int
+        let debit: Int
+        let total: Int
     }
 }

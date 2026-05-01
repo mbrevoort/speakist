@@ -59,6 +59,19 @@ final class TranscriptionService {
     func process(_ request: TranscriptionRequest) async {
         hud.setTranscribing()
 
+        // Per-stage cumulative ms relative to the user releasing the
+        // shortcut key — captured by ShortcutManager.pushUp. Logged at
+        // the end of process() so we get a single line per recording
+        // showing where the release-to-paste budget went. Use the new
+        // SpeakistTranscribeClient log line for the network/worker
+        // breakdown that lives inside the `transcribe` window here.
+        let baseline = ShortcutManager.releaseStartedAt
+        func ms(_ label: String) -> String {
+            let dt = (CFAbsoluteTimeGetCurrent() - baseline) * 1000
+            return String(format: "%@=+%.0fms", label, dt)
+        }
+        Logger.shared.info("PERF process \(ms("enter"))")
+
         let focus = focusedFieldProbe.probe()
         let entryID = UUID().uuidString
         let createdAt = Date()
@@ -85,6 +98,7 @@ final class TranscriptionService {
         let client: any TranscriptionClient
         do {
             client = try await buildClient(transcriptionClientId: entryID)
+            Logger.shared.info("PERF process \(ms("clientBuilt"))")
         } catch SpeakistAPIClient.Error.insufficientCredit {
             notifier.transcriptionFailed("Out of credit. Top up at \(preferences.apiBaseURL.absoluteString)/dashboard/billing")
             hud.hide()
@@ -121,6 +135,7 @@ final class TranscriptionService {
                                             keyterms: keyterms,
                                             language: language)
             }
+            Logger.shared.info("PERF process \(ms("transcribeReturned"))")
             rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if result.audioSeconds > 0 {
                 audioSeconds = result.audioSeconds
@@ -162,6 +177,7 @@ final class TranscriptionService {
             hasEditableFocus: focus.hasEditableFocus,
             bundleID: focus.bundleID
         )
+        Logger.shared.info("PERF process \(ms("pasted"))")
         let pasteStatus: String
         switch outcome {
         case .pasted: pasteStatus = "pasted"

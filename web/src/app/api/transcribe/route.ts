@@ -72,6 +72,16 @@ export async function POST(req: Request): Promise<Response> {
   const startedAt = Date.now();
   const { env } = await getCloudflareContext({ async: true });
 
+  // Per-stage wall-clock breakdown returned to the client in every
+  // success response under `timings`. Lets the Mac log a unified
+  // network-vs-worker-vs-upstream picture without having to scrape
+  // analytics. Numbers are ms relative to `startedAt`; cumulative,
+  // not deltas, so order-of-events is recoverable from the log.
+  const timings: Record<string, number> = {};
+  const mark = (label: string): void => {
+    timings[label] = Date.now() - startedAt;
+  };
+
   // Defaults for the analytics log so we always emit one event per request.
   // Routing is decided server-side now (was: client X-Provider-Hint
   // headers), so we initialize to the most common default — English →
@@ -116,6 +126,7 @@ export async function POST(req: Request): Promise<Response> {
     return finish("invalid_input", json({ error: "no_org" }, 400));
   }
   orgId = org.id;
+  mark("auth");
 
   // ---- header parsing -----------------------------------------------------
   const transcriptionClientId = req.headers.get("X-Transcription-Id");
@@ -175,6 +186,7 @@ export async function POST(req: Request): Promise<Response> {
   if (audioBody.byteLength > MAX_BODY_BYTES) {
     return finish("invalid_input", json({ error: "body_too_large", limitBytes: MAX_BODY_BYTES }, 413));
   }
+  mark("body");
 
   // ---- dispatch to provider ----------------------------------------------
   const input: TranscriptionInput = {
@@ -194,6 +206,33 @@ export async function POST(req: Request): Promise<Response> {
     audioMsHint: parseInt(req.headers.get("X-Audio-Ms") ?? "0", 10) || undefined,
   };
 
+  // Kick off the user's polish prefs read in parallel with the upstream
+  // STT dispatch. The prefs lookup takes ~100ms (a single D1 row read);
+  // the STT call is 250–500ms. Running them concurrently shaves the
+  // smaller of the two off the critical path — meaningfully so on
+  // short transcripts where STT is fast enough that the prefs read
+  // would otherwise be the dominant pre-polish step. We tolerate a
+  // failed prefs read (skips polish) so transcription itself never
+  // breaks because of the prefs query.
+  type PolishPrefs = { polishEnabled: boolean; polishMode: string | null };
+  const polishPrefsPromise: Promise<PolishPrefs | null> = (async () => {
+    try {
+      const db = getDb();
+      const [row] = await db
+        .select({
+          polishEnabled: users.polishEnabled,
+          polishMode: users.polishMode,
+        })
+        .from(users)
+        .where(eq(users.id, user.id))
+        .limit(1);
+      return (row as PolishPrefs | undefined) ?? null;
+    } catch (err) {
+      console.warn("[transcribe] polish prefs read failed:", err);
+      return null;
+    }
+  })();
+
   let output;
   try {
     output = await dispatch(
@@ -201,6 +240,7 @@ export async function POST(req: Request): Promise<Response> {
       org.id,
       input
     );
+    mark("upstream");
   } catch (err) {
     if (err instanceof TranscriptionDispatchError) {
       upstreamStatus = err.upstreamStatus ?? 0;
@@ -230,23 +270,20 @@ export async function POST(req: Request): Promise<Response> {
       : 0;
 
   // ---- optional polish pass -----------------------------------------------
-  // Load the user's polish prefs (cheap single-row read). Polish runs
-  // synchronously so the returned `text` is already polished; cost is
-  // absorbed (not billed) in Phase 1 since per-transcription polish is
-  // ~$0.0001 vs ~$0.01 transcription.
+  // Load the user's polish prefs (kicked off in parallel above so this
+  // await is mostly already-resolved). Polish runs synchronously so the
+  // returned `text` is already polished — UNLESS the client opts in to
+  // "fast mode" by sending `X-Polish-Skip: true`, in which case we
+  // return the raw transcript immediately and skip polish entirely.
+  // Cost is absorbed (not billed) in Phase 1 since per-transcription
+  // polish is ~$0.0001 vs ~$0.01 transcription.
   let finalText = output.text;
   let polishApplied = false;
+  let polishErrorReason: string | undefined;
+  const polishSkipRequested = boolHeader(req.headers.get("X-Polish-Skip"));
   try {
-    const db = getDb();
-    const [userPrefs] = await db
-      .select({
-        polishEnabled: users.polishEnabled,
-        polishMode: users.polishMode,
-      })
-      .from(users)
-      .where(eq(users.id, user.id))
-      .limit(1);
-    if (userPrefs?.polishEnabled && output.text.trim().length > 0) {
+    const userPrefs = await polishPrefsPromise;
+    if (userPrefs?.polishEnabled && output.text.trim().length > 0 && !polishSkipRequested) {
       const polish = await runPolish(
         env as unknown as Parameters<typeof runPolish>[0],
         org.id,
@@ -267,12 +304,18 @@ export async function POST(req: Request): Promise<Response> {
       if (polish.applied) {
         finalText = polish.text;
         polishApplied = true;
+      } else {
+        polishErrorReason = polish.errorReason;
       }
+    } else if (polishSkipRequested && userPrefs?.polishEnabled) {
+      polishErrorReason = "skipped_by_client";
     }
   } catch (err) {
     // Polish errors never block transcription — fall through with raw text.
     console.warn("[transcribe] polish threw:", err);
+    polishErrorReason = `threw: ${err instanceof Error ? err.message : String(err)}`;
   }
+  mark("polish");
 
   // ---- debit --------------------------------------------------------------
   // processingMs = wall-clock from request start to this point. Captures
@@ -294,6 +337,7 @@ export async function POST(req: Request): Promise<Response> {
     polishApplied,
     processingMs,
   });
+  mark("debit");
 
   if (debit.kind === "duplicate") {
     // Idempotent replay — return the transcript we already have from this
@@ -304,8 +348,10 @@ export async function POST(req: Request): Promise<Response> {
       provider: providerId,
       model,
       polishApplied,
+      polishErrorReason,
       usageEventId: debit.usageEventId,
       duplicate: true,
+      timings: { ...timings, total: Date.now() - startedAt },
     }));
   }
   if (debit.kind === "insufficient") {
@@ -335,9 +381,22 @@ export async function POST(req: Request): Promise<Response> {
     provider: providerId,
     model,
     polishApplied,
+    // Set when polish ran but the result wasn't used — surfaces the
+    // failure mode to the client so the Mac log shows e.g.
+    // `rejected: output_too_long` or `assistant_preamble: starts with
+    // "here is"`. Helps debug why polishApplied=false when the user
+    // expected it to be true.
+    polishErrorReason,
     usageEventId: debit.usageEventId,
     newBalanceMillicents: debit.newBalanceMillicents,
     autoTopupTriggered: debit.autoTopupTriggered,
+    // Per-stage cumulative ms relative to request start. `auth` is the
+    // user/org lookup, `body` adds reading the audio bytes off the wire,
+    // `upstream` adds the STT provider round-trip, `polish` adds the
+    // optional LLM pass (==`upstream` if polish was skipped), `debit`
+    // adds the credit-ledger write, `total` is end-to-end Worker time.
+    // Compute deltas client-side: e.g. upstream cost = upstream - body.
+    timings: { ...timings, total: Date.now() - startedAt },
   }));
 }
 

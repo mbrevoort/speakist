@@ -21,7 +21,8 @@
     "db:seed:dev": "wrangler d1 execute speakist-dev --remote --env dev --file=scripts/seed.sql",
     "db:seed:prod": "wrangler d1 execute speakist-prod --remote --env production --file=scripts/seed.sql",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "bench:polish": "tsx scripts/bench-polish.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

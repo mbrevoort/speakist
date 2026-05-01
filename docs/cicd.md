@@ -1,11 +1,13 @@
 # CI/CD
 
-Two pipelines, fully isolated by Cloudflare environment + Apple bundle ID:
+Two deploy pipelines + two pre-merge gates, all wired to GitHub Actions:
 
-| Pipeline | Trigger | Workflow | Channel | Cloudflare env | Mac bundle ID | iOS bundle ID |
-|---|---|---|---|---|---|---|
-| **Dev** | every push to `main` | `.github/workflows/deploy-dev.yml` | `dev` | `[env.dev]` | `…speakist.dev` | `…speakist.ios.dev` |
-| **Prod** | GitHub Release published | `.github/workflows/deploy-prod.yml` | `stable` (or `beta` if prerelease) | `[env.production]` | `…speakist` (or `…speakist.beta`) | `…speakist.ios` |
+| Workflow | Trigger | Purpose | Runner |
+|---|---|---|---|
+| **Dev deploy** (`deploy-dev.yml`) | every push to `main` | Channel `dev` → Cloudflare `[env.dev]` Worker, Mac `…speakist.dev`, iOS `…speakist.ios.dev` | mixed |
+| **Prod deploy** (`deploy-prod.yml`) | GitHub Release published | Channel `stable` (or `beta` if prerelease) → Cloudflare `[env.production]`, Mac `…speakist` (or `…speakist.beta`), iOS `…speakist.ios` | mixed |
+| **PR checks** (`pr.yml`) | PR or push to `main` | Block merge on web typecheck/lint/vitest + Mac xcodebuild test | ubuntu, macOS |
+| **Polish regression** (`polish-regression.yml`) | PR touching polish; weekly cron; manual dispatch | Block merge if [polish-fixtures](../web/src/lib/transcription/polish-fixtures.ts) regress; catch upstream Groq-side model drift over time | ubuntu |
 
 The two pipelines share `scripts/release-ci.sh` and
 `scripts/release-ios-ci.sh` — channel selection is driven entirely by
@@ -65,6 +67,96 @@ notarization + Sparkle-signing pipeline. The iOS job uses a separate
 via App Store Connect) doesn't share much with the Mac side
 (Sparkle + R2).
 
+## Polish regression suite
+
+The `polish-regression.yml` workflow runs the bench in
+[`web/scripts/bench-polish.ts`](../web/scripts/bench-polish.ts)
+against the fixtures in
+[`web/src/lib/transcription/polish-fixtures.ts`](../web/src/lib/transcription/polish-fixtures.ts).
+It exercises the real Groq API end-to-end (no mocks) and asserts
+behavior on each fixture: no assistant preamble, must-contain
+substrings, length bounds, must-be-applied, etc.
+
+### When it runs
+
+| Trigger | When it fires | Why |
+|---|---|---|
+| `pull_request` | PR diff touches `polish.ts`, `polish-fixtures.ts`, `bench-polish.ts`, or the workflow file itself | Catch prompt or fixture regressions before merge. Anything else (UI changes, unrelated routes) skips the workflow entirely so we don't burn API budget on PRs that can't affect polish behavior. |
+| `schedule` (Mon 09:00 UTC) | Once a week on `main` | Catch upstream model drift — Groq could re-tune `llama-3.1-8b-instant` between releases, or our prompt could degrade against newer Llama checkpoints, without anyone touching our code. |
+| `workflow_dispatch` | Manual UI trigger | Ad-hoc validation. Inputs let you override iteration count or swap the model (e.g., compare against `openai/gpt-oss-20b` or `llama-3.3-70b-versatile`) without editing code. |
+
+### What's measured
+
+Per fixture, the bench reports `PASS` / `REJECT` / `FAIL`:
+
+* **PASS** — the model returned an output, the rejection guard
+  accepted it, every assertion held.
+* **REJECT** — the rejection guard fell back to raw text (output
+  too long, assistant preamble, fetch failure, etc.). The
+  `errorReason` is logged.
+* **FAIL** — output was accepted but failed at least one fixture
+  expectation (missing required substring, exceeded length ratio,
+  etc.).
+
+Aggregate metrics: pass rate, rejection rate, latency p50/p95,
+per-mode breakdown (intuitive vs prescriptive), failure-mode
+histogram. Any non-PASS exits the workflow with code 1 — branch
+protection should require this check on PRs that touch polish.
+
+### Adding a fixture
+
+When you discover a new failure mode in production (a real-world
+dictation that polish handled badly), capture it as a fixture so
+prompt changes can't silently re-introduce the same bug:
+
+1. Add a case to `POLISH_FIXTURES` in `polish-fixtures.ts`.
+2. Run the bench locally to confirm the case passes (or add the
+   case as a known-failure with a TODO until the prompt is fixed).
+3. Push the PR — the workflow will exercise the new fixture
+   alongside everything else.
+
+Don't write fixtures whose pass condition depends on a model's
+arbitrary stylistic choices ("should it use an em-dash or a
+comma?"). Those produce noisy regressions that don't reflect a
+real quality change. Only assert what's structurally correct or
+structurally wrong.
+
+### Local usage
+
+```bash
+# Single iteration, default model — fast smoke test
+GROQ_API_KEY=... pnpm --dir web bench:polish
+
+# Multi-iteration to surface flakes
+GROQ_API_KEY=... pnpm --dir web bench:polish -n 3
+
+# A/B against another Groq model
+GROQ_API_KEY=... pnpm --dir web exec tsx scripts/bench-polish.ts \
+  --model openai/gpt-oss-20b
+
+# Run only one case
+GROQ_API_KEY=... pnpm --dir web exec tsx scripts/bench-polish.ts \
+  --only weather-question
+
+# A/B a prompt variant without editing polish.ts
+GROQ_API_KEY=... pnpm --dir web exec tsx scripts/bench-polish.ts \
+  --system-prompt-file-prescriptive ./tmp/alt-prompt.txt
+```
+
+### Required secret
+
+| Secret | Purpose | How to obtain |
+|---|---|---|
+| `GROQ_API_KEY` | Direct Groq API access for the bench's `polishWithApiKey` call. Same key the prod Worker uses. | `console.groq.com/keys`. The CI key can be the same one the Worker uses (it's just for chat-completions calls — no infra access). |
+
+The workflow does **not** need any Cloudflare or Apple secrets —
+it talks directly to Groq, bypassing the Worker entirely. That's
+deliberate: if the Worker's polish path is broken in a way the
+bench's pure path catches, the failure mode is something we
+introduced in our request shape (prompt, prefill, sentinel) rather
+than infrastructure. Conversely, an outage in Cloudflare won't
+fail this workflow.
+
 ## One-time setup
 
 ### 1. Apple Developer portal (iOS dev channel)
@@ -118,6 +210,7 @@ repository secret. Names must match exactly.
 | `APP_STORE_CONNECT_KEY_ID` | 10-char alphanumeric Key ID | Visible in the Keys table after creation |
 | `APP_STORE_CONNECT_ISSUER_ID` | Team's Issuer UUID | Top of the Integrations → App Store Connect API page |
 | `SPARKLE_PRIVATE_KEY` | EdDSA private key for signing DMG updates | On the machine that has it: `security find-generic-password -s 'https://sparkle-project.org' -a 'ed25519' -w` (prints the raw 44-char base64 directly — paste as-is, do **not** wrap in another base64 layer) |
+| `GROQ_API_KEY` | Direct Groq API access for the polish-regression bench (`polish-regression.yml`). Not used by the deploy workflows. | `console.groq.com/keys` → "Create API Key". Can be the same key the Worker uses; the bench only calls `chat/completions`, no infra access. |
 
 The same App Store Connect API key is used by both the Mac job (for
 notarization via `notarytool`) and the iOS job (for cert + profile

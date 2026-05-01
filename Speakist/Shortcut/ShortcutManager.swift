@@ -9,6 +9,13 @@ extension KeyboardShortcuts.Name {
 
 @MainActor
 final class ShortcutManager {
+    /// Timestamp of the most recent push-to-talk key-up. Used by
+    /// TranscriptionService to log end-to-end "release → paste" latency
+    /// against a single shared baseline. `nonisolated(unsafe)` because
+    /// it's read from MainActor-isolated code via a regular reference;
+    /// torn reads only affect ms-level log accuracy.
+    nonisolated(unsafe) static var releaseStartedAt: CFAbsoluteTime = 0
+
     private let env: AppEnvironment
     private var isToggleRecording = false
     private var recordingStartedAt: Date?
@@ -52,7 +59,33 @@ final class ShortcutManager {
         // Drop repeat key-downs that arrive while a previous press is
         // still warming up the engine on a background task.
         if pendingStart != nil { return }
+        // Pre-warm the network path to the Worker so TLS + the V8
+        // isolate are hot by the time the user releases the key. Fire-
+        // and-forget HEAD against the lightweight /api/me endpoint —
+        // we don't care about the response, only the connection state.
+        // Measurement showed first-of-session auth at 629ms vs warm at
+        // 67ms (live press 1 vs press 2); a HEAD started at key-down
+        // and a recording held for ≥200ms hides that 562ms cold spike.
+        prewarmTranscriptionConnection()
         beginRecording()
+    }
+
+    private func prewarmTranscriptionConnection() {
+        let url = URL(string: "/api/me", relativeTo: env.preferences.apiBaseURL)
+        guard let url else { return }
+        let token = env.accountManager.bearerToken
+        Task.detached(priority: .userInitiated) {
+            var req = URLRequest(url: url)
+            req.httpMethod = "HEAD"
+            req.timeoutInterval = 5
+            if let token, !token.isEmpty {
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            // We don't care about the result — failures here just mean
+            // the actual transcribe call will pay the cold-connection
+            // cost itself, which is the status quo.
+            _ = try? await URLSession.shared.data(for: req)
+        }
     }
 
     /// Check mic + accessibility. Returns `true` only if both are granted
@@ -104,6 +137,7 @@ final class ShortcutManager {
     }
 
     private func pushUp() {
+        Self.releaseStartedAt = CFAbsoluteTimeGetCurrent()
         if env.audioRecorder.isRecording {
             finishRecording()
             return
