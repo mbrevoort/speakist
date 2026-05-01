@@ -22,6 +22,8 @@ final class AppEnvironment: ObservableObject {
     let accountManager: SpeakistAccountManager
     let apiClient: SpeakistAPIClient
 
+    private var cancellables = Set<AnyCancellable>()
+
     init() {
         Logger.shared.bootstrap()
         let prefs = Preferences()
@@ -83,6 +85,30 @@ final class AppEnvironment: ObservableObject {
         historyStore.purgeExpired(days: preferences.retentionDays, maxEntries: preferences.maxHistoryEntries)
         audioArchive.pruneToKeepLast(preferences.keepAudio ? preferences.keepAudioCount : 0)
         updater.bootstrap()
+
+        // Pre-warm the audio engine so the first shortcut press doesn't
+        // pay 100–250ms of HAL cold-start latency. Self-gates on mic
+        // permission and silently no-ops if it's not granted yet — so
+        // the OS mic prompt is still tied to the user's first
+        // deliberate shortcut press, not launch.
+        //
+        // We deliberately do *not* prewarm the HUD panel here. The
+        // construction is fast (~10–30ms), and creating an
+        // NSHostingView before the panel has ever been on screen leaves
+        // SwiftUI without a proper layout pass — the `.background`
+        // modifier renders empty until the next layout cycle. Lazy
+        // first-show construction in `showPreparing()` is correct; the
+        // persistent-panel change in `hide()` already covers presses 2+.
+        audioRecorder.prewarm()
+        // If mic access is granted later in this session (user came
+        // back from System Settings, or completed onboarding), re-run
+        // the audio prewarm so the first post-grant press is also fast.
+        permissions.$mic
+            .removeDuplicates()
+            .sink { [audioRecorder] state in
+                if state == .granted { audioRecorder.prewarm() }
+            }
+            .store(in: &cancellables)
 
         // Pull any vocabulary edits made on the web (or another device)
         // since the app last ran. No-op if the user is signed out.

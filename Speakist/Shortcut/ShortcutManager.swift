@@ -14,6 +14,16 @@ final class ShortcutManager {
     private var recordingStartedAt: Date?
     private var maxDurationTimer: Timer?
     private var didHitMaxDuration = false
+    /// In-flight async start initiated by `beginRecording()`. Tracked so
+    /// `pushUp()` can detect that the engine is still warming up and
+    /// schedule a finish-on-ready instead of dropping the keyup.
+    private var pendingStart: Task<Void, Never>?
+    /// Set by `pushUp()` if the user releases the shortcut while
+    /// `engine.start()` is still running on a background task. The
+    /// pending-start completion handler reads this and immediately
+    /// finishes the recording so a quick tap doesn't strand the
+    /// engine in the recording state with no keyup to terminate it.
+    private var releaseRequestedDuringStart = false
 
     init(env: AppEnvironment) {
         self.env = env
@@ -39,6 +49,9 @@ final class ShortcutManager {
         // Debounce: ignore key-down while a prior recording is still transcribing.
         if env.hudController.state == .transcribing { return }
         if env.audioRecorder.isRecording { return }
+        // Drop repeat key-downs that arrive while a previous press is
+        // still warming up the engine on a background task.
+        if pendingStart != nil { return }
         beginRecording()
     }
 
@@ -91,8 +104,17 @@ final class ShortcutManager {
     }
 
     private func pushUp() {
-        guard env.audioRecorder.isRecording else { return }
-        finishRecording()
+        if env.audioRecorder.isRecording {
+            finishRecording()
+            return
+        }
+        // Engine is still warming up on a background task. Mark the
+        // intent and let the start-completion handler wrap up as
+        // soon as the engine is live. A genuine no-press (no
+        // pendingStart) just falls through.
+        if pendingStart != nil {
+            releaseRequestedDuringStart = true
+        }
     }
 
     // MARK: - Toggle mode
@@ -102,6 +124,12 @@ final class ShortcutManager {
         if env.audioRecorder.isRecording {
             isToggleRecording = false
             finishRecording()
+        } else if pendingStart != nil {
+            // Engine is still warming up from a prior toggle press.
+            // Treat this press as the "stop" half of the toggle —
+            // finish-on-ready when the engine is live.
+            isToggleRecording = false
+            releaseRequestedDuringStart = true
         } else {
             guard handlePermissionPrecondition() else { return }
             isToggleRecording = true
@@ -112,29 +140,46 @@ final class ShortcutManager {
     // MARK: - Lifecycle
 
     private func beginRecording() {
-        // Show the HUD FIRST, before we touch the audio engine. Engine
-        // startup is fast on Mac but not free, and the user pressed
-        // their shortcut to get a UI response — so flash the panel up
-        // in the same frame as the key event and hide engine warmup
-        // behind the preparing state.
+        // Show the HUD FIRST, before we touch the audio engine. The
+        // .preparing state covers the 280–560ms window while
+        // engine.start runs on a background task and the HAL warms
+        // up; the runloop is free during that window so the panel
+        // can actually paint at +5ms instead of being held off
+        // until the engine is live.
         env.hudController.showPreparing()
 
-        do {
-            try env.audioRecorder.start()
-        } catch {
-            Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
-            env.hudController.hide()
-            env.notifier.transcriptionFailed(error.localizedDescription)
-            return
+        releaseRequestedDuringStart = false
+        pendingStart = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.env.audioRecorder.start()
+            } catch {
+                Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
+                self.env.hudController.hide()
+                self.env.notifier.transcriptionFailed(error.localizedDescription)
+                self.pendingStart = nil
+                self.releaseRequestedDuringStart = false
+                return
+            }
+            self.pendingStart = nil
+            // Engine is now actually running and producing samples —
+            // flip the HUD into its recording state, kicking off the
+            // timer and the live waveform.
+            self.recordingStartedAt = Date()
+            self.didHitMaxDuration = false
+            self.env.hudController.activateRecording()
+            self.playStartSound()
+            self.scheduleMaxDurationCutoff()
+
+            // The user already released the shortcut while the engine
+            // was warming up — finish the recording immediately. The
+            // sub-minimum-duration check in finishRecording will
+            // discard the result if the press was too short.
+            if self.releaseRequestedDuringStart {
+                self.releaseRequestedDuringStart = false
+                self.finishRecording()
+            }
         }
-        // Engine is now actually running and producing samples — flip
-        // the HUD into its recording state, which kicks off the timer
-        // and starts animating the waveform from real RMS values.
-        recordingStartedAt = Date()
-        didHitMaxDuration = false
-        env.hudController.activateRecording()
-        playStartSound()
-        scheduleMaxDurationCutoff()
     }
 
     private func finishRecording() {

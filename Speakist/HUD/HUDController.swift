@@ -108,9 +108,11 @@ final class HUDController: ObservableObject {
         state = .hidden
         timer?.invalidate()
         timer = nil
-        panel?.dismiss { [weak self] in
-            self?.panel = nil
-        }
+        // Keep the panel allocated across recordings so the next
+        // shortcut press doesn't pay the NSPanel construction cost
+        // again. `dismiss` fades it out and orders it out of the
+        // window list; we just don't release the reference.
+        panel?.dismiss(completion: {})
     }
 
     // MARK: - Internal
@@ -230,10 +232,18 @@ final class HUDPanel: NSPanel {
         let screen = NSScreen.screens.first(where: {
             NSMouseInRect(NSPoint(x: anchor.midX, y: anchor.midY), $0.frame, false)
         }) ?? NSScreen.main
-        guard let frame = screen?.visibleFrame else { return }
+        guard let visibleFrame = screen?.visibleFrame else { return }
 
-        let w = self.frame.width
-        let h = self.frame.height
+        // Always re-assert the canonical panel size on every show.
+        // After an `orderOut`/show cycle, SwiftUI's layout can settle
+        // to a smaller intrinsic size and the NSHostingView contentView
+        // shrinks with it — so the next time we present, the panel
+        // ends up narrower than the design size and the animated
+        // gradient border bleeds past where the user expects the panel
+        // to end. Pinning the size up front guarantees consistent
+        // geometry regardless of any intermediate layout state.
+        let w = HUDPanel.panelSize.width
+        let h = HUDPanel.panelSize.height
 
         // Center the HUD horizontally on the focused field. Place it
         // just below the field with a small gap so it doesn't cover
@@ -242,17 +252,24 @@ final class HUDPanel: NSPanel {
         let gap: CGFloat = 12
         var x = anchor.midX - w / 2
         var y = anchor.minY - h - gap        // below the field (AppKit y-up)
-        if y < frame.minY + 8 {
+        if y < visibleFrame.minY + 8 {
             y = anchor.maxY + gap            // not enough room → above
         }
-        x = max(frame.minX + 8, min(x, frame.maxX - w - 8))
-        y = max(frame.minY + 8, min(y, frame.maxY - h - 8))
+        x = max(visibleFrame.minX + 8, min(x, visibleFrame.maxX - w - 8))
+        y = max(visibleFrame.minY + 8, min(y, visibleFrame.maxY - h - 8))
 
-        self.setFrameOrigin(NSPoint(x: x, y: y))
+        self.setFrame(NSRect(x: x, y: y, width: w, height: h), display: false)
+        self.contentView?.frame = NSRect(origin: .zero, size: HUDPanel.panelSize)
+        // Snap to full opacity instead of fading in over 100ms. The
+        // fade was hiding engine-startup latency; with prewarm the
+        // engine is already live by the time we get here, so a slow
+        // fade just delays the user's "I'm being heard" feedback.
+        // A 30ms ease takes the visual edge off the pop without
+        // adding meaningful perceived delay.
         self.alphaValue = 0
         self.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.10
+            ctx.duration = 0.03
             self.animator().alphaValue = 1
         }
     }
@@ -445,13 +462,16 @@ private struct HUDView: View {
     @ViewBuilder private var activity: some View {
         switch controller.state {
         case .preparing:
-            // Empty bars at rest height so the panel doesn't reflow
-            // on the first level update. Conveys "ready, not yet
-            // capturing" without text.
-            VoiceLevelBars(
-                bands: Array(repeating: 0, count: AudioRecorder.bandCount),
-                isActive: false
-            )
+            // Distinct "warming up" indicator — uniform breathing
+            // pulse across all bars rather than the FFT-driven
+            // independent dance of the recording state. The shared
+            // motion reads as "ready, not yet listening" so the
+            // user instinctively waits for the bars to come alive
+            // before speaking. Without this the .preparing and
+            // .recording states look near-identical and a user
+            // pressing-and-speaking immediately can lose the first
+            // 200–300ms of audio while the engine warms up.
+            PreparingPulse()
         case .recording:
             VoiceLevelBars(bands: controller.bandLevels, isActive: true)
         case .transcribing:
@@ -595,6 +615,63 @@ private struct TranscribingIndicator: View {
                         .frame(width: 6, height: 6)
                 }
                 Spacer(minLength: 0)
+            }
+        }
+    }
+}
+
+/// "Warming up" indicator shown for the brief window between the user
+/// pressing the shortcut and the audio engine actually capturing
+/// samples. All bars breathe in unison at a slow rhythm, which reads
+/// as "I see you, but I'm not listening yet" — visually distinct from
+/// the FFT-driven independent dance of the recording state, so the
+/// user knows to wait a beat before speaking.
+///
+/// Tuned to settle into a stable visual signature within ~200ms of
+/// appearing (which is roughly how long the engine takes to come
+/// online after prewarm), so by the time the bars stop pulsing the
+/// audio is live.
+private struct PreparingPulse: View {
+    /// Match the recording-state bar count so the layout doesn't
+    /// reflow when the state flips from `.preparing` to `.recording`.
+    private let barCount = AudioRecorder.bandCount
+    /// Floor of the breathing range — bars never collapse to zero
+    /// so the panel still reads as "alive."
+    private let minHeight: Double = 0.18
+    /// Ceiling of the breathing range — kept well below 1.0 so the
+    /// pulse looks calm rather than mimicking a loud-voice peak.
+    private let maxHeight: Double = 0.45
+    /// One full inhale + exhale per `period` seconds. Slow enough
+    /// that a single press-and-release cycle (~1s) sees less than
+    /// one full breath — fast enough that the motion is obviously
+    /// non-static.
+    private let period: Double = 1.0
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            // sin → -1…1 → 0…1 so the breathing curve is symmetric.
+            let phase = (sin(t * 2 * .pi / period) + 1) / 2
+            let amplitude = minHeight + (maxHeight - minHeight) * phase
+
+            GeometryReader { geo in
+                let totalSpacing = CGFloat(barCount - 1) * 4
+                let barWidth = max(4, (geo.size.width - totalSpacing) / CGFloat(barCount))
+                let h = max(CGFloat(amplitude) * geo.size.height, 4)
+                HStack(alignment: .center, spacing: 4) {
+                    ForEach(0..<barCount, id: \.self) { _ in
+                        Capsule(style: .continuous)
+                            .fill(Color.speakistPeach)
+                            .frame(width: barWidth, height: h)
+                            // Lower opacity so even a peaking pulse
+                            // doesn't read as "loud voice" — the
+                            // muted appearance reinforces "not yet
+                            // listening." Recording bars run at
+                            // 1.0 opacity for visual contrast.
+                            .opacity(0.55)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
             }
         }
     }
