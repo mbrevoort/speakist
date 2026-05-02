@@ -60,7 +60,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      # Third-party action — pinned to commit SHA per supply-chain best
+      # practice (an attacker compromising the upstream `v4` ref can't
+      # land malicious code in our CI). Resolve a fresh SHA via:
+      #   gh api repos/pnpm/action-setup/git/refs/tags/v4 --jq '.object.sha'
+      # then dereference if it's an annotated tag (type=="tag"):
+      #   gh api repos/pnpm/action-setup/git/tags/<sha> --jq '.object.sha'
+      # Annotate the line with the version so a Dependabot bump can find it.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10
 

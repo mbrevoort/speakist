@@ -209,10 +209,22 @@ if [[ ${#NET_MS[@]} -lt 2 ]]; then
 fi
 
 # Print median + p95 for each stage. Sort numerically, pick at indexes.
+#
+# Defensive against zero-length input — every per-stage array (NET_MS,
+# WORKER_MS, etc.) is populated in lockstep on each successful HTTP
+# 200 response, so they should all be the same length, and the caller
+# already early-exits when fewer than 2 NET_MS samples exist. But if a
+# future caller invokes `summarize` with no numeric args, the index
+# math below would still produce well-defined values (1 and 1), so
+# the early bail keeps the output sensible.
 summarize() {
   local label="$1"; shift
-  local sorted; sorted=$(printf '%s\n' "$@" | sort -n)
   local n=$#
+  if [[ $n -eq 0 ]]; then
+    printf "  %-20s (no samples)\n" "$label"
+    return
+  fi
+  local sorted; sorted=$(printf '%s\n' "$@" | sort -n)
   local median_idx=$(( (n + 1) / 2 ))
   local p95_idx=$(( (n * 95 + 99) / 100 ))
   [[ $median_idx -lt 1 ]] && median_idx=1
