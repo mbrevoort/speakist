@@ -15,6 +15,7 @@ import { getDb } from "@/lib/db";
 import { deviceAuthCodes } from "@/lib/db/schema";
 import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
+import { deviceLabel, isDevicePlatform } from "./device-label";
 
 export type ConfirmResult =
   | { ok: true; message: string }
@@ -43,6 +44,15 @@ export async function confirmDeviceCode(
   }
   const userCode = parsed.data.user_code;
 
+  // Read platform from the hidden form input (set by LinkClient when
+  // ?platform= was on the URL). Drives the device-aware copy in
+  // every error / success message below — falls back to "device"
+  // when missing or unrecognized so older clients still get a
+  // grammatical message.
+  const rawPlatform = formData.get("platform");
+  const platform = isDevicePlatform(rawPlatform) ? rawPlatform : undefined;
+  const label = deviceLabel(platform);
+
   // No-org guard. With one-org-per-user, anyone authorizing a device must
   // already be in an org — otherwise the Mac wouldn't have anywhere to
   // bill against. Send them back to /dashboard where the no-org panel
@@ -67,13 +77,13 @@ export async function confirmDeviceCode(
   if (!row) {
     return {
       ok: false,
-      error: "We couldn't find that code. Double-check what your Mac is showing.",
+      error: `We couldn't find that code. Double-check what your ${label} is showing.`,
     };
   }
   if (row.expiresAt.getTime() < now.getTime()) {
     return {
       ok: false,
-      error: "This code expired. Go back to your Mac and try again.",
+      error: `This code expired. Go back to your ${label} and try again.`,
     };
   }
   if (row.consumedAt) {
@@ -83,7 +93,7 @@ export async function confirmDeviceCode(
     };
   }
   if (row.userId && row.approvedAt) {
-    return { ok: true, message: "You're already approved — return to your Mac." };
+    return { ok: true, message: `You're already approved — return to your ${label}.` };
   }
 
   await db
@@ -99,7 +109,6 @@ export async function confirmDeviceCode(
 
   return {
     ok: true,
-    message:
-      "You're approved — return to your Mac. The app should sign in within a few seconds.",
+    message: `You're approved — return to your ${label}. The app should sign in within a few seconds.`,
   };
 }

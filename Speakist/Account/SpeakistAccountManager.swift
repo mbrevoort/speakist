@@ -147,7 +147,10 @@ final class SpeakistAccountManager: ObservableObject {
         }
 
         do {
-            let resp = try await client.requestDeviceCodes(deviceName: deviceNameForMac())
+            let resp = try await client.requestDeviceCodes(
+                deviceName: deviceNameForMac(),
+                platform: devicePlatformTag()
+            )
             let expiresAt = Date().addingTimeInterval(TimeInterval(resp.expiresIn))
             guard let url = URL(string: resp.verificationURLWithCode) else {
                 throw SpeakistAPIClient.Error.badResponse
@@ -350,6 +353,22 @@ final class SpeakistAccountManager: ObservableObject {
         return UIDevice.current.name   // "iPhone" in iOS 16+ unless entitled
         #else
         return "Speakist Device"
+        #endif
+    }
+
+    /// Compile-time-resolved platform tag sent to /api/device/start so
+    /// the /link page can show "your Mac" / "your iPhone" instead of
+    /// always saying "Mac". Must stay in sync with the server-side
+    /// `DevicePlatform` enum (web/src/app/link/device-label.ts) — the
+    /// server rejects unrecognized values and the page falls back to
+    /// generic copy.
+    private func devicePlatformTag() -> String {
+        #if canImport(AppKit)
+        return "macos"
+        #elseif canImport(UIKit)
+        return "ios"
+        #else
+        return ""
         #endif
     }
 

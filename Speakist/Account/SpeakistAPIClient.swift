@@ -69,9 +69,15 @@ final class SpeakistAPIClient {
         }
     }
 
-    func requestDeviceCodes(deviceName: String?) async throws -> DeviceStartResponse {
+    func requestDeviceCodes(deviceName: String?, platform: String?) async throws -> DeviceStartResponse {
         var body: [String: Any] = [:]
         if let name = deviceName, !name.isEmpty { body["deviceName"] = name }
+        // Tell the server which platform initiated the flow so the
+        // /link page can render "Code from your Mac" vs "Code from
+        // your iPhone" instead of always saying "Mac". Server-side
+        // validates against a known enum; unknown values are dropped
+        // and the page falls back to a generic "your device" label.
+        if let platform = platform, !platform.isEmpty { body["platform"] = platform }
         return try await perform(
             path: "/api/device/start",
             method: "POST",

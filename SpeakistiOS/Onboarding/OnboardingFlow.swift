@@ -19,7 +19,20 @@ import UIKit
 struct OnboardingFlow: View {
     let onComplete: () -> Void
 
-    @State private var page = 0
+    // Use @SceneStorage so the page index survives the round-trip
+    // through Settings.app — the EnableKeyboardPane deep-links into
+    // Settings via UIApplication.openSettingsURLString, and on return
+    // SwiftUI recreates this view's hierarchy, which resets plain
+    // @State. With SceneStorage we land back on the same step the
+    // user was reading when they left, instead of jumping back to
+    // the Welcome pane and looking like progress was lost. Keyed
+    // under "onboardingPage" so a future migration to a different
+    // onboarding flow can drop the key cleanly. Once
+    // `onboardingCompleted` flips, RootView stops rendering this view
+    // entirely so the stored page doesn't leak into any future
+    // re-onboarding (it'd just start fresh at 0 if the user signs
+    // out and back in).
+    @SceneStorage("onboardingPage") private var page = 0
     private let pageCount = 5
 
     var body: some View {

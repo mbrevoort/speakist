@@ -11,20 +11,34 @@ import { LinkIcon } from "lucide-react";
 import { Wordmark } from "@/components/brand/logo";
 import { getAuth } from "@/lib/auth";
 import { LinkClient } from "./link-client";
+import { isDevicePlatform, type DevicePlatform } from "./device-label";
 
 export const metadata = { title: "Link your device — Speakist" };
 
 export default async function LinkPage({
   searchParams,
 }: {
-  searchParams: Promise<{ code?: string }>;
+  searchParams: Promise<{ code?: string; platform?: string }>;
 }) {
   const { auth } = await getAuth();
   const session = await auth();
-  const { code } = await searchParams;
+  const { code, platform: platformParam } = await searchParams;
+  // Accept only the known platform tags — anything else falls back to
+  // the generic "your device" copy. This is the same enum
+  // /api/device/start validates against; rejecting unknown values here
+  // is defense-in-depth against arbitrary query strings.
+  const platform: DevicePlatform | undefined = isDevicePlatform(platformParam)
+    ? platformParam
+    : undefined;
 
   if (!session?.user) {
-    const target = code ? `/link?code=${encodeURIComponent(code)}` : "/link";
+    // Preserve both `code` and `platform` across the sign-in round-trip
+    // so the user lands back on the same /link state after auth.
+    const params = new URLSearchParams();
+    if (code) params.set("code", code);
+    if (platform) params.set("platform", platform);
+    const qs = params.toString();
+    const target = qs ? `/link?${qs}` : "/link";
     redirect(`/auth/signin?callbackUrl=${encodeURIComponent(target)}`);
   }
 
@@ -58,6 +72,7 @@ export default async function LinkPage({
         <LinkClient
           defaultCode={code ?? ""}
           userEmail={session.user.email ?? ""}
+          platform={platform}
         />
       </div>
 
