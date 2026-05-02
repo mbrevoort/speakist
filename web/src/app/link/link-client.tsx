@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { confirmDeviceCode, type ConfirmResult } from "./actions";
+import { deviceLabel, type DevicePlatform } from "./device-label";
 
 // Authorization is gated on an explicit click EVERY time. Do not
 // re-add a useEffect-based auto-submit here. The user_code in
@@ -19,12 +20,18 @@ import { confirmDeviceCode, type ConfirmResult } from "./actions";
 export function LinkClient({
   defaultCode,
   userEmail,
+  platform,
 }: {
   defaultCode: string;
   userEmail: string;
+  /** Native-app platform from the verification URL — drives the
+   *  "your Mac" / "your iPhone" / "your device" copy. `undefined`
+   *  for older app builds that pre-date the platform field. */
+  platform?: DevicePlatform;
 }) {
   const [result, setResult] = useState<ConfirmResult | null>(null);
   const [pending, startTransition] = useTransition();
+  const label = deviceLabel(platform);
 
   if (result?.ok) {
     return (
@@ -43,9 +50,16 @@ export function LinkClient({
       }}
       className="mt-6 space-y-4"
     >
+      {/* Tunnel `platform` to the server action so error/success
+          messages match the device-aware label. Hidden because the
+          user has no business editing it. */}
+      {platform && (
+        <input type="hidden" name="platform" value={platform} />
+      )}
+
       <div>
         <label htmlFor="user_code" className="block text-sm font-medium mb-1.5">
-          Code from your Mac
+          Code from your {label}
         </label>
         <input
           id="user_code"
@@ -61,7 +75,7 @@ export function LinkClient({
       </div>
 
       <Button type="submit" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Confirming…" : "Authorize this Mac"}
+        {pending ? "Confirming…" : `Authorize this ${label}`}
       </Button>
 
       <p className="text-xs text-muted-foreground text-center">
