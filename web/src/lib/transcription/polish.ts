@@ -238,14 +238,42 @@ export const DEFAULT_POLISH_PROMPT = INTUITIVE_POLISH_PROMPT;
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 /** Deliberately cheap + fast. If accuracy proves too low, swap for
- *  `llama-3.3-70b-versatile` (pricier) or `gpt-oss-20b` (mid-tier). */
-const POLISH_MODEL = "llama-3.1-8b-instant";
+ *  `openai/gpt-oss-20b` (strict structured outputs, 1.7× cost) or
+ *  `llama-3.3-70b-versatile` (12× cost). Bench against
+ *  `web/src/lib/transcription/polish-fixtures.ts` first. */
+export const POLISH_MODEL = "llama-3.1-8b-instant";
 
 /** Milliseconds — polish is bounded because we're blocking the
  *  /api/transcribe response on it. Whisper-compatible timeout budget
  *  (25s upstream-transcribe + 5s polish + headroom) stays under the
  *  Worker's 30s ceiling. */
 const POLISH_TIMEOUT_MS = 5_000;
+
+/** Sentinels for assistant-message prefilling.
+ *
+ * Llama-3.1-8B's RLHF training is heavily biased toward assistant-mode
+ * opening tokens ("Okay,", "Sure,", "Here's"). At temperature=0 the
+ * decoding is deterministic, so when input phrasing trips the "this
+ * looks like a request" boundary, the model locks onto the assistant
+ * token distribution and the system prompt can't dislodge it. We
+ * measured ~20% rejection rate on this exact failure mode.
+ *
+ * Fix: prefill the assistant turn with `POLISH_OPEN`. Groq supports
+ * this — the model continues from where the assistant message ended,
+ * so it cannot emit a preamble before our sentinel because its turn
+ * has already started past that position. We pass `stop: [POLISH_CLOSE]`
+ * as a belt-and-suspenders bound on output length.
+ *
+ * **Sentinel choice matters.** We initially tried `<<<` / `>>>`; the
+ * regression suite caught that the model pattern-matched it as an
+ * XML-tag opener (since the user message wraps input in `<dictation>`
+ * tags) and produced output like `<<<dictation>...</dictation>>>`.
+ * `>>>>>` is plain ASCII repetition, doesn't suggest XML, doesn't
+ * collide with any token in normal English, and is unlikely to ever
+ * appear inside a polished transcript. The newline after `POLISH_OPEN`
+ * gives the model a clean line on which to begin emitting text. */
+const POLISH_OPEN = ">>>>>\n";
+const POLISH_CLOSE = "<<<<<";
 
 /**
  * Reject the polish output and fall back to raw text when the model has
@@ -267,6 +295,19 @@ function rejectionReason(input: string, output: string): string | null {
   if (output.length > input.length * 2) {
     return `output_too_long: ${output.length} chars vs ${input.length} input`;
   }
+
+  // If the polished output begins with the same word as the input,
+  // the model is preserving the user's first word — not adding an
+  // assistant preamble. This is the exact false-positive that caught
+  // dictations like "okay so the next step is..." where the polish
+  // legitimately produces "Okay, so the next step is..." and we'd
+  // otherwise incorrectly reject it. Captured by the regression
+  // suite's `okay-prefix-trap` fixture.
+  const firstOutputWord = output.toLowerCase().match(/^[a-z]+/)?.[0];
+  const firstInputWord = input.toLowerCase().match(/^[a-z]+/)?.[0];
+  const echoesInputStart =
+    !!firstOutputWord && firstOutputWord === firstInputWord;
+
   const lower = output.toLowerCase().trimStart();
   const banned = [
     "sure,",
@@ -284,6 +325,11 @@ function rejectionReason(input: string, output: string): string | null {
   ];
   for (const prefix of banned) {
     if (lower.startsWith(prefix)) {
+      if (echoesInputStart) {
+        // Polished version is echoing the user's first word — not
+        // a preamble, even if it happens to land on the banned list.
+        continue;
+      }
       return `assistant_preamble: starts with "${prefix}"`;
     }
   }
@@ -319,7 +365,6 @@ export async function runPolish(
   rawText: string,
   mode: PolishMode
 ): Promise<PolishResult> {
-  const startedAt = Date.now();
   const text = rawText.trim();
 
   // Empty / whitespace-only transcript — nothing to clean.
@@ -346,7 +391,7 @@ export async function runPolish(
       applied: false,
       promptTokens: 0,
       completionTokens: 0,
-      latencyMs: Date.now() - startedAt,
+      latencyMs: 0,
       errorReason: `no_groq_key: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
@@ -359,6 +404,65 @@ export async function runPolish(
   // of model drift).
   const systemPrompt = await resolvePromptForMode(mode);
 
+  return polishWithApiKey({
+    apiKey,
+    model: POLISH_MODEL,
+    systemPrompt,
+    rawText: text,
+  });
+}
+
+/**
+ * Pure, env-free polish call. Takes an explicit API key, model, and
+ * system prompt; calls Groq directly. No DB reads, no Worker bindings.
+ *
+ * This is the function the regression bench (`web/scripts/bench-polish.ts`)
+ * calls to A/B different prompts and models against the fixture set
+ * without needing the Cloudflare Workers runtime. Production code path
+ * goes through `runPolish()` which wraps this with key resolution and
+ * prompt-override lookup.
+ *
+ * Two changes from the older inline implementation worth noting here:
+ *
+ * 1. **Assistant-message prefilling** — the messages array ends with
+ *    `{ role: "assistant", content: "<<<" }`. The model continues from
+ *    that sentinel. This makes assistant-style preambles structurally
+ *    impossible: the model cannot emit "Okay," before `<<<` because the
+ *    assistant turn has already started. Llama-3.1-8B's RLHF bias
+ *    toward those preambles is the documented cause of our ~20%
+ *    rejection rate — prefilling targets it directly.
+ *
+ * 2. **Stop sequence on `>>>`** — system prompt instructs the model to
+ *    end output with `>>>`; we also pass it as a `stop` sequence so
+ *    Groq truncates there. Belt-and-suspenders. Both `<<<` and `>>>`
+ *    are stripped from the response before applying the rejection
+ *    sanity check.
+ */
+export interface PolishWithApiKeyArgs {
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  rawText: string;
+}
+
+export async function polishWithApiKey(
+  args: PolishWithApiKeyArgs
+): Promise<PolishResult> {
+  const startedAt = Date.now();
+  const { apiKey, model, systemPrompt, rawText } = args;
+  const text = rawText.trim();
+
+  if (text.length === 0) {
+    return {
+      text,
+      applied: false,
+      promptTokens: 0,
+      completionTokens: 0,
+      latencyMs: 0,
+      errorReason: "empty_input",
+    };
+  }
+
   // Wrap the raw STT output in <dictation> tags. This syntactically
   // separates user-provided content from any instruction-shaped text
   // it might contain, which materially reduces the chance the model
@@ -369,10 +473,12 @@ export async function runPolish(
   const userMessage = `<dictation>${text}</dictation>`;
 
   const body = {
-    model: POLISH_MODEL,
+    model,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userMessage },
+      // Prefill the assistant turn — see POLISH_OPEN docstring.
+      { role: "assistant", content: POLISH_OPEN },
     ],
     // Zero temperature + tight top_p so the model has no sampling slack
     // to wander into a "Here is your text:" preface or a tangent. This is
@@ -386,6 +492,10 @@ export async function runPolish(
     // still have room for punctuation on a multi-sentence thought; ceiling
     // at 1024 handles long dictations.
     max_tokens: Math.max(96, Math.min(1024, Math.ceil(text.length / 3))),
+    // Belt to the prefill suspenders — if the model emits the closing
+    // sentinel we stop generation there. Bounds tail latency on the
+    // odd case where the model wanders past the close.
+    stop: [POLISH_CLOSE],
     stream: false,
   };
 
@@ -437,7 +547,8 @@ export async function runPolish(
     };
   }
 
-  const cleaned = stripDictationTags(parsed.choices?.[0]?.message?.content ?? "");
+  const raw = parsed.choices?.[0]?.message?.content ?? "";
+  const cleaned = stripPolishSentinels(stripDictationTags(raw));
   if (cleaned.length === 0) {
     return {
       text,
@@ -451,8 +562,10 @@ export async function runPolish(
 
   // Sanity check: if the polished output looks wildly different from
   // the input (much longer, or starts with a forbidden assistant
-  // preamble), the model has gone off the rails. Fall back to raw and
-  // log the reason so we can tighten the prompt later.
+  // preamble), the model has gone off the rails. With prefilling this
+  // should be rare — the preamble check is mostly a guard for the
+  // case where the SDK echoes the prefill back and the model still
+  // managed to insert a preamble after our sentinel.
   const rejection = rejectionReason(text, cleaned);
   if (rejection) {
     console.warn(`[polish] rejected output: ${rejection}`);
@@ -473,6 +586,28 @@ export async function runPolish(
     completionTokens: parsed.usage?.completion_tokens ?? 0,
     latencyMs: Date.now() - startedAt,
   };
+}
+
+/** Remove the prefill / stop sentinels if the model echoed them back. */
+function stripPolishSentinels(s: string): string {
+  let out = s;
+  // Leading prefill — Groq sometimes prepends it to the returned
+  // content; trim if present. Match either the full prefill (with
+  // newline) or just the sentinel chars in case the newline got
+  // collapsed.
+  if (out.startsWith(POLISH_OPEN)) {
+    out = out.slice(POLISH_OPEN.length);
+  } else if (out.startsWith(POLISH_OPEN.trimEnd())) {
+    out = out.slice(POLISH_OPEN.trimEnd().length);
+  }
+  // Trailing close — should normally be cut by the stop sequence,
+  // but strip defensively in case max_tokens was reached just past
+  // it or the SDK includes it.
+  const closeIdx = out.indexOf(POLISH_CLOSE);
+  if (closeIdx !== -1) {
+    out = out.slice(0, closeIdx);
+  }
+  return out.trim();
 }
 
 interface GroqChatResponse {

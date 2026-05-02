@@ -1,0 +1,104 @@
+# Polish regression suite — exercises the Groq polish path against the
+# fixture set in `web/src/lib/transcription/polish-fixtures.ts` and
+# reports per-case + aggregate metrics.
+#
+# Why a separate workflow (vs folding into pr.yml):
+#   * Hits a real third-party API (Groq) — costs $$$ and can be
+#     network-flaky in ways our other unit tests aren't. Keeping it
+#     out of the always-run pr.yml means a Groq outage doesn't block
+#     unrelated PRs from merging.
+#   * Triggers on a different cadence: PRs that touch polish, plus a
+#     weekly cron to catch upstream model drift even when our code
+#     hasn't changed. Folding this into pr.yml would either miss the
+#     cron use case or run the cron jobs that PR-job ignores.
+#   * Needs the GROQ_API_KEY secret which other CI jobs don't.
+#
+# Path filter intentionally narrow — only files that affect the
+# observable behavior of polish trigger this. UI changes, web pages,
+# or unrelated Worker routes don't.
+#
+# Cost: ~$0.003/run (17 cases × 1 iter × ~3K input tokens × $0.05/M).
+# Weekly cron + occasional PR triggers ≈ <$0.50/year.
+
+name: Polish regression
+
+on:
+  pull_request:
+    paths:
+      - "web/src/lib/transcription/polish.ts"
+      - "web/src/lib/transcription/polish-fixtures.ts"
+      - "web/scripts/bench-polish.ts"
+      - ".github/workflows/polish-regression.yml"
+  # Mondays 09:00 UTC — once a week is enough to catch a Groq-side
+  # model regression without burning budget. Schedule fires only on
+  # the default branch (`main`), so this isn't gated on PR state.
+  schedule:
+    - cron: "0 9 * * MON"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Iterations per fixture (1 fast, 3 catches flakes)"
+        required: false
+        default: "3"
+      model:
+        description: "Override model id (defaults to polish.ts POLISH_MODEL)"
+        required: false
+        default: ""
+
+# Don't pile up bench runs if a PR gets force-pushed.
+concurrency:
+  group: polish-regression-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Polish bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Third-party action — pinned to commit SHA per supply-chain best
+      # practice (an attacker compromising the upstream `v4` ref can't
+      # land malicious code in our CI). Resolve a fresh SHA via:
+      #   gh api repos/pnpm/action-setup/git/refs/tags/v4 --jq '.object.sha'
+      # then dereference if it's an annotated tag (type=="tag"):
+      #   gh api repos/pnpm/action-setup/git/tags/<sha> --jq '.object.sha'
+      # Annotate the line with the version so a Dependabot bump can find it.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # User-controllable inputs (workflow_dispatch) are passed through
+      # `env:` rather than interpolated into the shell directly — this
+      # avoids the GitHub Actions injection vector where the input
+      # string could close out a quote and inject commands. Path-
+      # filtered PR + schedule runs hit the empty-string defaults and
+      # fall through to the bench's own defaults (3 iterations, model
+      # constant from polish.ts).
+      - name: Run polish bench
+        working-directory: web
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          BENCH_ITERATIONS: ${{ github.event.inputs.iterations }}
+          BENCH_MODEL: ${{ github.event.inputs.model }}
+        run: |
+          set -euo pipefail
+          ITER="${BENCH_ITERATIONS:-3}"
+          if [ -n "${BENCH_MODEL:-}" ]; then
+            pnpm exec tsx scripts/bench-polish.ts -n "$ITER" --model "$BENCH_MODEL"
+          else
+            pnpm exec tsx scripts/bench-polish.ts -n "$ITER"
+          fi
