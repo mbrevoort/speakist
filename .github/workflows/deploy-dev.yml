@@ -176,6 +176,14 @@ jobs:
       APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      # AppleScript→Finder hangs from a launchd-spawned process on
+      # self-hosted runners (the runner's audit-session boundary
+      # vs. Finder's GUI ownership), so the DMG-styling AppleScripts
+      # in release.sh time out at the 120s AE default. Tell release.sh
+      # to take the symlink + default-layout path instead — DMG is
+      # functionally identical, just less branded. See release.sh's
+      # SPEAKIST_DMG_NO_FINDER handling.
+      SPEAKIST_DMG_NO_FINDER: "1"
     steps:
       - uses: actions/checkout@v4
 

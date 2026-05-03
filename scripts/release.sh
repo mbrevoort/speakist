@@ -379,20 +379,39 @@ cp -R "$APP_PATH" "$STAGING_DIR/"
 mkdir -p "$STAGING_DIR/.background"
 cp "design/dmg-background.png" "$STAGING_DIR/.background/background.png"
 
-# 2. Create a proper Finder alias to /Applications (NOT a symlink).
-#    AppleScript's `make new alias file` produces an alias file that
-#    Finder renders with the real Applications-folder icon. A bare
-#    symlink (what `create-dmg --app-drop-link` produces) no longer
-#    auto-resolves to that icon in modern macOS read-only DMGs. Even
-#    with the alias, modern macOS sometimes renders it as a black
-#    blob on a dark background — hence the ghost outlines + arrow
-#    baked into the .background image (step 1b) as a fallback hint.
-osascript <<APPLE_SCRIPT
+# Two paths for the Applications drag target depending on whether we
+# can talk to Finder. SPEAKIST_DMG_NO_FINDER=1 takes the symlink path
+# unconditionally — set it from the workflow on self-hosted runners
+# where AppleScript→Finder hangs from the launchd LaunchAgent context
+# (`tell application "Finder"` blocks for the full 120s default
+# AppleEvent timeout even when SSH-context AppleScript works fine on
+# the same host). Defaults to the AppleScript path because GitHub-
+# hosted runners and developer laptops both have a real GUI session
+# and produce the prettier alias rendering.
+if [ "${SPEAKIST_DMG_NO_FINDER:-0}" = "1" ]; then
+  # 2. Symlink fallback. Modern macOS doesn't auto-resolve a bare
+  #    symlink to the Applications-folder icon in read-only DMGs, so
+  #    the icon shows as a generic folder — but the drag target itself
+  #    works. The .background image already includes ghost outlines +
+  #    drag arrow baked in (step 1b), so users still get a clear
+  #    install hint without the alias's icon resolution.
+  ln -s /Applications "$STAGING_DIR/Applications"
+else
+  # 2. Create a proper Finder alias to /Applications (NOT a symlink).
+  #    AppleScript's `make new alias file` produces an alias file that
+  #    Finder renders with the real Applications-folder icon. A bare
+  #    symlink no longer auto-resolves to that icon in modern macOS
+  #    read-only DMGs. Even with the alias, modern macOS sometimes
+  #    renders it as a black blob on a dark background — hence the
+  #    ghost outlines + arrow baked into the .background image (step
+  #    1b) as a fallback hint.
+  osascript <<APPLE_SCRIPT
 tell application "Finder"
     set appsAlias to make new alias file at POSIX file "$STAGING_DIR" to POSIX file "/Applications"
     set name of appsAlias to "Applications"
 end tell
 APPLE_SCRIPT
+fi
 
 # 3. Build a writable DMG from the staging folder.
 hdiutil create -volname "$VOL_NAME" -srcfolder "$STAGING_DIR" \
@@ -429,13 +448,8 @@ sleep 5
 # disk so the layout persists into the final compressed DMG.
 # Coordinates MUST match scripts/generate-dmg-background.swift so the
 # icons land on top of their ghost outlines in the bg art.
-SKIP_DMG_LAYOUT=0
-if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ] && [ "${FORCE_DMG_LAYOUT:-0}" != "1" ]; then
-  SKIP_DMG_LAYOUT=1
-fi
-
-if [ "$SKIP_DMG_LAYOUT" = "1" ]; then
-  echo "==> Skipping Finder DMG window layout (RUNNER_ENVIRONMENT=self-hosted). DMG ships with default Finder layout."
+if [ "${SPEAKIST_DMG_NO_FINDER:-0}" = "1" ]; then
+  echo "==> Skipping Finder DMG window layout (SPEAKIST_DMG_NO_FINDER=1). DMG ships with default Finder layout."
 else
   set +e
   osascript <<APPLE_SCRIPT
