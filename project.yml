@@ -461,6 +461,12 @@ targets:
     sources:
       - path: SpeakistKeyboard
       - path: Shared
+        # The keyboard extension doesn't link the PostHog SDK — analytics
+        # belong in the containing app, which holds the user session and
+        # network access. Exclude Analytics.swift so the extension build
+        # doesn't pick it up via the shared `path: Shared` entry.
+        excludes:
+          - "Analytics.swift"
       - path: Speakist/App/AppIdentity.swift
       - path: Speakist/Logging/Logger.swift
       - path: Speakist/Resources/Brand.swift

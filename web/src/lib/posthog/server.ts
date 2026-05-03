@@ -3,22 +3,20 @@
 // Used from API routes / server components / route handlers to capture
 // events with full Worker-side context (the user/org we already resolved,
 // upstream timings, model + token counts). No-ops gracefully when the
-// project key isn't baked in (dev / preview deploys), so callers can sprinkle
-// captures freely without env-checking each site.
+// project key isn't baked in (dev / preview deploys), so callers can
+// sprinkle captures freely without env-checking each site.
 //
-// posthog-node opens a long-lived flush queue; in the Cloudflare Workers
-// runtime that's incompatible with the request/response lifecycle. We
-// create a fresh client per call with `flushAt: 1` so the event is sent
-// inline, and call `shutdown()` after capture to drain. This is the
-// pattern PostHog recommends for serverless / edge runtimes.
+// Workers-native flush model: posthog-node's `captureImmediate` returns
+// a promise that resolves once the event has been POSTed to PostHog;
+// we hand that promise to `ctx.waitUntil(...)` so the Worker runtime
+// keeps the request alive until the upstream call completes. Without
+// `waitUntil`, the Worker would tear down its TCP connections the
+// moment the response is sent, silently dropping any in-flight events.
 
 import { PostHog } from "posthog-node";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { env } from "@/lib/env";
 
-/**
- * Resolves a PostHog client, or null if no key is configured. Callers are
- * expected to handle `null` (typically by skipping capture entirely).
- */
 function getClient(): PostHog | null {
   const key = env.public.NEXT_PUBLIC_POSTHOG_KEY;
   if (!key) return null;
@@ -29,6 +27,20 @@ function getClient(): PostHog | null {
   });
 }
 
+// Hand a flush promise to the Worker runtime so it survives past
+// response. Falls back to a no-op `void` when there's no Cloudflare
+// context (e.g., `next dev` Node runtime, unit tests) — in those
+// environments PostHog also typically isn't keyed, so this branch
+// isn't load-bearing.
+function holdOpen(promise: Promise<void>): void {
+  try {
+    const { ctx } = getCloudflareContext();
+    ctx.waitUntil(promise.catch(() => {}));
+  } catch {
+    void promise.catch(() => {});
+  }
+}
+
 interface CaptureArgs {
   distinctId: string;
   event: string;
@@ -36,14 +48,6 @@ interface CaptureArgs {
   groups?: Record<string, string>;
 }
 
-/**
- * Capture a single event server-side. Fire-and-forget — never throws,
- * never blocks the response on a slow PostHog flush. The shutdown()
- * promise is intentionally not awaited; on Cloudflare Workers we'd have
- * to wrap it in `ctx.waitUntil()` to keep the runtime alive past the
- * response, and that's not always available here. Worst case: the
- * occasional event drops. Acceptable for product analytics.
- */
 export function captureServerEvent({
   distinctId,
   event,
@@ -52,19 +56,7 @@ export function captureServerEvent({
 }: CaptureArgs): void {
   const client = getClient();
   if (!client) return;
-  try {
-    client.capture({
-      distinctId,
-      event,
-      properties,
-      groups,
-    });
-    // Don't await — PostHog will flush in the background. Workers
-    // request lifetime is short; we accept the small drop rate.
-    void client.shutdown().catch(() => {});
-  } catch {
-    // Capture must never break the request path.
-  }
+  holdOpen(client.captureImmediate({ distinctId, event, properties, groups }));
 }
 
 /**
@@ -72,10 +64,6 @@ export function captureServerEvent({
  * dashboard expects to see it. Property names match PostHog's reserved
  * `$ai_*` schema so the event lights up the LLM Analytics UI (cost,
  * latency, token counts) without further configuration.
- *
- * Use this for any LLM call — wrap the existing fetch and pass the
- * resolved usage numbers in here. Streaming calls should sum the
- * deltas before calling.
  */
 export interface AIGenerationEvent {
   distinctId: string;

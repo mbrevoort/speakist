@@ -31,7 +31,7 @@ final class Analytics {
 
     private init() {}
 
-    private static var infoString_channel: String {
+    private static var infoPlistChannel: String {
         Bundle.main.object(forInfoDictionaryKey: "SpeakistChannel") as? String ?? "local"
     }
 
@@ -40,7 +40,7 @@ final class Analytics {
     /// `applicationDidFinishLaunching`; iOS: `SpeakistApp.init()`).
     func bootstrap() {
         guard !enabled else { return }
-        let channel = Self.infoString_channel
+        let channel = Self.infoPlistChannel
         guard channel == "stable" else {
             Logger.shared.info("Analytics disabled: channel is \(channel)")
             return

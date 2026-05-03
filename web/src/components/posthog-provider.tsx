@@ -31,22 +31,18 @@ export function PostHogProvider({
     if (posthog.__loaded) return;
     posthog.init(apiKey, {
       api_host: apiHost,
-      // Reverse-proxy not configured yet — use the cloud host directly.
-      // person_profiles defaults to "identified_only" in current versions
-      // which is what we want: anonymous traffic doesn't burn through
-      // PostHog's MTU quota until the user is actually identified.
+      // Pin explicitly: anonymous traffic shouldn't burn PostHog's MTU
+      // quota until the user is identified. SDK default has been
+      // "identified_only" since v1.151 but pinning protects against a
+      // future default flip.
       person_profiles: "identified_only",
-      // Capture pageviews and pageleaves automatically.
       capture_pageview: true,
       capture_pageleave: true,
-      // Session replay — enabled by default once the key is set; we
-      // mask anything inside an `[data-ph-mask]` element so sensitive
-      // fields (Stripe forms, magic-link inputs) never get recorded.
+      // Mask anything tagged `data-ph-mask` so sensitive fields
+      // (Stripe forms, magic-link inputs) never land in replays.
       session_recording: {
         maskTextSelector: "[data-ph-mask]",
       },
-      // We do our own identify() in PostHogIdentify, so disable the
-      // built-in anonymous→identified merge attempt on every load.
       loaded: (ph) => {
         if (process.env.NODE_ENV === "development") {
           ph.debug();
