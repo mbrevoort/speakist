@@ -28,6 +28,20 @@ import { z } from "zod";
 
 const publicSchema = z.object({
   NEXT_PUBLIC_SITE_URL: z.string().url(),
+
+  // PostHog. The KEY is a "phc_..." project key safe to inline in the
+  // client bundle (not a secret). Production-only by convention: run
+  // `NEXT_PUBLIC_POSTHOG_KEY=phc_xxx pnpm deploy:prod` so the value gets
+  // baked into the prod build. Dev / local / preview omit it and the
+  // client SDK simply never initializes (see PostHogProvider.tsx).
+  // posthog-node uses the same key on the server side.
+  NEXT_PUBLIC_POSTHOG_KEY: z.string().optional(),
+  // US cloud is the default. Override to https://eu.i.posthog.com or a
+  // self-hosted reverse proxy if needed.
+  NEXT_PUBLIC_POSTHOG_HOST: z
+    .string()
+    .url()
+    .default("https://us.i.posthog.com"),
 });
 
 const serverSchema = publicSchema.extend({
@@ -72,6 +86,8 @@ const serverSchema = publicSchema.extend({
 export const env = {
   public: publicSchema.parse({
     NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
+    NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY,
+    NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
   }),
   get server() {
     if (typeof window !== "undefined") {

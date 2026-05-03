@@ -45,6 +45,14 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.6.4"
+  # PostHog product analytics + LLM observability + session replay (iOS).
+  # Only initialized at runtime on the stable channel — see
+  # Shared/Analytics.swift. Both Mac and iOS targets pull this in via
+  # `dependencies:` below; the SPM package vends a single `PostHog`
+  # product that resolves the platform-correct binary on each target.
+  PostHog:
+    url: https://github.com/PostHog/posthog-ios
+    from: "3.0.0"
 
 targets:
   Speakist:
@@ -52,6 +60,12 @@ targets:
     platform: macOS
     sources:
       - path: Speakist
+      # Single Shared/ file portable to macOS. The rest of Shared/ (App
+      # Group bridge, Darwin notifier, URL scheme bridge,
+      # SpeakistChannel enum) is iOS+keyboard plumbing the Mac target
+      # has its own equivalents for. Analytics is the exception —
+      # one wrapper, two platforms.
+      - path: Shared/Analytics.swift
     resources:
       - path: Speakist/Resources
     info:
@@ -89,6 +103,12 @@ targets:
         #   local  → com.brevoort-studio.speakist.local / "Speakist Local" / localhost:3000 (no appcast)
         SUFeedURL: $(SPEAKIST_FEED_URL)
         SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
+        # Public PostHog project key (`phc_...`) — only baked into the
+        # stable-channel Release config below. Empty string elsewhere
+        # so Analytics.swift refuses to initialize. Safe to ship in
+        # the Info.plist; PostHog client keys are designed to be
+        # embedded in shipping client binaries.
+        SpeakistPostHogKey: $(SPEAKIST_POSTHOG_KEY)
         SUEnableAutomaticChecks: true
         SUPublicEDKey: "uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ="
     entitlements:
@@ -136,6 +156,9 @@ targets:
           SPEAKIST_CHANNEL: local
           SPEAKIST_API_BASE_URL: "http://localhost:3000"
           SPEAKIST_FEED_URL: ""
+          # Empty key on Local — Analytics.swift no-ops. We deliberately
+          # keep dev/local builds out of the production PostHog project.
+          SPEAKIST_POSTHOG_KEY: ""
         # Release: stable-channel defaults. release.sh rewrites these five
         # lines in-place before xcodegen generate when building beta/dev.
         # CODE_SIGN_STYLE override: only the main Speakist target uses
@@ -155,6 +178,14 @@ targets:
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+          # PostHog project key. Default to empty so dev / local /
+          # uncoordinated `make build` runs never send events. CI
+          # overrides at xcodebuild time via
+          #   xcodebuild SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE …
+          # which propagates through the `SpeakistPostHogKey` Info.plist
+          # substitution above. Analytics.swift refuses to init when
+          # the value is empty, so no key → no PostHog regardless.
+          SPEAKIST_POSTHOG_KEY: ""
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
         # Dev: placeholder, never built directly. release.sh always
@@ -170,6 +201,7 @@ targets:
           SPEAKIST_CHANNEL: stable
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
+          SPEAKIST_POSTHOG_KEY: ""
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
     dependencies:
@@ -177,6 +209,8 @@ targets:
       - package: GRDB
         product: GRDB
       - package: Sparkle
+      - package: PostHog
+        product: PostHog
 
   SpeakistTests:
     type: bundle.unit-test
@@ -268,6 +302,10 @@ targets:
         MinimumOSVersion: $(IPHONEOS_DEPLOYMENT_TARGET)
         SpeakistChannel: $(SPEAKIST_CHANNEL)
         SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
+        # Public PostHog project key (`phc_...`) — only set on the
+        # Release config so dev / local / TestFlight-dev builds never
+        # send events. Empty value → Analytics.swift refuses to init.
+        SpeakistPostHogKey: $(SPEAKIST_POSTHOG_KEY)
         # Placeholder overwritten by the preBuildScripts "Stamp build
         # timestamp" step on every build. Surfaced in the Home view
         # so "is my phone running the build I just pushed?" is one
@@ -350,6 +388,8 @@ targets:
           # a local Next.js server, swap to `http://localhost:3000`
           # — the simulator shares the host's network stack.
           SPEAKIST_API_BASE_URL: "https://speakist-dev.brevoortstudio.com"
+          # No PostHog on dev/local. See Analytics.swift.
+          SPEAKIST_POSTHOG_KEY: ""
           # SDK-scoped signing: ad-hoc for simulator, real Apple
           # Developer signing for device. The simulator case needs
           # ad-hoc because there's no provisioning profile installed
@@ -374,6 +414,8 @@ targets:
           SPEAKIST_DISPLAY_NAME: "Speakist Dev"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist.dev
           SPEAKIST_API_BASE_URL: "https://speakist-dev.brevoortstudio.com"
+          # No PostHog on Dev TestFlight builds. Only stable.
+          SPEAKIST_POSTHOG_KEY: ""
           # Manual signing with the Apple Distribution identity. With
           # automatic signing, xcodebuild tried to ALSO mint a separate
           # iOS App Development cert during archive (for the underlying
@@ -398,6 +440,10 @@ targets:
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_APP_GROUP: group.com.brevoort-studio.speakist
           SPEAKIST_API_BASE_URL: "https://speakist.ai"
+          # PostHog key. Empty by default; CI overrides on the
+          # xcodebuild command line for stable releases. See the Mac
+          # Speakist target's Release block for the full rationale.
+          SPEAKIST_POSTHOG_KEY: ""
           # Same manual-signing reasoning as Dev. Release config exists
           # for the future App Store production pipeline; it'll need
           # its own `Speakist iOS` (App Store) profile in the portal.
@@ -406,6 +452,8 @@ targets:
           PROVISIONING_PROFILE_SPECIFIER: "Speakist iOS"
     dependencies:
       - target: SpeakistKeyboard
+      - package: PostHog
+        product: PostHog
 
   SpeakistKeyboard:
     type: app-extension
@@ -413,6 +461,12 @@ targets:
     sources:
       - path: SpeakistKeyboard
       - path: Shared
+        # The keyboard extension doesn't link the PostHog SDK — analytics
+        # belong in the containing app, which holds the user session and
+        # network access. Exclude Analytics.swift so the extension build
+        # doesn't pick it up via the shared `path: Shared` entry.
+        excludes:
+          - "Analytics.swift"
       - path: Speakist/App/AppIdentity.swift
       - path: Speakist/Logging/Logger.swift
       - path: Speakist/Resources/Brand.swift

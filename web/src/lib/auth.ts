@@ -26,6 +26,7 @@ import {
 } from "@/lib/db/schema";
 import { provisionNewUser } from "@/lib/orgs";
 import { notifyNewUser } from "@/lib/slack";
+import { captureServerEvent } from "@/lib/posthog/server";
 
 /**
  * Build the Auth.js config. We build lazily because the Drizzle adapter needs
@@ -126,6 +127,24 @@ export function buildAuthConfig(): NextAuthConfig {
     },
 
     events: {
+      async signIn({ user, isNewUser }) {
+        // Server-side capture so the signal lands even if the client
+        // hasn't loaded posthog-js yet (magic-link redirects don't
+        // give the client time to fire). `posthog.identify` then runs
+        // on the dashboard layout to backfill the anonymous → user
+        // merge once they're in the app.
+        if (user.id && user.email) {
+          captureServerEvent({
+            distinctId: user.id,
+            event: isNewUser ? "user_signed_up" : "user_signed_in",
+            properties: {
+              email: user.email,
+              name: user.name ?? null,
+              method: "magic_link",
+            },
+          });
+        }
+      },
       async createUser({ user }) {
         // Fires once per new user, after the users row is inserted. We
         // either (a) auto-join them to an org whose auto_join_domain matches

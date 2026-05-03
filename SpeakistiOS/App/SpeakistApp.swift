@@ -17,6 +17,7 @@ struct SpeakistApp: App {
     init() {
         Logger.shared.bootstrap()
         Logger.shared.info("SpeakistiOS launched, channel=\(SpeakistChannel.current.rawValue)")
+        Analytics.shared.bootstrap()
 
         // Graph wiring — KeychainStore is the token sink; AccountManager
         // owns sign-in state; APIClient takes a closure back to the

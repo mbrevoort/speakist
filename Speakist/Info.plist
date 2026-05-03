@@ -46,5 +46,7 @@
 	<string>$(SPEAKIST_CHANNEL)</string>
 	<key>SpeakistDefaultAPIBaseURL</key>
 	<string>$(SPEAKIST_API_BASE_URL)</string>
+	<key>SpeakistPostHogKey</key>
+	<string>$(SPEAKIST_POSTHOG_KEY)</string>
 </dict>
 </plist>

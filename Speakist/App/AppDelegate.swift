@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        Analytics.shared.bootstrap()
         env.start()
 
         menuBar = MenuBarController(env: env) { [weak self] action in

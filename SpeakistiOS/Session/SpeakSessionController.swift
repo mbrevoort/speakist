@@ -249,16 +249,30 @@ final class SpeakSessionController: ObservableObject {
                 source: .keyboard(hostBundleID: currentHostBundleID),
                 providerModel: result.providerModelLabel
             ))
+            Analytics.shared.capture("transcription_completed", properties: [
+                "platform": "ios",
+                "provider_model": result.providerModelLabel,
+                "audio_seconds": result.audioSeconds,
+                "word_count": result.text.split(whereSeparator: { $0.isWhitespace }).count,
+                "host_bundle_id": currentHostBundleID ?? "",
+            ])
             await publishFinal(text: result.text)
         } catch {
             Logger.shared.warn("transcribe failed: \(String(describing: error))")
+            let message: String
             if let t = error as? TranscriptionError {
-                lastError = t.errorDescription ?? "Transcription failed"
+                message = t.errorDescription ?? "Transcription failed"
             } else {
-                lastError = "Transcription failed"
+                message = "Transcription failed"
             }
+            lastError = message
             status = .error
             pushStatusToSharedDefaults()
+            Analytics.shared.capture("transcription_failed", properties: [
+                "platform": "ios",
+                "error_message": message,
+                "host_bundle_id": currentHostBundleID ?? "",
+            ])
             // Broadcast a state-change so the keyboard can surface the
             // error pill even though there's no final transcript to
             // insert. Without this the keyboard looks frozen on
