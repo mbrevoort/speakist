@@ -201,7 +201,11 @@ jobs:
   mac:
     name: Build + ship Mac DMG (${{ needs.context.outputs.channel }})
     needs: context
-    runs-on: macos-26
+    # Self-hosted runner on mike-homebase. Same setup as the dev
+    # pipeline — no GitHub-hosted fallback. If the host is offline at
+    # release time you'll need to bring it back up before re-running
+    # the workflow (or temporarily flip back to macos-26).
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     permissions:
       contents: read
@@ -227,6 +231,16 @@ jobs:
       # release.sh only forwards when CHANNEL=stable so beta archives
       # never bake a production key.
       SPEAKIST_POSTHOG_KEY_STABLE: ${{ secrets.SPEAKIST_POSTHOG_KEY_STABLE }}
+      # Skip the Finder-driven DMG styling on this self-hosted runner.
+      # AppleScript→Finder hangs from the launchd LaunchAgent context
+      # for the full 120s AE default timeout; release.sh's symlink +
+      # default-window-layout fallback path produces a functionally
+      # identical DMG with a generic Applications icon and Finder's
+      # default Untitled window instead of our branded drag-arrow
+      # background. End users still drag-install fine; Sparkle update
+      # path is unaffected. Drop this var if a future fix lets the
+      # AppleScript work on the host.
+      SPEAKIST_DMG_NO_FINDER: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -302,7 +316,8 @@ jobs:
     name: Build + ship iOS to TestFlight
     needs: context
     if: ${{ needs.context.outputs.channel == 'stable' }}
-    runs-on: macos-26
+    # Self-hosted — same reasoning as the mac job above.
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 30
     permissions:
       contents: read
