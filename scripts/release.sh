@@ -413,49 +413,61 @@ sleep 5
 # 5. Finder window layout. Cosmetic only — the DMG is fully valid
 #    without it; users who download it just see Finder's default
 #    Untitled window layout instead of the branded one with the drag
-#    arrow. We treat this step as **best-effort** because driving
-#    Finder via AppleScript from a launchd-spawned process (the
-#    self-hosted runner case) is fragile: even with the runner in
-#    `gui/<uid>` with SessionCreate=true, `tell disk` can hit the
-#    2-minute AppleEvent timeout if Finder is busy or the audit
-#    session boundary isn't fully bridged. `with timeout of 60 seconds`
-#    fails fast instead of burning 2 minutes on a hang. `activate`
-#    pulls Finder forward so its window-level operations dispatch.
+#    arrow.
+#
+# Skipped entirely on self-hosted GitHub Actions runners. AppleScript
+# Finder calls (specifically `tell disk` after a fresh hdiutil attach)
+# reliably hang on launchd-spawned processes even when the LaunchAgent
+# is correctly placed in `gui/<uid>` with SessionCreate=true — symptom
+# is the 120s default AppleEvent timeout firing on every run. Rather
+# than fight the audit-session boundary, we just don't run the
+# layout step in that environment. GitHub-hosted Mac runners run
+# inside a graphical login session and don't hit this. Override with
+# FORCE_DMG_LAYOUT=1 if a future fix lets the AppleScript work.
 #
 # `update without registering applications` flushes the .DS_Store to
 # disk so the layout persists into the final compressed DMG.
 # Coordinates MUST match scripts/generate-dmg-background.swift so the
 # icons land on top of their ghost outlines in the bg art.
-DMG_LAYOUT_RC=0
-osascript <<APPLE_SCRIPT || DMG_LAYOUT_RC=$?
-with timeout of 60 seconds
-    tell application "Finder"
-        activate
-        tell disk "$VOL_NAME"
-            open
-            set current view of container window to icon view
-            set toolbar visible of container window to false
-            set statusbar visible of container window to false
-            set the bounds of container window to {200, 120, 800, 520}
-            set viewOptions to the icon view options of container window
-            set arrangement of viewOptions to not arranged
-            set icon size of viewOptions to 100
-            -- Background picture path is HFS-style (colon separators) and
-            -- relative to the volume root. The PNG was staged at
-            -- /.background/background.png in step 1b above.
-            set background picture of viewOptions to file ".background:background.png"
-            set position of item "${APP_BUNDLE_NAME}.app" of container window to {150, 180}
-            set position of item "Applications" of container window to {450, 180}
-            close
-            open
-            update without registering applications
-            delay 1
-        end tell
+SKIP_DMG_LAYOUT=0
+if [ "${RUNNER_ENVIRONMENT:-}" = "self-hosted" ] && [ "${FORCE_DMG_LAYOUT:-0}" != "1" ]; then
+  SKIP_DMG_LAYOUT=1
+fi
+
+if [ "$SKIP_DMG_LAYOUT" = "1" ]; then
+  echo "==> Skipping Finder DMG window layout (RUNNER_ENVIRONMENT=self-hosted). DMG ships with default Finder layout."
+else
+  set +e
+  osascript <<APPLE_SCRIPT
+tell application "Finder"
+    activate
+    tell disk "$VOL_NAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 800, 520}
+        set viewOptions to the icon view options of container window
+        set arrangement of viewOptions to not arranged
+        set icon size of viewOptions to 100
+        -- Background picture path is HFS-style (colon separators) and
+        -- relative to the volume root. The PNG was staged at
+        -- /.background/background.png in step 1b above.
+        set background picture of viewOptions to file ".background:background.png"
+        set position of item "${APP_BUNDLE_NAME}.app" of container window to {150, 180}
+        set position of item "Applications" of container window to {450, 180}
+        close
+        open
+        update without registering applications
+        delay 1
     end tell
-end timeout
+end tell
 APPLE_SCRIPT
-if [ "$DMG_LAYOUT_RC" -ne 0 ]; then
-  echo "==> WARNING: DMG window layout step failed (rc=$DMG_LAYOUT_RC). Shipping a valid but unstyled DMG."
+  DMG_LAYOUT_RC=$?
+  set -e
+  if [ "$DMG_LAYOUT_RC" -ne 0 ]; then
+    echo "==> WARNING: DMG window layout step failed (rc=$DMG_LAYOUT_RC). Shipping a valid but unstyled DMG."
+  fi
 fi
 
 # 6. Unmount, then convert to compressed read-only UDZO.
