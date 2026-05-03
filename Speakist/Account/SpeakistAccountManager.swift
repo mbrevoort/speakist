@@ -269,6 +269,17 @@ final class SpeakistAccountManager: ObservableObject {
                 balanceMillicents: me.org?.balanceMillicents
             )
             state = .signedIn(identity: identity)
+            // Tag the PostHog session with the real user/org now that
+            // /api/me has resolved them. No-op when Analytics is
+            // disabled (non-stable channel or missing key).
+            Analytics.shared.identify(
+                userId: me.id,
+                email: me.email,
+                displayName: me.displayName,
+                orgId: me.org?.id,
+                orgName: me.org?.name,
+                orgRole: me.org?.role
+            )
             #if canImport(AppKit)
             // Hydrate the local polish cache so Settings renders accurate
             // state on launch without a separate /api/me/polish call.
@@ -307,6 +318,8 @@ final class SpeakistAccountManager: ObservableObject {
         keychain.set(nil, for: .refreshToken)
         state = .signedOut
         lastError = nil
+        Analytics.shared.capture("user_signed_out")
+        Analytics.shared.reset()
         Logger.shared.info("signed out; token removed from keychain")
 
         // Phase 7 optional: POST /api/auth/revoke to kill the server-side
@@ -339,6 +352,8 @@ final class SpeakistAccountManager: ObservableObject {
         keychain.set(nil, for: .refreshToken)
         state = .signedOut
         lastError = nil
+        Analytics.shared.capture("user_deleted_account")
+        Analytics.shared.reset()
         Logger.shared.info("account deleted; token cleared")
     }
 

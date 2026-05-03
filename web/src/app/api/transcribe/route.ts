@@ -58,9 +58,10 @@ import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { dispatch, TranscriptionDispatchError } from "@/lib/transcription";
 import { logTranscriptionEvent } from "@/lib/transcription/analytics";
-import { runPolish } from "@/lib/transcription/polish";
+import { runPolish, POLISH_MODEL } from "@/lib/transcription/polish";
 import { resolveProviderForOrg } from "@/lib/transcription/orgAccess";
 import { type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
+import { captureAIGeneration, captureServerEvent } from "@/lib/posthog/server";
 
 /** Workers' default request-body cap is generous; we enforce a sensible
  *  one to keep audio from blowing past reasonable batch-transcription
@@ -98,6 +99,7 @@ export async function POST(req: Request): Promise<Response> {
     status: Parameters<typeof logTranscriptionEvent>[1]["status"],
     response: Response
   ): Response {
+    const totalLatencyMs = Date.now() - startedAt;
     logTranscriptionEvent(env as unknown as Parameters<typeof logTranscriptionEvent>[0], {
       providerId,
       model,
@@ -106,11 +108,37 @@ export async function POST(req: Request): Promise<Response> {
       audioMs,
       upstreamMc,
       retailMc,
-      latencyMs: Date.now() - startedAt,
+      latencyMs: totalLatencyMs,
       upstreamStatus,
+    });
+    // Mirror to PostHog as a product event so the LLM Analytics dashboard
+    // shows transcription alongside polish. distinctId falls back to
+    // orgId when the request didn't authenticate (we still want to see
+    // unauth failures bucketed by status). No-op when key isn't set.
+    captureServerEvent({
+      distinctId: posthogDistinctId ?? orgId,
+      event:
+        status === "ok"
+          ? "transcription_completed"
+          : "transcription_failed",
+      groups: orgId !== "unknown" ? { organization: orgId } : undefined,
+      properties: {
+        provider: providerId,
+        model,
+        status,
+        audio_ms: audioMs,
+        latency_ms: totalLatencyMs,
+        upstream_status: upstreamStatus,
+        upstream_millicents: upstreamMc,
+        retail_millicents: retailMc,
+      },
     });
     return response;
   }
+
+  // distinctId for PostHog is the user.id once auth resolves; before that
+  // we'll fall back to orgId (set inside finish()).
+  let posthogDistinctId: string | undefined;
 
   // ---- auth + org ---------------------------------------------------------
   let user;
@@ -120,6 +148,8 @@ export async function POST(req: Request): Promise<Response> {
     const status = err instanceof AuthzError ? err.status : 401;
     return finish("invalid_input", json({ error: "unauthorized" }, status));
   }
+
+  posthogDistinctId = user.id;
 
   const org = await getCurrentOrgForUser(user.id);
   if (!org) {
@@ -307,6 +337,29 @@ export async function POST(req: Request): Promise<Response> {
       } else {
         polishErrorReason = polish.errorReason;
       }
+      // PostHog LLM Analytics — surfaces in the LLM dashboard with
+      // model/provider/token/latency/cost rollups. Trace ID = the
+      // X-Transcription-Id so downstream correlation against the
+      // transcription_completed event is one filter away.
+      captureAIGeneration({
+        distinctId: user.id,
+        traceId: transcriptionClientId,
+        provider: "groq",
+        model: POLISH_MODEL,
+        inputTokens: polish.promptTokens,
+        outputTokens: polish.completionTokens,
+        latencySeconds: polish.latencyMs / 1000,
+        httpStatus: polish.applied ? 200 : 0,
+        isError: !polish.applied,
+        groups: { organization: org.id },
+        extra: {
+          polish_mode: userPrefs.polishMode,
+          polish_applied: polish.applied,
+          polish_error_reason: polish.errorReason,
+          input_chars: output.text.length,
+          output_chars: polish.text.length,
+        },
+      });
     } else if (polishSkipRequested && userPrefs?.polishEnabled) {
       polishErrorReason = "skipped_by_client";
     }

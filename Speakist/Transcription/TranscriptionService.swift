@@ -229,6 +229,17 @@ final class TranscriptionService {
 
         playStopSound()
         hud.hide()
+
+        Analytics.shared.capture("transcription_completed", properties: [
+            "platform": "mac",
+            "provider": client.providerLabel,
+            "model": client.modelLabel,
+            "audio_seconds": audioSeconds,
+            "duration_ms": durationMs,
+            "word_count": Self.wordCount(rawText),
+            "paste_status": pasteStatus,
+            "target_bundle_id": focus.bundleID ?? "",
+        ])
     }
 
     func retranscribe(entryID: String) async {
@@ -315,6 +326,15 @@ final class TranscriptionService {
             transcriptionStatus: "failed",
             errorMessage: errorMessage,
             editedAt: nil))
+
+        Analytics.shared.capture("transcription_failed", properties: [
+            "platform": "mac",
+            "provider": providerLabel,
+            "model": modelLabel,
+            "duration_ms": durationMs,
+            "error_message": errorMessage,
+            "target_bundle_id": bundleID ?? "",
+        ])
     }
 
     // MARK: - Build transcription client

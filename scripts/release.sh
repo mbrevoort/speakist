@@ -254,6 +254,19 @@ sed -i '' -E "s/(CURRENT_PROJECT_VERSION: +\")[0-9]+(\")/\1${NEW_BUILD}\2/" proj
 echo "==> xcodegen generate"
 xcodegen generate
 
+# PostHog override — only meaningful for the stable channel. The Mac
+# Release config in project.yml ships `SPEAKIST_POSTHOG_KEY: ""`, so
+# uncoordinated dev/local builds never accidentally hit production
+# PostHog. CI exports SPEAKIST_POSTHOG_KEY_STABLE for stable runs and
+# we forward it here as a build-setting override; xcodebuild applies
+# command-line build settings with highest precedence, which then feeds
+# the `SpeakistPostHogKey` Info.plist substitution. Empty for dev/beta
+# CI runs and laptop builds → Analytics.swift refuses to init.
+POSTHOG_FLAG=""
+if [ "$CHANNEL" = "stable" ] && [ -n "${SPEAKIST_POSTHOG_KEY_STABLE:-}" ]; then
+  POSTHOG_FLAG="SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE"
+fi
+
 echo "==> xcodebuild archive (Release)"
 rm -rf "$ARCHIVE_PATH"
 xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
@@ -261,6 +274,7 @@ xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
     -destination 'generic/platform=macOS' \
+    ${POSTHOG_FLAG} \
     archive
 
 echo "==> xcodebuild -exportArchive"

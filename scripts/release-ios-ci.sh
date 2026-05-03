@@ -84,10 +84,21 @@ if [ -n "${RELEASE_VERSION:-}" ]; then
   MARKETING_FLAG="MARKETING_VERSION=$RELEASE_VERSION"
 fi
 
+# PostHog override — only baked into stable iOS archives. project.yml
+# ships SPEAKIST_POSTHOG_KEY="" so any build that doesn't explicitly
+# pass an override has analytics off. The prod iOS workflow exports
+# SPEAKIST_POSTHOG_KEY_STABLE; dev/PR/CI runs leave it unset and the
+# archive ships with no PostHog key. Same scalar-expansion / `set -u`
+# rationale as MARKETING_FLAG above — plain string, unquoted expansion.
+POSTHOG_FLAG=""
+if [ "$CONFIG" = "Release" ] && [ -n "${SPEAKIST_POSTHOG_KEY_STABLE:-}" ]; then
+  POSTHOG_FLAG="SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE"
+fi
+
 echo "==> Generating Xcode project (xcodegen)"
 xcodegen generate
 
-echo "==> xcodebuild archive (scheme='$SCHEME' config=$CONFIG CFBundleVersion=$CFBUNDLE_VERSION${RELEASE_VERSION:+ MARKETING_VERSION=$RELEASE_VERSION})"
+echo "==> xcodebuild archive (scheme='$SCHEME' config=$CONFIG CFBundleVersion=$CFBUNDLE_VERSION${RELEASE_VERSION:+ MARKETING_VERSION=$RELEASE_VERSION}${SPEAKIST_POSTHOG_KEY_STABLE:+ POSTHOG=set})"
 xcodebuild \
   -project Speakist.xcodeproj \
   -scheme "$SCHEME" \
@@ -100,6 +111,7 @@ xcodebuild \
   -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
   CURRENT_PROJECT_VERSION=$CFBUNDLE_VERSION \
   ${MARKETING_FLAG} \
+  ${POSTHOG_FLAG} \
   archive
 
 echo "==> xcodebuild -exportArchive"

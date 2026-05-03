@@ -10,6 +10,7 @@ import { redirect } from "next/navigation";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Topbar } from "@/components/dashboard/topbar";
 import { MobileNav } from "@/components/dashboard/mobile-nav";
+import { PostHogIdentify } from "@/components/posthog-identify";
 import { requireUser } from "@/lib/authz";
 import {
   getCurrentOrgForUser,
@@ -54,17 +55,34 @@ export default async function DashboardLayout({
       readAllowPublicOrgCreation(),
     ]);
     return (
-      <NoOrgPanel
-        userEmail={user.email}
-        invitations={invites}
-        allowCreate={settingsRow}
-        signOutAction={signOutAction}
-      />
+      <>
+        <PostHogIdentify
+          userId={user.id}
+          email={user.email}
+          displayName={user.displayName}
+          isSuperAdmin={user.isSuperAdmin}
+        />
+        <NoOrgPanel
+          userEmail={user.email}
+          invitations={invites}
+          allowCreate={settingsRow}
+          signOutAction={signOutAction}
+        />
+      </>
     );
   }
 
   return (
     <div className="flex min-h-screen">
+      <PostHogIdentify
+        userId={user.id}
+        email={user.email}
+        displayName={user.displayName}
+        isSuperAdmin={user.isSuperAdmin}
+        orgId={org.id}
+        orgName={org.name}
+        orgRole={org.role}
+      />
       <Sidebar orgName={org.name} role={org.role} />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar

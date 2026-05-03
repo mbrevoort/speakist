@@ -158,6 +158,13 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # PostHog — baked into the client bundle at build time via Next.js's
+      # NEXT_PUBLIC_* inlining. Production-only (the dev workflow doesn't
+      # export it), so the prod build is the only place that ships a key
+      # to the browser. The same value drives posthog-node on the
+      # server-side capture path. Project keys are public by design;
+      # the secret only protects which environment they end up baked into.
+      NEXT_PUBLIC_POSTHOG_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}
     steps:
       # Check out the tagged commit, not main, so the deployed code
       # matches what the user clicked Publish on. main may have moved
@@ -214,6 +221,12 @@ jobs:
       # stable for normal releases or beta for prereleases.
       RELEASE_VERSION: ${{ needs.context.outputs.version }}
       RELEASE_CHANNEL: ${{ needs.context.outputs.channel }}
+      # PostHog project key for stable Mac builds. release.sh forwards
+      # this as a `SPEAKIST_POSTHOG_KEY=…` xcodebuild build setting,
+      # which feeds the `SpeakistPostHogKey` Info.plist substitution.
+      # release.sh only forwards when CHANNEL=stable so beta archives
+      # never bake a production key.
+      SPEAKIST_POSTHOG_KEY_STABLE: ${{ secrets.SPEAKIST_POSTHOG_KEY_STABLE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -303,6 +316,10 @@ jobs:
       RELEASE_IOS_SCHEME: SpeakistiOS
       RELEASE_IOS_CONFIG: Release
       RELEASE_VERSION: ${{ needs.context.outputs.version }}
+      # Same PostHog key as the Mac job. release-ios-ci.sh forwards it
+      # as a `SPEAKIST_POSTHOG_KEY=…` xcodebuild build setting, scoped
+      # to the Release config only. Dev iOS workflow leaves it unset.
+      SPEAKIST_POSTHOG_KEY_STABLE: ${{ secrets.SPEAKIST_POSTHOG_KEY_STABLE }}
     steps:
       - uses: actions/checkout@v4
         with:
