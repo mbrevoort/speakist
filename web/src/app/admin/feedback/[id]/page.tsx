@@ -14,6 +14,7 @@ import { requireSuperAdmin } from "@/lib/authz";
 import { getFeedbackById, exportToFixtureSeeds } from "@/lib/feedback";
 import { TriageForm } from "./triage-form";
 import { FixtureExportButton } from "./fixture-export-button";
+import { DeleteFeedbackButton } from "./delete-button";
 
 export const metadata = { title: "Feedback report — Admin" };
 
@@ -144,6 +145,21 @@ export default async function AdminFeedbackDetail({
           open a PR with the prompt edit.
         </p>
         <FixtureExportButton seed={seed} />
+      </div>
+
+      {/* Danger zone — escape hatch for reports that shouldn't have
+          been kept (abuse, accidental sensitive content, "loot"
+          submissions). Drops the DB row + R2 audio object. */}
+      <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-5 mt-6">
+        <h3 className="text-sm font-semibold mb-1 text-destructive">
+          Danger zone
+        </h3>
+        <p className="text-xs text-muted-foreground mb-3">
+          Permanently removes this report from the corpus, including the
+          audio recording. Use for spam, abuse, or accidentally-shared
+          sensitive content.
+        </p>
+        <DeleteFeedbackButton id={row.id} />
       </div>
     </div>
   );

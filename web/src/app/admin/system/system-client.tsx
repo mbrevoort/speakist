@@ -392,7 +392,7 @@ export function PolishPromptEditor({
 // The view/edit split mirrors SystemProviderKey above for consistency.
 
 interface SlackWebhookCardProps {
-  destination: "new_user" | "topup";
+  destination: "new_user" | "topup" | "feedback";
   title: string;
   description: string;
   hasUrl: boolean;

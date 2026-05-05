@@ -35,6 +35,8 @@ export default async function AdminSystemPage() {
       slackNewUserEnabled: appSettings.slackNewUserWebhookEnabled,
       slackTopupUrl: appSettings.slackTopupWebhookUrlEncrypted,
       slackTopupEnabled: appSettings.slackTopupWebhookEnabled,
+      slackFeedbackUrl: appSettings.slackFeedbackWebhookUrlEncrypted,
+      slackFeedbackEnabled: appSettings.slackFeedbackWebhookEnabled,
     })
     .from(appSettings)
     .where(eq(appSettings.id, 1))
@@ -156,6 +158,13 @@ export default async function AdminSystemPage() {
             description="Fires when a Stripe payment credits a workspace — both manual Checkout top-ups and off-session auto-top-ups. Includes the workspace name, amount in dollars, and which kind."
             hasUrl={!!row?.slackTopupUrl}
             enabled={row?.slackTopupEnabled ?? false}
+          />
+          <SlackWebhookCard
+            destination="feedback"
+            title="Bad-transcription report"
+            description="Fires every time a user submits a Report bad transcription from the Mac or iOS app. Message includes the polished/expected diff, failure kind, audio-attached flag, and a Triage button linking to /admin/feedback."
+            hasUrl={!!row?.slackFeedbackUrl}
+            enabled={row?.slackFeedbackEnabled ?? false}
           />
         </div>
       </section>

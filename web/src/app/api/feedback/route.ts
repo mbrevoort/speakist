@@ -40,7 +40,9 @@ import {
   transcriptionFeedback,
   usageEvents,
 } from "@/lib/db/schema";
+import { env as appEnv } from "@/lib/env";
 import { captureServerEvent } from "@/lib/posthog/server";
+import { notifyFeedback } from "@/lib/slack";
 
 /** Same audio cap as /api/transcribe — keeps a single 5-min recording
  *  comfortably under the limit (16 kHz mono Int16 WAV ≈ 32 KB/s). */
@@ -77,6 +79,7 @@ export async function POST(req: Request): Promise<Response> {
   const [orgRow] = await db
     .select({
       id: organizations.id,
+      name: organizations.name,
       feedbackDisabled: organizations.feedbackDisabled,
     })
     .from(orgMembers)
@@ -247,6 +250,26 @@ export async function POST(req: Request): Promise<Response> {
       expected_chars: expectedText.length,
       has_note: userNote !== null,
     },
+  });
+
+  // 8. Optional Slack notify. No-ops cleanly when the destination is
+  //    disabled or unconfigured; never blocks the response. See
+  //    lib/slack.ts for the async/swallowing semantics — we don't
+  //    await it here either, so a slow Slack endpoint can't add tail
+  //    latency to the user's submit-and-dismiss flow.
+  void notifyFeedback({
+    feedbackId: id,
+    userEmail: user.email,
+    orgName: orgRow.name,
+    failureKind,
+    audioShared: audioObjectKey !== null,
+    polishedText,
+    expectedText,
+    userNote,
+    detailUrl: new URL(
+      `/admin/feedback/${id}`,
+      appEnv.public.NEXT_PUBLIC_SITE_URL
+    ).toString(),
   });
 
   return json({ id, status: "received" });

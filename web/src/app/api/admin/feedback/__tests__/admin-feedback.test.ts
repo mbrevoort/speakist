@@ -1,6 +1,7 @@
 // Tests for the super-admin feedback API surface:
-//   GET   /api/admin/feedback           — list (filter by status)
-//   PATCH /api/admin/feedback/[id]      — update status / resolution
+//   GET    /api/admin/feedback           — list (filter by status)
+//   PATCH  /api/admin/feedback/[id]      — update status / resolution
+//   DELETE /api/admin/feedback/[id]      — permanent removal + R2 cleanup
 //
 // Audio streaming (GET /api/admin/feedback/[id]/audio) is out of scope
 // for unit tests — it just round-trips through the R2 binding which is
@@ -17,7 +18,9 @@ import type { AuthedUser } from "@/lib/authz";
 const state: {
   user: AuthedUser | null;
   authError: boolean;
-} = { user: null, authError: false };
+  r2Deleted: string[];
+  r2DeleteShouldThrow: boolean;
+} = { user: null, authError: false, r2Deleted: [], r2DeleteShouldThrow: false };
 
 vi.mock("@/lib/authz", () => {
   class AuthzError extends Error {
@@ -39,16 +42,36 @@ vi.mock("@/lib/authz", () => {
   };
 });
 
+// Fake R2 binding so DELETE can prove it's calling .delete on the
+// archived object key. The list/PATCH paths don't touch R2; covered
+// here once for the DELETE handler.
+vi.mock("@opennextjs/cloudflare", () => ({
+  getCloudflareContext: async () => ({
+    env: {
+      FEEDBACK_AUDIO: {
+        async delete(key: string) {
+          if (state.r2DeleteShouldThrow) throw new Error("simulated R2 outage");
+          state.r2Deleted.push(key);
+        },
+      },
+    },
+  }),
+}));
+
 let handle: TestDbHandle;
 let listGET: typeof import("../route").GET;
 let detailPATCH: typeof import("../[id]/route").PATCH;
+let detailDELETE: typeof import("../[id]/route").DELETE;
 
 beforeEach(async () => {
   handle = setupTestDb();
   state.user = null;
   state.authError = false;
+  state.r2Deleted = [];
+  state.r2DeleteShouldThrow = false;
   ({ GET: listGET } = await import("../route"));
   ({ PATCH: detailPATCH } = await import("../[id]/route"));
+  ({ DELETE: detailDELETE } = await import("../[id]/route"));
 });
 
 afterEach(() => {
@@ -341,5 +364,141 @@ describe("PATCH /api/admin/feedback/[id]", () => {
       { params: Promise.resolve({ id: "anything1" }) }
     );
     expect(res.status).toBe(400);
+  });
+});
+
+describe("DELETE /api/admin/feedback/[id]", () => {
+  it("forbids non-super-admins", async () => {
+    const u = await makeUser({ email: "u@example.com" });
+    state.user = {
+      id: u.id,
+      email: u.email,
+      displayName: null,
+      isSuperAdmin: false,
+    };
+    const res = await detailDELETE(
+      makeRequest("/api/admin/feedback/abc12345", { method: "DELETE" }),
+      { params: Promise.resolve({ id: "abc12345" }) }
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 for unknown ids", async () => {
+    const admin = await makeUser({
+      email: "admin@example.com",
+      isSuperAdmin: true,
+    });
+    state.user = {
+      id: admin.id,
+      email: admin.email,
+      displayName: null,
+      isSuperAdmin: true,
+    };
+    const res = await detailDELETE(
+      makeRequest("/api/admin/feedback/no-such-id", { method: "DELETE" }),
+      { params: Promise.resolve({ id: "no-such-id" }) }
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("removes the row and the R2 audio object on success", async () => {
+    const admin = await makeUser({
+      email: "admin@example.com",
+      isSuperAdmin: true,
+    });
+    const org = await makeOrg();
+    const reporter = await makeUser({ email: "r@example.com" });
+    await makeMembership({ orgId: org.id, userId: reporter.id });
+    await makeFeedback({
+      id: "fb-deletable1",
+      userId: reporter.id,
+      orgId: org.id,
+      audioObjectKey: "feedback/fb-deletable1.wav",
+    });
+
+    state.user = {
+      id: admin.id,
+      email: admin.email,
+      displayName: null,
+      isSuperAdmin: true,
+    };
+    const res = await detailDELETE(
+      makeRequest("/api/admin/feedback/fb-deletable1", { method: "DELETE" }),
+      { params: Promise.resolve({ id: "fb-deletable1" }) }
+    );
+    expect(res.status).toBe(200);
+
+    // Row gone.
+    const remaining = await getDb()
+      .select({ id: transcriptionFeedback.id })
+      .from(transcriptionFeedback)
+      .where(eq(transcriptionFeedback.id, "fb-deletable1"));
+    expect(remaining).toHaveLength(0);
+
+    // R2 object key was passed to .delete().
+    expect(state.r2Deleted).toEqual(["feedback/fb-deletable1.wav"]);
+  });
+
+  it("succeeds for a text-only feedback (no audio key) without touching R2", async () => {
+    const admin = await makeUser({
+      email: "admin@example.com",
+      isSuperAdmin: true,
+    });
+    const org = await makeOrg();
+    const reporter = await makeUser({ email: "r@example.com" });
+    await makeMembership({ orgId: org.id, userId: reporter.id });
+    await makeFeedback({
+      id: "fb-textonly1",
+      userId: reporter.id,
+      orgId: org.id,
+      audioObjectKey: null,
+    });
+
+    state.user = {
+      id: admin.id,
+      email: admin.email,
+      displayName: null,
+      isSuperAdmin: true,
+    };
+    const res = await detailDELETE(
+      makeRequest("/api/admin/feedback/fb-textonly1", { method: "DELETE" }),
+      { params: Promise.resolve({ id: "fb-textonly1" }) }
+    );
+    expect(res.status).toBe(200);
+    expect(state.r2Deleted).toEqual([]); // no key, no R2 call
+  });
+
+  it("still removes the row when R2 delete throws (best-effort cleanup)", async () => {
+    const admin = await makeUser({
+      email: "admin@example.com",
+      isSuperAdmin: true,
+    });
+    const org = await makeOrg();
+    const reporter = await makeUser({ email: "r@example.com" });
+    await makeMembership({ orgId: org.id, userId: reporter.id });
+    await makeFeedback({
+      id: "fb-r2errors1",
+      userId: reporter.id,
+      orgId: org.id,
+      audioObjectKey: "feedback/fb-r2errors1.wav",
+    });
+
+    state.r2DeleteShouldThrow = true;
+    state.user = {
+      id: admin.id,
+      email: admin.email,
+      displayName: null,
+      isSuperAdmin: true,
+    };
+    const res = await detailDELETE(
+      makeRequest("/api/admin/feedback/fb-r2errors1", { method: "DELETE" }),
+      { params: Promise.resolve({ id: "fb-r2errors1" }) }
+    );
+    expect(res.status).toBe(200);
+    const remaining = await getDb()
+      .select({ id: transcriptionFeedback.id })
+      .from(transcriptionFeedback)
+      .where(eq(transcriptionFeedback.id, "fb-r2errors1"));
+    expect(remaining).toHaveLength(0);
   });
 });
