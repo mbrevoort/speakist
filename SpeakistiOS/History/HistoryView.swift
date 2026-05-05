@@ -104,6 +104,11 @@ private struct HistoryRow: View {
                         Text("·")
                         Text(durationLabel(entry.audioSeconds))
                     }
+                    if entry.reportedAt != nil {
+                        Text("·")
+                        Image(systemName: "flag.fill")
+                            .font(.caption2)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -129,12 +134,22 @@ private struct HistoryRow: View {
 private struct HistoryDetailView: View {
     let entry: HistoryEntry
     @EnvironmentObject private var history: HistoryStore
+    @EnvironmentObject private var account: SpeakistAccountManager
     @State private var editedText: String
     @State private var copied: Bool = false
+    @State private var showingReportSheet: Bool = false
 
     init(entry: HistoryEntry) {
         self.entry = entry
         self._editedText = State(initialValue: entry.text)
+    }
+
+    /// The freshest version of the entry from the store, falling back
+    /// to the value the row was constructed with. Picks up
+    /// `reportedAt` updates that happen while the detail view is on
+    /// screen (the Report sheet writes through HistoryStore).
+    private var liveEntry: HistoryEntry {
+        history.entries.first(where: { $0.id == entry.id }) ?? entry
     }
 
     var body: some View {
@@ -199,5 +214,33 @@ private struct HistoryDetailView: View {
         }
         .navigationTitle("Transcript")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Older history entries (pre-feedback) don't carry a
+            // transcriptionClientId; without it /api/feedback can't
+            // correlate the report. Hide the button for those rather
+            // than presenting a sheet that can't submit.
+            if entry.transcriptionClientId != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if liveEntry.reportedAt != nil {
+                        Image(systemName: "flag.fill")
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Reported")
+                    } else {
+                        Button {
+                            showingReportSheet = true
+                        } label: {
+                            Image(systemName: "flag")
+                        }
+                        .accessibilityLabel("Report bad transcription")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingReportSheet) {
+            if let client = account.apiClient {
+                ReportFeedbackView(entry: liveEntry, apiClient: client)
+                    .environmentObject(history)
+            }
+        }
     }
 }

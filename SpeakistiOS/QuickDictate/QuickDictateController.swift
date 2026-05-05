@@ -42,6 +42,16 @@ final class QuickDictateController: ObservableObject {
     private let baseURL: URL
     private var recorder: AudioRecorder?
 
+    // State carried between transcribe() and saveAndCopy() so the
+    // History entry the user actually saves carries the same
+    // X-Transcription-Id we used on /api/transcribe (and therefore
+    // can be referenced from /api/feedback later). Cleared on each
+    // new recording session so a stale id from a discarded run
+    // can't leak into the next save.
+    fileprivate var lastTranscriptionId: String?
+    fileprivate var lastRawTranscript: String?
+    fileprivate var lastAudioPath: String?
+
     init(history: HistoryStore,
          baseURL: URL = SpeakistChannel.current.defaultAPIBaseURL,
          tokenProvider: @escaping () -> String?) {
@@ -54,6 +64,12 @@ final class QuickDictateController: ObservableObject {
     /// permission if missing, then starts recording.
     func start() async {
         guard case .idle = phase else { return }
+        // Clear feedback-correlation state from any prior run so a
+        // discarded earlier recording can't get its id reused on the
+        // next save.
+        lastTranscriptionId = nil
+        lastRawTranscript = nil
+        lastAudioPath = nil
         phase = .preparing
 
         // Permission gate. The onboarding flow already requests mic
@@ -126,9 +142,20 @@ final class QuickDictateController: ObservableObject {
         }
 
         let client = SpeakistTranscribeClient(apiBaseURL: baseURL, bearerToken: token)
+        // Hold onto the transcription id + raw text so saveAndCopy
+        // (called later, after the user reviews) can build a feedback-
+        // ready HistoryEntry without re-driving the network request.
+        // Audio archive happens here too so the user can report even
+        // if they save-and-dismiss quickly.
         do {
             let result = try await client.transcribe(audioURL: audioURL)
+            let archivedPath = AudioArchive.archive(
+                audioURL: audioURL,
+                forTranscriptionId: client.transcriptionClientId)
             self.editedText = result.text
+            self.lastTranscriptionId = client.transcriptionClientId
+            self.lastRawTranscript = result.text
+            self.lastAudioPath = archivedPath
             self.phase = .reviewing(text: result.text,
                                     audioSeconds: result.audioSeconds,
                                     providerModel: result.providerModelLabel)
@@ -137,6 +164,9 @@ final class QuickDictateController: ObservableObject {
             self.phase = .error(message: humanMessage(from: error))
         }
 
+        // The temp audio file has been moved by AudioArchive on
+        // success; this remove is a no-op then. On failure (no
+        // archive happened) it cleans up the temp file as before.
         try? FileManager.default.removeItem(at: audioURL)
     }
 
@@ -155,7 +185,10 @@ final class QuickDictateController: ObservableObject {
             text: text,
             audioSeconds: audioSeconds,
             source: .quickDictate,
-            providerModel: providerModel
+            providerModel: providerModel,
+            rawTranscript: lastRawTranscript,
+            transcriptionClientId: lastTranscriptionId,
+            audioPath: lastAudioPath
         ))
         phase = .done
     }
