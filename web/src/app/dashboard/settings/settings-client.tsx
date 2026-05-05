@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import {
   updateOrgName,
   updateAutoJoinDomain,
+  setWorkspaceFeedback,
   leaveOrg,
   deleteOrg,
   setPolishEnabled,
@@ -32,6 +33,9 @@ interface Props {
   orgName: string;
   orgSlug: string;
   autoJoinDomain: string | null;
+  /** Current value of `organizations.feedback_disabled`. True = the
+   *  Report bad transcription feature is OFF for this workspace. */
+  feedbackDisabled: boolean;
   canAdmin: boolean;
   isSoleOwner: boolean;
   role: "owner" | "admin" | "member";
@@ -46,6 +50,7 @@ export function SettingsClient({
   orgName,
   orgSlug,
   autoJoinDomain,
+  feedbackDisabled,
   canAdmin,
   isSoleOwner,
   role,
@@ -94,6 +99,11 @@ export function SettingsClient({
             prefix="@"
           />
         </Card>
+
+        <FeedbackCard
+          disabled={feedbackDisabled}
+          canAdmin={canAdmin}
+        />
 
         <Card
           title="Leave workspace"
@@ -391,6 +401,84 @@ function PolishCard({
           )}
         </fieldset>
       </div>
+    </Card>
+  );
+}
+
+// Workspace-scoped opt-out for "Report bad transcription". The
+// underlying column is `feedback_disabled` (negative polarity) but the
+// UI flips it so the toggle reads "Reporting" being on/off in plain
+// terms. Members see the current state read-only; admins/owners get
+// the toggle. Optimistic update with revert on action failure mirrors
+// the polish toggle.
+function FeedbackCard({
+  disabled,
+  canAdmin,
+}: {
+  disabled: boolean;
+  canAdmin: boolean;
+}) {
+  const [reportingEnabled, setReportingEnabled] = useState<boolean>(!disabled);
+  const [pending, startTransition] = useTransition();
+  const [result, setResult] = useState<ActionResult | null>(null);
+
+  function handleToggle(next: boolean) {
+    if (next === reportingEnabled) return;
+    setResult(null);
+    const previous = reportingEnabled;
+    setReportingEnabled(next); // optimistic
+    const fd = new FormData();
+    fd.set("enabled", next ? "on" : "off");
+    startTransition(async () => {
+      const r = await setWorkspaceFeedback(fd);
+      setResult(r);
+      if (!r.ok) setReportingEnabled(previous);
+    });
+  }
+
+  return (
+    <Card
+      title="Report bad transcription"
+      description="When on, users in this workspace can submit a transcription for quality review from their History view in the Mac and iOS apps. Audio + texts are sent to Speakist support and used only for transcription accuracy improvements. Turn off to hide the Report button and refuse new submissions for everyone in the workspace."
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <label
+          htmlFor="feedback-toggle"
+          className={
+            "flex items-center gap-3 select-none " +
+            (canAdmin ? "cursor-pointer" : "cursor-not-allowed opacity-70")
+          }
+        >
+          <Switch
+            id="feedback-toggle"
+            checked={reportingEnabled}
+            onCheckedChange={handleToggle}
+            disabled={!canAdmin || pending}
+            aria-label="Allow workspace members to report bad transcriptions"
+          />
+          <span className="text-sm font-medium">
+            {reportingEnabled
+              ? "Reporting is on for this workspace"
+              : "Reporting is off for this workspace"}
+          </span>
+        </label>
+        {result && (
+          <p
+            className={cn(
+              "text-sm",
+              result.ok ? "text-sage" : "text-destructive"
+            )}
+            role="status"
+          >
+            {result.ok ? result.message : result.error}
+          </p>
+        )}
+      </div>
+      {!canAdmin && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Only owners and admins can change this.
+        </p>
+      )}
     </Card>
   );
 }

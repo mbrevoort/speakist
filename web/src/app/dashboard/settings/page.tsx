@@ -75,6 +75,7 @@ export default async function SettingsPage() {
         orgName={org.name}
         orgSlug={org.slug}
         autoJoinDomain={org.autoJoinDomain}
+        feedbackDisabled={org.feedbackDisabled}
         canAdmin={canAdmin}
         isSoleOwner={isSoleOwner}
         role={org.role}

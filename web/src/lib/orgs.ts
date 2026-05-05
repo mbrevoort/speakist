@@ -369,6 +369,11 @@ export interface CurrentOrg {
   role: OrgRole;
   isComped: boolean;
   autoJoinDomain: string | null;
+  /** Workspace-level opt-out of "Report bad transcription". Default
+   *  is false (feature on). Toggled by owners + admins from
+   *  /dashboard/settings; super-admins see the value read-only at
+   *  /admin/orgs/[id]. */
+  feedbackDisabled: boolean;
 }
 
 export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg | null> {
@@ -381,6 +386,7 @@ export async function getCurrentOrgForUser(userId: string): Promise<CurrentOrg |
       role: orgMembers.role,
       isComped: organizations.isComped,
       autoJoinDomain: organizations.autoJoinDomain,
+      feedbackDisabled: organizations.feedbackDisabled,
     })
     .from(orgMembers)
     .innerJoin(organizations, eq(organizations.id, orgMembers.orgId))

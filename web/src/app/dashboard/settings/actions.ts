@@ -1,10 +1,11 @@
 // Server actions for the Settings page.
 //
 // Actions:
-//   * updateOrgName          — admin+
-//   * updateAutoJoinDomain   — admin+; empty string = clear
-//   * leaveOrg               — member leaves (blocked for sole owner)
-//   * deleteOrg              — owner-only; hard delete (cascade wipes rows)
+//   * updateOrgName             — admin+
+//   * updateAutoJoinDomain      — admin+; empty string = clear
+//   * setWorkspaceFeedback      — admin+; flips feedback_disabled
+//   * leaveOrg                  — member leaves (blocked for sole owner)
+//   * deleteOrg                 — owner-only; hard delete (cascade wipes rows)
 
 "use server";
 
@@ -264,6 +265,61 @@ export async function deleteVocabEntry(
 }
 
 const nameSchema = z.object({ name: z.string().trim().min(1).max(80) });
+
+// --- feedback opt-out (workspace-level) -----------------------------------
+//
+// Workspace owners + admins toggle the "Report bad transcription" feature
+// for everyone in the workspace. The column itself (`feedback_disabled`)
+// has been around since the feedback corpus shipped (#50); this action
+// moves the toggle from the super-admin /admin/orgs/[id] page (where
+// it lived initially) onto the workspace's own Settings page so the
+// people who own the data can flip it without filing a request.
+//
+// Super-admins can still see the current value at /admin/orgs/[id] —
+// it's now read-only there.
+
+const feedbackSchema = z.object({
+  // "on" = feature ENABLED for the workspace (column = 0)
+  // "off" = feature DISABLED for the workspace (column = 1)
+  // The form button label and the column flip are inverses; this naming
+  // matches user intent ("turn the feature on/off") rather than the
+  // column's negative-polarity name.
+  enabled: z.enum(["on", "off"]),
+});
+
+export async function setWorkspaceFeedback(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    const user = await requireUser();
+    const org = await getCurrentOrgForUser(user.id);
+    if (!org) return { ok: false, error: "No current org." };
+    await requireOrgAdmin(org.id);
+
+    const parsed = feedbackSchema.safeParse({
+      enabled: formData.get("enabled"),
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    await db
+      .update(organizations)
+      .set({ feedbackDisabled: parsed.data.enabled === "off" })
+      .where(eq(organizations.id, org.id));
+
+    revalidatePath("/dashboard/settings");
+    return {
+      ok: true,
+      message:
+        parsed.data.enabled === "on"
+          ? "Reporting enabled."
+          : "Reporting disabled.",
+    };
+  } catch (err) {
+    console.error("setWorkspaceFeedback failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
 
 export async function updateOrgName(formData: FormData): Promise<ActionResult> {
   try {
