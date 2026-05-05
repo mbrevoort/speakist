@@ -49,6 +49,15 @@ final class HistoryStore: ObservableObject {
         saveToDisk()
     }
 
+    /// Stamp `reportedAt` on an entry once a "Report bad
+    /// transcription" submission has succeeded. Idempotent: re-
+    /// reporting the same entry just refreshes the timestamp.
+    func markReported(id: UUID, at: Date = Date()) {
+        guard let idx = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[idx].reportedAt = at
+        saveToDisk()
+    }
+
     func deleteAll() {
         entries.removeAll()
         saveToDisk()

@@ -241,13 +241,26 @@ final class SpeakSessionController: ObservableObject {
         let client = SpeakistTranscribeClient(apiBaseURL: baseURL, bearerToken: token)
         do {
             let result = try await client.transcribe(audioURL: audioURL)
+            // Archive the recording for up-to-24h so the user can
+            // submit a "Report bad transcription" with audio attached
+            // if they notice a problem. AudioArchive moves (not
+            // copies) the file, so the deferred `removeItem` at the
+            // end of this method becomes a no-op for archived audio.
+            // Failure to archive is not fatal — feedback can still be
+            // submitted text-only.
+            let archivedPath = AudioArchive.archive(
+                audioURL: audioURL,
+                forTranscriptionId: client.transcriptionClientId)
             // Record history so keyboard-driven dictations show up in
             // the same list as Quick Dictate entries.
             history.append(HistoryEntry(
                 text: result.text,
                 audioSeconds: result.audioSeconds,
                 source: .keyboard(hostBundleID: currentHostBundleID),
-                providerModel: result.providerModelLabel
+                providerModel: result.providerModelLabel,
+                rawTranscript: result.text,
+                transcriptionClientId: client.transcriptionClientId,
+                audioPath: archivedPath
             ))
             Analytics.shared.capture("transcription_completed", properties: [
                 "platform": "ios",

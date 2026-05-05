@@ -18,6 +18,10 @@ struct SpeakistApp: App {
         Logger.shared.bootstrap()
         Logger.shared.info("SpeakistiOS launched, channel=\(SpeakistChannel.current.rawValue)")
         Analytics.shared.bootstrap()
+        // Drop any feedback-audio archive entries past the 24h TTL or
+        // the 50 MB cap. Cheap (a few stat calls per file); idempotent
+        // re-running is fine.
+        AudioArchive.prune()
 
         // Graph wiring — KeychainStore is the token sink; AccountManager
         // owns sign-in state; APIClient takes a closure back to the
