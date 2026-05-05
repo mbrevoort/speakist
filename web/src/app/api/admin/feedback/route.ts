@@ -6,9 +6,10 @@
 // for the rare case a script wants to scrape the queue).
 
 import { desc, eq } from "drizzle-orm";
-import { AuthzError, requireUserFromRequest } from "@/lib/authz";
+import { AuthzError } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { transcriptionFeedback, users } from "@/lib/db/schema";
+import { requireFeedbackAccess } from "@/lib/feedback-access";
 
 const ALLOWED_STATUSES = new Set([
   "new",
@@ -20,15 +21,14 @@ const ALLOWED_STATUSES = new Set([
 ]);
 
 export async function GET(req: Request): Promise<Response> {
-  let user;
+  // Either a super-admin session OR a service token with feedback:read.
   try {
-    user = await requireUserFromRequest(req);
+    await requireFeedbackAccess(req, "feedback:read");
   } catch (err) {
-    const status = err instanceof AuthzError ? err.status : 401;
-    return Response.json({ error: "unauthorized" }, { status });
-  }
-  if (!user.isSuperAdmin) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+    if (err instanceof AuthzError) {
+      return Response.json({ error: err.message }, { status: err.status });
+    }
+    return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const url = new URL(req.url);

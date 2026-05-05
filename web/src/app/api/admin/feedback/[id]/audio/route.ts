@@ -7,23 +7,23 @@
 
 import { eq } from "drizzle-orm";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { AuthzError, requireUserFromRequest } from "@/lib/authz";
+import { AuthzError } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { transcriptionFeedback } from "@/lib/db/schema";
+import { requireFeedbackAccess } from "@/lib/feedback-access";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  let user;
+  // Read scope is enough for audio fetch.
   try {
-    user = await requireUserFromRequest(req);
+    await requireFeedbackAccess(req, "feedback:read");
   } catch (err) {
-    const status = err instanceof AuthzError ? err.status : 401;
-    return Response.json({ error: "unauthorized" }, { status });
-  }
-  if (!user.isSuperAdmin) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+    if (err instanceof AuthzError) {
+      return Response.json({ error: err.message }, { status: err.status });
+    }
+    return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;

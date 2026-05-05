@@ -40,14 +40,12 @@ export interface AuthedUser {
 
 // --- bearer token support --------------------------------------------------
 
-/** SHA-256 hex of the input; matches what Mac sessions store. */
-export async function hashToken(token: string): Promise<string> {
-  const buf = new TextEncoder().encode(token);
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+// `hashToken` lives in `lib/hash.ts` so service-tokens (and any other
+// non-authz consumer) can import it without pulling next-auth into
+// the test-time module graph. Re-exported here for back-compat with
+// callers that already imported it from authz.
+export { hashToken } from "@/lib/hash";
+import { hashToken } from "@/lib/hash";
 
 /**
  * Resolve a Mac-app bearer token to a user. Updates last_used_at on success.
@@ -120,10 +118,15 @@ export async function requireUser(): Promise<AuthedUser> {
  * API-route authentication. Tries Bearer (Mac sessions) first, falls back to
  * Auth.js session cookie (web). Throws 401 if neither succeeds.
  */
+// Bearer extraction lives in `lib/bearer.ts` so non-auth modules can
+// parse the header without dragging the next-auth surface into their
+// import graph. Re-exported here for back-compat.
+export { extractBearer } from "@/lib/bearer";
+import { extractBearer } from "@/lib/bearer";
+
 export async function requireUserFromRequest(req: Request): Promise<AuthedUser> {
-  const authHeader = req.headers.get("authorization") ?? req.headers.get("Authorization");
-  if (authHeader && /^Bearer\s+/i.test(authHeader)) {
-    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const token = extractBearer(req);
+  if (token !== null) {
     const user = await userFromBearer(token);
     if (user) return user;
     // Explicit 401 — don't silently fall through to cookie auth for a
@@ -137,6 +140,19 @@ export async function requireUserFromRequest(req: Request): Promise<AuthedUser> 
 
 export async function requireSuperAdmin(): Promise<AuthedUser> {
   const user = await requireUser();
+  if (!user.isSuperAdmin) {
+    throw new AuthzError(403, "Super admin required");
+  }
+  return user;
+}
+
+/** Bearer/cookie-aware super-admin gate. Resolves the caller, verifies
+ *  super-admin, and throws AuthzError(403) otherwise. Used by
+ *  /api/admin/* routes that need to support both web sessions and the
+ *  Mac-app bearer (e.g., super-admin-only token-management
+ *  endpoints). */
+export async function requireSuperAdminFromRequest(req: Request): Promise<AuthedUser> {
+  const user = await requireUserFromRequest(req);
   if (!user.isSuperAdmin) {
     throw new AuthzError(403, "Super admin required");
   }
