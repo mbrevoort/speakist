@@ -49,6 +49,51 @@ export async function toggleComp(formData: FormData): Promise<ActionResult> {
   }
 }
 
+// --- feedback opt-out toggle ----------------------------------------------
+//
+// `feedback_disabled` flips the org-level kill switch on "Report bad
+// transcription". When set, /api/feedback returns 403 for any user in
+// the org and the Mac/iOS clients hide the Report button. Default
+// behavior (column = 0) is feedback enabled.
+
+const feedbackSchema = z.object({
+  orgId: z.string().uuid(),
+  // "on" = the feedback feature is ON for this org (= column 0).
+  // "off" = the feature is OFF (= column 1). The form button label
+  // and the column flip are inverses; this naming keeps the call site
+  // matched to user intent ("turn the feature on/off").
+  enabled: z.enum(["on", "off"]),
+});
+
+export async function toggleFeedback(formData: FormData): Promise<ActionResult> {
+  try {
+    await requireSuperAdmin();
+    const parsed = feedbackSchema.safeParse({
+      orgId: formData.get("orgId"),
+      enabled: formData.get("enabled"),
+    });
+    if (!parsed.success) return { ok: false, error: "Bad input." };
+
+    const db = getDb();
+    await db
+      .update(organizations)
+      .set({ feedbackDisabled: parsed.data.enabled === "off" })
+      .where(eq(organizations.id, parsed.data.orgId));
+
+    revalidatePath(`/admin/orgs/${parsed.data.orgId}`);
+    return {
+      ok: true,
+      message:
+        parsed.data.enabled === "on"
+          ? "Feedback enabled for this workspace."
+          : "Feedback disabled for this workspace.",
+    };
+  } catch (err) {
+    console.error("toggleFeedback failed:", err);
+    return { ok: false, error: "Couldn't save." };
+  }
+}
+
 // --- manual credit adjustment ---------------------------------------------
 
 const adjustSchema = z.object({

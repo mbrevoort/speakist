@@ -4,7 +4,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { AlertTriangle, CheckSquare, Gift, KeyRound } from "lucide-react";
+import { AlertTriangle, CheckSquare, Flag, Gift, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -13,6 +13,7 @@ import {
   setDeepgramOverride,
   setGroqOverride,
   toggleComp,
+  toggleFeedback,
   type ActionResult,
 } from "./actions";
 
@@ -25,6 +26,7 @@ interface ProviderModel {
 interface Props {
   orgId: string;
   isComped: boolean;
+  feedbackDisabled: boolean;
   hasDeepgramOverride: boolean;
   hasGroqOverride: boolean;
   allowedModels: string[];
@@ -35,6 +37,10 @@ export function OrgAdminActions(props: Props) {
   return (
     <div className="space-y-8">
       <CompCard orgId={props.orgId} isComped={props.isComped} />
+      <FeedbackCard
+        orgId={props.orgId}
+        feedbackDisabled={props.feedbackDisabled}
+      />
       <CreditAdjustCard orgId={props.orgId} />
       <AllowedModelsCard
         orgId={props.orgId}
@@ -50,6 +56,73 @@ export function OrgAdminActions(props: Props) {
         hasOverride={props.hasGroqOverride}
       />
     </div>
+  );
+}
+
+// --- feedback opt-out toggle ----------------------------------------------
+
+function FeedbackCard({
+  orgId,
+  feedbackDisabled,
+}: {
+  orgId: string;
+  feedbackDisabled: boolean;
+}) {
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [pending, startTransition] = useTransition();
+  const enabled = !feedbackDisabled;
+
+  return (
+    <Card
+      title="Report bad transcription"
+      description="When enabled (the default), users in this workspace can submit reports — audio + texts go to /api/feedback for quality control. Turn off to hide the button in the apps and reject submissions."
+      accent="plum"
+      icon={<Flag className="h-4 w-4" />}
+    >
+      <form
+        action={(fd) => {
+          setResult(null);
+          fd.set("orgId", orgId);
+          // Toggle: button click flips current state.
+          fd.set("enabled", enabled ? "off" : "on");
+          startTransition(async () => setResult(await toggleFeedback(fd)));
+        }}
+        className="flex items-center justify-between"
+      >
+        <span className="text-sm">
+          Currently{" "}
+          <span
+            className={cn(
+              "font-semibold",
+              enabled ? "text-foreground" : "text-muted-foreground"
+            )}
+          >
+            {enabled ? "enabled" : "disabled"}
+          </span>
+        </span>
+        <Button
+          type="submit"
+          variant={enabled ? "outline" : "default"}
+          disabled={pending}
+        >
+          {pending
+            ? "Saving…"
+            : enabled
+              ? "Disable feedback"
+              : "Enable feedback"}
+        </Button>
+      </form>
+      {result && (
+        <p
+          className={cn(
+            "mt-3 text-sm",
+            result.ok ? "text-sage" : "text-destructive"
+          )}
+        >
+          {result.ok ? result.message : result.error}
+        </p>
+      )}
+    </Card>
   );
 }
 

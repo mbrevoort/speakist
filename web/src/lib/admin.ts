@@ -274,6 +274,10 @@ export interface AdminOrgDetail extends AdminOrgRow {
   hasGroqOverride: boolean;
   /** Parsed `allowed_models_json` — empty array means "no restriction". */
   allowedModels: string[];
+  /** True when the org has flipped off the "Report bad transcription"
+   *  feature; the column on `organizations`. Surfaced so the admin
+   *  detail page can render the toggle. */
+  feedbackDisabled: boolean;
 }
 
 export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null> {
@@ -292,6 +296,7 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
       stripeCustomerId: organizations.stripeCustomerId,
       stripePmId: organizations.stripeDefaultPaymentMethodId,
       autoTopupEnabled: organizations.autoTopupEnabled,
+      feedbackDisabled: organizations.feedbackDisabled,
     })
     .from(organizations)
     .where(eq(organizations.id, orgId))
@@ -347,6 +352,7 @@ export async function getOrgDetail(orgId: string): Promise<AdminOrgDetail | null
     stripeCustomerId: row.stripeCustomerId,
     hasPaymentMethod: !!row.stripePmId,
     autoTopupEnabled: row.autoTopupEnabled,
+    feedbackDisabled: row.feedbackDisabled,
     memberCount: Number(memberRow?.n ?? 0),
     balanceMillicents: Number(balanceRow?.b ?? 0),
     lifetimeSpendMillicents: Number(spendRow?.s ?? 0),
