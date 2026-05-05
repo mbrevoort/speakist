@@ -16,6 +16,11 @@ struct TranscriptionEntry: Identifiable, Hashable {
     var transcriptionStatus: String  // "ok" | "failed"
     var errorMessage: String?
     var editedAt: Date?
+    /// Set when the user has clicked "Report bad transcription" on this
+    /// entry and the upload to /api/feedback succeeded. Used to badge
+    /// the row + suppress the Report button so duplicates don't pile
+    /// up. Cleared by clearing the row entirely (not by un-reporting).
+    var reportedAt: Date?
 }
 
 enum HistoryFilter: Equatable {
@@ -207,7 +212,27 @@ final class HistoryStore: ObservableObject {
             pasteStatus: row["paste_status"] ?? "failed",
             transcriptionStatus: row["transcription_status"] ?? "ok",
             errorMessage: row["error_message"],
-            editedAt: (row["edited_at"] as Double?).map(Date.init(timeIntervalSince1970:)))
+            editedAt: (row["edited_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
+            reportedAt: (row["reported_at"] as Double?).map(Date.init(timeIntervalSince1970:)))
+    }
+
+    /// Persist the timestamp at which a Report-bad-transcription
+    /// upload for this entry succeeded. Idempotent: re-reporting the
+    /// same entry just bumps the timestamp.
+    func markReported(id: String, at: Date = Date()) {
+        guard let dbQueue else { return }
+        do {
+            try dbQueue.write { db in
+                try db.execute(literal: """
+                    UPDATE transcriptions
+                    SET reported_at = \(at.timeIntervalSince1970)
+                    WHERE id = \(id)
+                """)
+            }
+            reload()
+        } catch {
+            Logger.shared.error("markReported failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Migrations
@@ -257,6 +282,17 @@ final class HistoryStore: ObservableObject {
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_usage_created
                 ON usage(created_at DESC);
+            """)
+        }
+        // v2: track which entries the user has submitted as "bad
+        // transcription" feedback, so the History UI can badge them
+        // and the Report button can be suppressed for already-sent
+        // entries. Stored as a Unix timestamp REAL to match the
+        // other timestamp columns. Added in 1B of the feedback
+        // pipeline; safe to re-run because the migrator dedupes.
+        migrator.registerMigration("v2_reported_at") { db in
+            try db.execute(sql: """
+                ALTER TABLE transcriptions ADD COLUMN reported_at REAL;
             """)
         }
         try migrator.migrate(queue)

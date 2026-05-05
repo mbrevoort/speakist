@@ -107,6 +107,12 @@ private struct HistoryRow: View {
                         .foregroundColor(.secondary)
                         .imageScale(.small)
                 }
+                if entry.reportedAt != nil {
+                    Image(systemName: "flag.fill")
+                        .foregroundColor(.secondary)
+                        .imageScale(.small)
+                        .help("You reported this transcription as bad")
+                }
                 Text(shortDate(entry.createdAt))
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -138,6 +144,7 @@ private struct DetailView: View {
 
     @State private var finalDraft: String = ""
     @State private var showingDeleteConfirm = false
+    @State private var showingReportSheet = false
     @State private var player: AVAudioPlayer?
     @State private var isPlayingAudio = false
 
@@ -170,6 +177,17 @@ private struct DetailView: View {
                             } label: { Label("Re-transcribe", systemImage: "arrow.clockwise") }
                                 .labelStyle(.iconOnly)
                                 .help("Re-transcribe from saved audio")
+                        }
+                        if entry.reportedAt == nil {
+                            Button {
+                                showingReportSheet = true
+                            } label: { Label("Report bad transcription", systemImage: "flag") }
+                                .labelStyle(.iconOnly)
+                                .help("Report this transcription as bad")
+                        } else {
+                            Image(systemName: "flag.fill")
+                                .foregroundColor(.secondary)
+                                .help("You reported this transcription on \(fullDate(entry.reportedAt ?? Date()))")
                         }
                         Button(role: .destructive) {
                             showingDeleteConfirm = true
@@ -228,6 +246,19 @@ private struct DetailView: View {
             Button("Delete", role: .destructive) {
                 history.delete(id: entry.id)
             }
+        }
+        .sheet(isPresented: $showingReportSheet) {
+            ReportFeedbackSheet(entry: entry, env: env)
+                .onDisappear {
+                    // After the sheet closes, re-pull the entry so the
+                    // toolbar's Report→Reported flag transition shows
+                    // immediately (sheet bumps `reported_at` via
+                    // markReported). `try?` collapses error → nil; the
+                    // inner Optional comes from get's return type.
+                    if let fresh = (try? history.get(id: entry.id)) ?? nil {
+                        entry.reportedAt = fresh.reportedAt
+                    }
+                }
         }
         .onSubmit { saveEditsIfChanged() }
         .background(
