@@ -109,6 +109,7 @@ export default async function AdminOrgPage({
       <OrgAdminActions
         orgId={org.id}
         isComped={org.isComped}
+        feedbackDisabled={org.feedbackDisabled}
         hasDeepgramOverride={org.hasDeepgramOverride}
         hasGroqOverride={org.hasGroqOverride}
         allowedModels={org.allowedModels}

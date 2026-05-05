@@ -134,6 +134,51 @@ export default function PrivacyPage() {
               </P>
             </Section>
 
+            <Section title="When you report a bad transcription">
+              <P>
+                The Speakist apps include a &ldquo;Report bad
+                transcription&rdquo; option in your History view. This is
+                the <strong>only</strong> path that uploads any of your
+                dictation data to our servers for storage. It runs only
+                when you explicitly tap or click Report — there is no
+                background submission, no telemetry that mirrors a
+                transcription without your action.
+              </P>
+              <P>When you report a transcription, with your permission we receive:</P>
+              <UL>
+                <LI>
+                  The audio recording (you can uncheck this in the report
+                  dialog to send a text-only report)
+                </LI>
+                <LI>The raw text our transcription model produced</LI>
+                <LI>The polished text we delivered to your device</LI>
+                <LI>
+                  Your correction — what you said the transcript should
+                  have been
+                </LI>
+                <LI>
+                  Any optional note or category you chose (&ldquo;wrong
+                  word&rdquo;, &ldquo;punctuation&rdquo;, etc.)
+                </LI>
+              </UL>
+              <P>
+                We use this data exclusively to improve transcription
+                accuracy — specifically, to grow our regression test
+                suite and to tune the prompts used by our polish model.
+                We retain it indefinitely so that a fix for your reported
+                issue today can keep working a year from now without
+                regressing.
+              </P>
+              <P>
+                <strong>Workspace opt-out.</strong> Your workspace owner
+                can turn off the Report feature for everyone in the
+                workspace. When disabled, the Report button is hidden
+                from the apps and the server refuses any submission. Ask
+                your owner if you&rsquo;d like to discuss enabling or
+                disabling it for your team.
+              </P>
+            </Section>
+
             <Section title="How we use the information">
               <P>We use the information we collect to:</P>
               <UL>
@@ -167,8 +212,8 @@ export default function PrivacyPage() {
                 </LI>
                 <LI>Use your audio or transcripts to train AI models</LI>
                 <LI>
-                  Read your transcripts (we don&apos;t store them in the
-                  first place)
+                  Read transcriptions you didn&rsquo;t explicitly report.
+                  We don&rsquo;t store them in the first place.
                 </LI>
               </UL>
             </Section>
