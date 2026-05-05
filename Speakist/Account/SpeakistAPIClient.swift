@@ -421,6 +421,116 @@ final class SpeakistAPIClient {
         )
     }
 
+    // MARK: - Feedback ("Report bad transcription")
+
+    /// Categorization the user picks (or doesn't) when reporting a
+    /// bad transcription. String-typed to match the server's
+    /// failure_kind column verbatim.
+    enum FeedbackKind: String {
+        case wrongWord = "wrong_word"
+        case punctuation = "punctuation"
+        case both = "both"
+        case other = "other"
+    }
+
+    struct FeedbackResponse: Decodable {
+        let id: String
+        let status: String
+    }
+
+    /// Submit a "Report bad transcription" payload to the server.
+    /// Multipart so the optional audio attachment streams cleanly.
+    /// Returns the server-assigned feedback id on success.
+    ///
+    /// `audio` is nil when the user opted out of sharing audio with
+    /// the report; the server still accepts the row and stores the
+    /// texts. `audioContentType` should be `audio/wav` for our
+    /// recordings — pass through whatever Content-Type the file's
+    /// extension corresponds to if you ever swap encodings.
+    func submitFeedback(
+        transcriptionClientId: String,
+        rawText: String,
+        polishedText: String,
+        expectedText: String,
+        failureKind: FeedbackKind?,
+        userNote: String?,
+        audio: Data?,
+        audioContentType: String = "audio/wav"
+    ) async throws -> FeedbackResponse {
+        guard let url = URL(string: "/api/feedback", relativeTo: baseURL) else {
+            throw Error.badResponse
+        }
+        guard let token = tokenProvider(), !token.isEmpty else {
+            throw Error.notSignedIn
+        }
+
+        // Build a multipart body by hand. URLSession doesn't ship a
+        // multipart helper and pulling in Alamofire just for this
+        // single call site is overkill.
+        let boundary = "speakist-feedback-\(UUID().uuidString)"
+        var body = Data()
+
+        func appendField(name: String, value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n"
+                    .data(using: .utf8)!)
+            body.append(value.data(using: .utf8) ?? Data())
+            body.append("\r\n".data(using: .utf8)!)
+        }
+
+        appendField(name: "transcription_client_id", value: transcriptionClientId)
+        appendField(name: "raw_text", value: rawText)
+        appendField(name: "polished_text", value: polishedText)
+        appendField(name: "expected_text", value: expectedText)
+        if let failureKind {
+            appendField(name: "failure_kind", value: failureKind.rawValue)
+        }
+        if let userNote, !userNote.isEmpty {
+            appendField(name: "user_note", value: userNote)
+        }
+        if let audio {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append(
+                "Content-Disposition: form-data; name=\"audio\"; filename=\"recording.wav\"\r\n"
+                    .data(using: .utf8)!)
+            body.append(
+                "Content-Type: \(audioContentType)\r\n\r\n".data(using: .utf8)!)
+            body.append(audio)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        // Audio uploads can take a moment on slow links; bigger budget
+        // than the JSON path's 15s but not unbounded.
+        request.timeoutInterval = 60
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)",
+            forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            throw Error.network(underlying: error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw Error.badResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if http.statusCode == 401 { throw Error.notSignedIn }
+            throw Error.server(
+                status: http.statusCode,
+                body: String(data: data, encoding: .utf8))
+        }
+        return try decode(FeedbackResponse.self, from: data)
+    }
+
     // MARK: - Internals
 
     /// Decodes a JSON response into `T`. Throws `.badResponse` on non-2xx.
