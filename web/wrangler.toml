@@ -121,6 +121,15 @@ migrations_dir = "drizzle/migrations"
 # binding = "CACHE"
 # id = "__FILL_ME_IN__"
 
+# R2 bucket for "Report bad transcription" audio uploads. Created via
+#   wrangler r2 bucket create speakist-feedback-audio-dev
+# Indefinite retention (no lifecycle policy) — this corpus is the
+# regression bench source. /api/feedback writes here when a user
+# explicitly reports a transcription with audio sharing enabled.
+[[env.dev.r2_buckets]]
+binding = "FEEDBACK_AUDIO"
+bucket_name = "speakist-feedback-audio-dev"
+
 # [[env.dev.r2_buckets]]
 # binding = "AUDIO"
 # bucket_name = "speakist-audio-dev"
@@ -159,6 +168,11 @@ migrations_dir = "drizzle/migrations"
 # [[env.production.kv_namespaces]]
 # binding = "CACHE"
 # id = "__FILL_ME_IN__"
+
+# See dev block above for purpose.
+[[env.production.r2_buckets]]
+binding = "FEEDBACK_AUDIO"
+bucket_name = "speakist-feedback-audio-prod"
 
 # [[env.production.r2_buckets]]
 # binding = "AUDIO"

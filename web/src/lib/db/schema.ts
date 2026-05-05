@@ -184,6 +184,13 @@ export const organizations = sqliteTable(
     // re-running the same backfill SQL recomputes it.
     balanceMillicents: integer("balance_millicents").notNull().default(0),
 
+    // Org-level opt-out from the "Report bad transcription" feature.
+    // 0 (default) = users in this org can submit feedback to Speakist
+    // for quality control; 1 = the Report button is hidden in clients
+    // and /api/feedback returns 403 for anyone in the org. The opt-out
+    // is org-scoped because the transcription data belongs to the org.
+    feedbackDisabled: bool("feedback_disabled").notNull().default(false),
+
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
     updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
   },
@@ -545,6 +552,71 @@ export const releases = sqliteTable(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Transcription feedback
+//
+// One row per "Report bad transcription" submission. Migration 0017
+// covers the column-by-column rationale; the short version is that this
+// is the corpus we use to grow polish-fixtures.ts and the vocabulary
+// suggestions list. Indefinite retention is intentional — this is the
+// regression bench's source data.
+// ---------------------------------------------------------------------------
+
+export const transcriptionFeedback = sqliteTable(
+  "transcription_feedback",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
+
+    // Matches X-Transcription-Id from the original /api/transcribe call,
+    // so we can join against `usage_events` for fuller context.
+    transcriptionClientId: text("transcription_client_id").notNull(),
+
+    rawText: text("raw_text").notNull(),
+    polishedText: text("polished_text").notNull(),
+    expectedText: text("expected_text").notNull(),
+
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    polishApplied: bool("polish_applied").notNull(),
+    polishMode: text("polish_mode").$type<"intuitive" | "prescriptive">(),
+    audioSeconds: integer("audio_seconds", { mode: "number" }),
+    language: text("language"),
+
+    failureKind: text("failure_kind").$type<
+      "wrong_word" | "punctuation" | "both" | "other"
+    >(),
+    userNote: text("user_note"),
+
+    // R2 object key under the speakist-feedback-audio bucket. NULL
+    // when the user opted out of sharing audio (text-only report).
+    audioObjectKey: text("audio_object_key"),
+
+    status: text("status")
+      .$type<"new" | "reviewed" | "resolved" | "dismissed" | "proposed">()
+      .notNull()
+      .default("new"),
+    resolution: text("resolution"),
+    reviewedAt: timestampMs("reviewed_at"),
+    reviewedBy: text("reviewed_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+  },
+  (t) => ({
+    statusIdx: index("transcription_feedback_status_idx").on(
+      t.status,
+      t.createdAt
+    ),
+    orgIdx: index("transcription_feedback_org_idx").on(t.orgId, t.createdAt),
+  })
+);
+
 // ---- Type exports for the rest of the app ---------------------------------
 
 export type User = typeof users.$inferSelect;
@@ -562,3 +634,5 @@ export type DeviceAuthCode = typeof deviceAuthCodes.$inferSelect;
 export type MacSession = typeof macSessions.$inferSelect;
 export type Release = typeof releases.$inferSelect;
 export type NewRelease = typeof releases.$inferInsert;
+export type TranscriptionFeedback = typeof transcriptionFeedback.$inferSelect;
+export type NewTranscriptionFeedback = typeof transcriptionFeedback.$inferInsert;
