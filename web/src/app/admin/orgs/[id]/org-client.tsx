@@ -13,7 +13,6 @@ import {
   setDeepgramOverride,
   setGroqOverride,
   toggleComp,
-  toggleFeedback,
   type ActionResult,
 } from "./actions";
 
@@ -37,10 +36,7 @@ export function OrgAdminActions(props: Props) {
   return (
     <div className="space-y-8">
       <CompCard orgId={props.orgId} isComped={props.isComped} />
-      <FeedbackCard
-        orgId={props.orgId}
-        feedbackDisabled={props.feedbackDisabled}
-      />
+      <FeedbackCard feedbackDisabled={props.feedbackDisabled} />
       <CreditAdjustCard orgId={props.orgId} />
       <AllowedModelsCard
         orgId={props.orgId}
@@ -59,69 +55,38 @@ export function OrgAdminActions(props: Props) {
   );
 }
 
-// --- feedback opt-out toggle ----------------------------------------------
+// --- feedback opt-out (read-only mirror) ----------------------------------
+//
+// The toggle itself lives at /dashboard/settings now — the workspace's
+// own owners and admins control it. Surfaced here read-only so a
+// super-admin investigating a "why aren't we seeing reports from this
+// org?" thread can confirm the state without bouncing into impersonation.
 
 function FeedbackCard({
-  orgId,
   feedbackDisabled,
 }: {
-  orgId: string;
   feedbackDisabled: boolean;
 }) {
-  const [result, setResult] = useState<ActionResult | null>(null);
-  const [pending, startTransition] = useTransition();
   const enabled = !feedbackDisabled;
-
   return (
     <Card
       title="Report bad transcription"
-      description="When enabled (the default), users in this workspace can submit reports — audio + texts go to /api/feedback for quality control. Turn off to hide the button in the apps and reject submissions."
+      description="Workspace-controlled. Owners + admins toggle this from /dashboard/settings inside the workspace; super-admins see it read-only here."
       accent="plum"
       icon={<Flag className="h-4 w-4" />}
     >
-      <form
-        action={(fd) => {
-          setResult(null);
-          fd.set("orgId", orgId);
-          // Toggle: button click flips current state.
-          fd.set("enabled", enabled ? "off" : "on");
-          startTransition(async () => setResult(await toggleFeedback(fd)));
-        }}
-        className="flex items-center justify-between"
-      >
-        <span className="text-sm">
-          Currently{" "}
-          <span
-            className={cn(
-              "font-semibold",
-              enabled ? "text-foreground" : "text-muted-foreground"
-            )}
-          >
-            {enabled ? "enabled" : "disabled"}
-          </span>
-        </span>
-        <Button
-          type="submit"
-          variant={enabled ? "outline" : "default"}
-          disabled={pending}
-        >
-          {pending
-            ? "Saving…"
-            : enabled
-              ? "Disable feedback"
-              : "Enable feedback"}
-        </Button>
-      </form>
-      {result && (
-        <p
+      <p className="text-sm">
+        Currently{" "}
+        <span
           className={cn(
-            "mt-3 text-sm",
-            result.ok ? "text-sage" : "text-destructive"
+            "font-semibold",
+            enabled ? "text-foreground" : "text-muted-foreground"
           )}
         >
-          {result.ok ? result.message : result.error}
-        </p>
-      )}
+          {enabled ? "enabled" : "disabled"}
+        </span>
+        {" "}for this workspace.
+      </p>
     </Card>
   );
 }
