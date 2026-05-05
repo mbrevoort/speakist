@@ -2,7 +2,7 @@
 // dashboard's nav-items.ts pattern so AdminSidebar (md+) and
 // AdminMobileNav (below md) consume the same list.
 
-import { Building2, DollarSign, Home, Server, Users } from "lucide-react";
+import { Building2, DollarSign, Flag, Home, Server, Users } from "lucide-react";
 
 export interface AdminNavItem {
   label: string;
@@ -15,6 +15,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Workspaces", href: "/admin/orgs", icon: Building2 },
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Pricing", href: "/admin/pricing", icon: DollarSign },
+  { label: "Feedback", href: "/admin/feedback", icon: Flag },
   { label: "System", href: "/admin/system", icon: Server },
 ];
 
