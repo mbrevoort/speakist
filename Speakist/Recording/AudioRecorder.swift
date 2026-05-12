@@ -111,6 +111,20 @@ final class AudioRecorder: ObservableObject {
         guard !didPrewarm else { return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
 
+        // Skip prewarm when input is Bluetooth. Starting+pausing the
+        // engine on a BT mic locks the device into HFP/HSP for the
+        // entire app session: output drops from A2DP stereo
+        // (44.1/48 kHz) to compressed 8/16 kHz mono and active noise
+        // cancellation disengages on most over-ears. The cost of
+        // skipping prewarm is paid only on the first dictation after
+        // BT becomes the input (~480 ms HAL handshake); music keeps
+        // sounding right while the app sits idle, which is what the
+        // user actually notices.
+        if isCurrentInputBluetooth() {
+            Logger.shared.info("Audio prewarm skipped: input is Bluetooth (preserves A2DP music quality)")
+            return
+        }
+
         do {
             try configureInputDevice()
         } catch {
@@ -253,9 +267,24 @@ final class AudioRecorder: ObservableObject {
         // routes through engineQueue, so a fast stop→start cycle
         // implicitly waits for this pause to finish without us
         // needing to await it from main.
+        //
+        // BT branch: fully stop() instead of pause(). pause() keeps
+        // the HAL connection alive (the whole point of prewarm), but
+        // on a Bluetooth mic that holds the device in HFP between
+        // dictations — music stays in low-quality mono mode even
+        // while the user isn't talking. stop() tears the HAL down so
+        // the headset drops back to A2DP for music until the next
+        // hotkey press. The next start() pays ~480ms cold-start; an
+        // acceptable trade because BT users notice music quality
+        // continuously and dictation latency only at the start.
         let engineRef = engine
+        let teardown = isCurrentInputBluetooth()
         engineQueue.async {
-            engineRef.pause()
+            if teardown {
+                engineRef.stop()
+            } else {
+                engineRef.pause()
+            }
         }
 
         Logger.shared.info("Recording stopped: \(String(format: "%.2f", duration))s")
@@ -377,6 +406,14 @@ final class AudioRecorder: ObservableObject {
         let boosted = min(rms * 6.0, 1.0)
         let curved = pow(boosted, 0.4)
         return min(max(curved, 0), 1)
+    }
+
+    /// Whether the recorder's current input device is Bluetooth.
+    /// See `AudioInputDevice.isBluetooth` for the HFP-vs-A2DP
+    /// rationale that drives the prewarm/teardown branches.
+    @MainActor
+    private func isCurrentInputBluetooth() -> Bool {
+        deviceMonitor.currentInput(preferredUID: preferences.inputDeviceUID)?.isBluetooth ?? false
     }
 
     @MainActor
