@@ -7,6 +7,21 @@ struct AudioInputDevice: Identifiable, Hashable {
     let id: AudioDeviceID
     let uid: String
     let name: String
+    /// Core Audio's `kAudioDevicePropertyTransportType` (e.g.
+    /// `kAudioDeviceTransportTypeBluetooth`, `…BuiltIn`, `…USB`).
+    /// Captured at enumeration time so callers don't hit Core Audio
+    /// on every check. Zero when the property couldn't be read.
+    let transportType: UInt32
+
+    /// True for Bluetooth Classic or BLE. Recording from a Bluetooth
+    /// mic forces the headset into HFP/HSP, which collapses its
+    /// output from A2DP stereo down to call-grade mono. Used by
+    /// `AudioRecorder` to avoid prewarming (and to fully tear down
+    /// the HAL after each dictation) on Bluetooth inputs.
+    var isBluetooth: Bool {
+        transportType == kAudioDeviceTransportTypeBluetooth
+            || transportType == kAudioDeviceTransportTypeBluetoothLE
+    }
 }
 
 @MainActor
@@ -26,6 +41,18 @@ final class DeviceMonitor: ObservableObject {
 
     func device(withUID uid: String) -> AudioInputDevice? {
         inputs.first(where: { $0.uid == uid })
+    }
+
+    /// The device the recorder will actually pull audio from given the
+    /// caller's preferences: the pinned UID when set, otherwise the
+    /// current system default. Returns nil only if neither resolves
+    /// (no default + nothing pinned).
+    func currentInput(preferredUID: String?) -> AudioInputDevice? {
+        if let uid = preferredUID, let device = device(withUID: uid) {
+            return device
+        }
+        guard let defaultID = defaultInputDeviceID() else { return nil }
+        return inputs.first(where: { $0.id == defaultID })
     }
 
     func defaultInputDeviceID() -> AudioDeviceID? {
@@ -61,8 +88,19 @@ final class DeviceMonitor: ObservableObject {
             guard deviceHasInputStreams(id) else { return nil }
             guard let name = deviceProperty(id, selector: kAudioObjectPropertyName),
                   let uid = deviceProperty(id, selector: kAudioDevicePropertyDeviceUID) else { return nil }
-            return AudioInputDevice(id: id, uid: uid, name: name)
+            return AudioInputDevice(id: id, uid: uid, name: name, transportType: deviceTransportType(id))
         }
+    }
+
+    private static func deviceTransportType(_ id: AudioDeviceID) -> UInt32 {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &transport)
+        return status == noErr ? transport : 0
     }
 
     private static func deviceHasInputStreams(_ id: AudioDeviceID) -> Bool {
