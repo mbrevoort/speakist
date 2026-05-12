@@ -323,37 +323,48 @@ final class AudioRecorder: ObservableObject {
         // implicitly waits for this pause to finish without us
         // needing to await it from main.
         //
-        // BT branch: fully stop() AND uninitialize the input audio
-        // unit. pause() keeps the HAL connection alive (the whole
-        // point of prewarm), but on a Bluetooth mic that holds the
-        // device in HFP between dictations — music stays in
-        // low-quality mono mode even while the user isn't talking.
+        // BT branch: hard-release the engine so Core Audio actually
+        // drops the BT device back to A2DP. AudioUnitUninitialize
+        // alone is not enough — AVAudioEngine retains other internal
+        // references to the input audio unit (notably the I/O
+        // thread) that keep the HAL connection alive, and the
+        // headset stays in HFP until the entire engine instance is
+        // deallocated. The only reliable release is to drop the
+        // engine and let ARC dispose its audio units.
         //
-        // engine.stop() alone is not enough: it halts capture but
-        // leaves the HAL audio unit *initialized* with the BT mic as
-        // its current device, which Core Audio interprets as "this
-        // device is still in use" and the headset stays in HFP. Only
-        // AudioUnitUninitialize releases the device binding and lets
-        // the headset return to A2DP. The next start() pays the full
-        // ~480ms cold-start because the audio unit has to re-init —
-        // an acceptable trade because BT users notice music quality
-        // continuously and dictation latency only at the start.
+        // Approach: swap `engine` (and its serial queue) for fresh
+        // instances on main *immediately*, and dispatch the OLD
+        // engine's stop+uninit to its old queue. When that dispatch
+        // block exits, the captured `engineRef` goes out of scope,
+        // the last reference drops, ARC deallocates the engine,
+        // AudioComponentInstanceDispose fires on its internal audio
+        // unit, and Core Audio finally releases the BT device.
         //
-        // The audio unit pointer is captured on main before the
-        // dispatch: engine.inputNode and AVAudioEngine state aren't
-        // documented as thread-safe, but the audio unit pointer
-        // itself is stable across stop/start cycles, so it's safe to
-        // hand to the queue.
+        // Cost: the next press starts on a fresh engine and pays
+        // the full ~480ms HAL cold-start — already the accepted
+        // trade for BT users (music quality every idle second vs
+        // latency once at the start of a dictation).
         let engineRef = engine
         let teardown = isCurrentInputBluetooth()
-        let audioUnit: AudioUnit? = teardown ? engine.inputNode.audioUnit : nil
-        engineQueue.async {
-            if teardown {
+        if teardown {
+            let audioUnit: AudioUnit? = engine.inputNode.audioUnit
+            let queueRef = engineQueue
+            // Replace immediately so the next press uses a healthy
+            // stack — even if the old engine's teardown is still in
+            // flight in the background.
+            engine = AVAudioEngine()
+            engineQueue = AudioRecorder.makeEngineQueue()
+            didPrewarm = false
+            queueRef.async {
                 engineRef.stop()
                 if let au = audioUnit {
                     AudioUnitUninitialize(au)
                 }
-            } else {
+                // engineRef goes out of scope at block exit; ARC
+                // disposes the engine and its audio units here.
+            }
+        } else {
+            engineQueue.async {
                 engineRef.pause()
             }
         }
