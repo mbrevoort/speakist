@@ -46,7 +46,14 @@ final class AudioRecorder: ObservableObject {
     private let preferences: Preferences
     private let deviceMonitor: DeviceMonitor
 
-    private let engine = AVAudioEngine()
+    /// AVAudioEngine instance. `var` (not `let`) so we can replace it
+    /// when Core Audio wedges — `engine.start()` can deadlock inside
+    /// the HAL handshake when input/output devices are split across
+    /// transports (e.g. USB mic + Bluetooth output) and one of them
+    /// is mid-transition. The hung call can't be cancelled; the only
+    /// recovery is to abandon the old engine instance and create a
+    /// fresh one. See `resetAudioStack()`.
+    private var engine = AVAudioEngine()
     /// Serial queue for AVAudioEngine state changes that block on the
     /// audio I/O thread (`start`, `pause`). Both take 200–500ms to
     /// drain or set up the HAL chain; running them inline would block
@@ -54,10 +61,22 @@ final class AudioRecorder: ObservableObject {
     /// The queue is serial so a fast stop→start cycle can't race —
     /// the next start() implicitly waits for the previous stop's
     /// pause() to finish, even though stop() doesn't await it.
-    private let engineQueue = DispatchQueue(
-        label: "com.speakist.audio.engine",
-        qos: .userInitiated
-    )
+    ///
+    /// `var` so it can be replaced alongside `engine` in
+    /// `resetAudioStack()` — if a hung `engine.start()` is blocking
+    /// the queue, queueing more work behind it would also hang. The
+    /// orphaned queue lives until the wedged operation eventually
+    /// returns (if ever).
+    private var engineQueue = AudioRecorder.makeEngineQueue()
+
+    private static func makeEngineQueue() -> DispatchQueue {
+        DispatchQueue(label: "com.speakist.audio.engine", qos: .userInitiated)
+    }
+
+    /// Marker thrown by `runWithTimeout` when the wrapped operation
+    /// doesn't complete in time. Caught in `start()` to trigger an
+    /// audio-stack reset rather than reporting a generic engine error.
+    private struct AudioStartTimeout: Error {}
     private var converter: AVAudioConverter?
     private var outputFile: AVAudioFile?
     private var outputURL: URL?
@@ -200,6 +219,20 @@ final class AudioRecorder: ObservableObject {
 
         engine.prepare()
 
+        // Log device context so the next freeze has forensic data.
+        // Core Audio can deadlock inside the HAL handshake when input
+        // and output devices live on different transports (USB +
+        // Bluetooth is the common offender), and we want to be able
+        // to correlate failures with the device configuration in
+        // play at the time.
+        let inputDevice = deviceMonitor.currentInput(preferredUID: preferences.inputDeviceUID)
+        Logger.shared.info(
+            "Engine starting: input=\(inputDevice?.name ?? "default") "
+            + "transport=\(inputDevice?.transportType ?? 0) "
+            + "hwRate=\(hardwareFormat.sampleRate)Hz "
+            + "hwCh=\(hardwareFormat.channelCount)"
+        )
+
         // Run engine.start() on the shared engine queue. It blocks
         // for 280–560ms while the Core Audio HAL handshakes; the
         // queue keeps the main runloop free during that window so
@@ -209,16 +242,28 @@ final class AudioRecorder: ObservableObject {
         // stop() — preventing concurrent state changes on the
         // engine, which AVAudioEngine isn't documented as
         // thread-safe against.
+        //
+        // Wrapped in a 5-second timeout: AudioOutputUnitStart can
+        // deadlock inside the HAL when the input/output devices are
+        // mid-transition (BT profile renegotiating, USB device
+        // settling, etc.). Without a timeout the await would hang
+        // forever and the only recovery is to quit the app. 5s is
+        // well above the worst legitimate cold-start (~700ms in the
+        // BT-teardown-then-restart case) so this won't fire on
+        // healthy paths.
         let engineRef = engine
         let inputNodeRef = inputNode
+        let queueRef = engineQueue
         do {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                engineQueue.async {
-                    do {
-                        try engineRef.start()
-                        cont.resume()
-                    } catch {
-                        cont.resume(throwing: error)
+            try await Self.runWithTimeout(seconds: 5) {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    queueRef.async {
+                        do {
+                            try engineRef.start()
+                            cont.resume()
+                        } catch {
+                            cont.resume(throwing: error)
+                        }
                     }
                 }
             }
@@ -229,6 +274,16 @@ final class AudioRecorder: ObservableObject {
             outputFile = nil
             outputURL = nil
             converter = nil
+            if error is AudioStartTimeout {
+                Logger.shared.warn(
+                    "engine.start() timed out after 5s. Resetting audio stack. "
+                    + "Last input=\(inputDevice?.name ?? "?") transport=\(inputDevice?.transportType ?? 0)"
+                )
+                resetAudioStack()
+                throw AudioRecorderError.engineStartFailed(
+                    "Audio engine wedged — reset. Press the shortcut again."
+                )
+            }
             throw AudioRecorderError.engineStartFailed(error.localizedDescription)
         }
 
@@ -430,6 +485,48 @@ final class AudioRecorder: ObservableObject {
     @MainActor
     private func isCurrentInputBluetooth() -> Bool {
         deviceMonitor.currentInput(preferredUID: preferences.inputDeviceUID)?.isBluetooth ?? false
+    }
+
+    /// Abandon the current AVAudioEngine + serial queue and create
+    /// fresh ones. Used to recover from a wedged `engine.start()` —
+    /// when the HAL deadlocks, the hung dispatch block keeps the
+    /// queue blocked, so any work we'd dispatch behind it would also
+    /// hang. The old instances become zombies that get deallocated
+    /// whenever the wedged operation eventually returns (which may
+    /// be never, if Core Audio doesn't time out internally — that's
+    /// a small memory leak we accept as the price of recovery).
+    ///
+    /// `didPrewarm` is reset so the *next* press pays the full
+    /// cold-start to re-establish the HAL on the fresh engine.
+    @MainActor
+    private func resetAudioStack() {
+        engine = AVAudioEngine()
+        engineQueue = Self.makeEngineQueue()
+        didPrewarm = false
+    }
+
+    /// Race `op` against a sleep. Throws `AudioStartTimeout` if the
+    /// sleep wins. Note: cancelling the operation task does **not**
+    /// interrupt a blocked Core Audio call inside the dispatched
+    /// block — it just stops the `await` from waiting. The caller is
+    /// responsible for cleaning up the orphaned operation (we do
+    /// this by replacing the engine + queue in `resetAudioStack`).
+    private static func runWithTimeout<T: Sendable>(
+        seconds: Double,
+        _ op: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await op() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw AudioStartTimeout()
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw AudioStartTimeout()
+            }
+            return result
+        }
     }
 
     @MainActor
