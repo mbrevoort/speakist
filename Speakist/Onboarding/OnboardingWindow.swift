@@ -292,28 +292,12 @@ private struct ShortcutTryPane: View {
 
             shortcutCard
 
-            // Globe key is offered as a side option rather than a
-            // peer to the recorder. Onboarding's first goal is to
-            // get the user past the "what is my shortcut" decision
-            // with as little friction as possible — most users will
-            // accept the default key combo, so we don't put Globe
-            // in their face. A single subtle link makes it
-            // discoverable for users who came from Wispr or want a
-            // single-key feel. When chosen, the rest of the flow
-            // (System Settings hint, etc.) appears in-place inside
-            // `globeSelectedCallout`.
-            if !prefs.useGlobeKey {
-                Button {
-                    prefs.useGlobeKey = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "globe")
-                        Text("Use the Globe (🌐) key instead")
-                    }
-                }
-                .buttonStyle(.link)
-                .font(.callout)
-            } else {
+            // System Settings callout shown only after the user picks
+            // the Globe key (without that one macOS toggle the OS
+            // grabs the key for Character Viewer before our monitor
+            // sees it). Kept inside the same VStack so it stretches
+            // to the same width as the shortcut card above.
+            if prefs.useGlobeKey {
                 globeSelectedCallout
             }
 
@@ -344,9 +328,16 @@ private struct ShortcutTryPane: View {
         }
     }
 
-    /// The "Hold to record" card — either the KeyboardShortcuts
-    /// recorder for a key combo, or a read-only Globe badge when
-    /// the user opted into the Globe key path.
+    /// The "Hold to record" card. Shows the Globe pill and the
+    /// key-combo recorder side-by-side; clicking either selects it
+    /// as the active push-to-talk binding. The selected pill picks
+    /// up a peach border + tinted fill so the active choice is
+    /// unambiguous at a glance.
+    ///
+    /// Why both visible (rather than a single picker that swaps
+    /// content): the first-time user sees the two real choices in
+    /// front of them — "this single key" or "a combo I pick" — and
+    /// the decision is the choice, not a tab-and-then-fill flow.
     @ViewBuilder private var shortcutCard: some View {
         HStack {
             Image(systemName: prefs.useGlobeKey ? "globe" : "keyboard")
@@ -354,57 +345,101 @@ private struct ShortcutTryPane: View {
                 .frame(width: 24)
             Text("Hold to record")
             Spacer()
-            if prefs.useGlobeKey {
-                Text("🌐  Globe")
-                    .font(.system(.body, design: .monospaced))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.15)))
-            } else {
-                KeyboardShortcuts.Recorder(for: .pushToTalk)
+            HStack(spacing: 8) {
+                globePill
+                customRecorderPill
             }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
     }
 
-    /// Shown only after the user picks Globe. Two jobs:
-    ///  1. Surface the *one* macOS setting the Globe key needs
-    ///     (otherwise the OS grabs the key for Character Viewer
-    ///     before Speakist sees it). Without this step Globe just
-    ///     looks broken.
-    ///  2. Offer a one-click escape back to the key-combo flow if
-    ///     the user changes their mind.
-    @ViewBuilder private var globeSelectedCallout: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "info.circle.fill")
-                    .foregroundColor(.speakistMustard)
-                    .padding(.top, 1)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("One quick macOS setting")
-                        .font(.callout.weight(.semibold))
-                    Text("So macOS doesn't grab the Globe key first: open Keyboard settings and set \u{201C}Press 🌐 key to\u{201D} to \u{201C}Do Nothing\u{201D}.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Keyboard Settings") {
-                        Self.openKeyboardSettings()
-                    }
-                    .buttonStyle(.link)
-                    .font(.footnote)
-                    .padding(.top, 2)
-                }
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.speakistMustard.opacity(0.10)))
-
-            Button("Use a key combo instead") {
-                prefs.useGlobeKey = false
-            }
-            .buttonStyle(.link)
-            .font(.callout)
+    /// Globe pill — clicking flips into Globe mode. Peach tint
+    /// when active; muted gray otherwise.
+    private var globePill: some View {
+        Button {
+            prefs.useGlobeKey = true
+        } label: {
+            Text("🌐 Globe")
+                .font(.system(.body, design: .monospaced))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(prefs.useGlobeKey
+                              ? Color.speakistPeach.opacity(0.25)
+                              : Color.secondary.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(
+                            prefs.useGlobeKey ? Color.speakistPeach : .clear,
+                            lineWidth: 1.5
+                        )
+                )
         }
+        .buttonStyle(.plain)
+    }
+
+    /// KeyboardShortcuts.Recorder wrapped so the act of interacting
+    /// with it also flips into custom-shortcut mode. The recorder
+    /// is an NSViewRepresentable that swallows clicks for its own
+    /// recording UI, so we layer a `simultaneousGesture` to fire a
+    /// mode-switch alongside the recorder's own click handling.
+    /// Peach border appears when this is the active choice.
+    private var customRecorderPill: some View {
+        KeyboardShortcuts.Recorder(for: .pushToTalk)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(
+                        prefs.useGlobeKey ? .clear : Color.speakistPeach,
+                        lineWidth: 1.5
+                    )
+                    .allowsHitTesting(false)
+            )
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    if prefs.useGlobeKey { prefs.useGlobeKey = false }
+                }
+            )
+    }
+
+    /// Macos-setting callout shown only when Globe is the active
+    /// shortcut. Without flipping "Press 🌐 key to" to "Do Nothing",
+    /// macOS grabs the key for Character Viewer / language switch
+    /// before our event monitor sees it and Globe looks broken.
+    ///
+    /// `frame(maxWidth: .infinity, alignment: .leading)` on the
+    /// inner HStack makes the callout stretch to the same width as
+    /// the shortcut card above (rather than sizing to content,
+    /// which left it visibly narrower in the previous design).
+    @ViewBuilder private var globeSelectedCallout: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle.fill")
+                .foregroundColor(.speakistMustard)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("One quick macOS setting")
+                    .font(.callout.weight(.semibold))
+                Text("So macOS doesn't grab the Globe key first: open Keyboard settings and set \u{201C}Press 🌐 key to\u{201D} to \u{201C}Do Nothing\u{201D}.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("This only changes how the Globe key behaves on its own — fn-shortcuts like fn-F2 still work.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Keyboard Settings") {
+                    Self.openKeyboardSettings()
+                }
+                .buttonStyle(.link)
+                .font(.footnote)
+                .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.speakistMustard.opacity(0.10)))
     }
 
     /// Open System Settings → Keyboard. Tries the modern Ventura+
