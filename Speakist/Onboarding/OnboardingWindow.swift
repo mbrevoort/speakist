@@ -290,16 +290,32 @@ private struct ShortcutTryPane: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack {
-                Image(systemName: "keyboard")
-                    .foregroundColor(.speakistPeach)
-                    .frame(width: 24)
-                Text("Hold to record")
-                Spacer()
-                KeyboardShortcuts.Recorder(for: .pushToTalk)
+            shortcutCard
+
+            // Globe key is offered as a side option rather than a
+            // peer to the recorder. Onboarding's first goal is to
+            // get the user past the "what is my shortcut" decision
+            // with as little friction as possible — most users will
+            // accept the default key combo, so we don't put Globe
+            // in their face. A single subtle link makes it
+            // discoverable for users who came from Wispr or want a
+            // single-key feel. When chosen, the rest of the flow
+            // (System Settings hint, etc.) appears in-place inside
+            // `globeSelectedCallout`.
+            if !prefs.useGlobeKey {
+                Button {
+                    prefs.useGlobeKey = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "globe")
+                        Text("Use the Globe (🌐) key instead")
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.callout)
+            } else {
+                globeSelectedCallout
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Try it now").font(.headline)
@@ -326,6 +342,80 @@ private struct ShortcutTryPane: View {
                 }
             }
         }
+    }
+
+    /// The "Hold to record" card — either the KeyboardShortcuts
+    /// recorder for a key combo, or a read-only Globe badge when
+    /// the user opted into the Globe key path.
+    @ViewBuilder private var shortcutCard: some View {
+        HStack {
+            Image(systemName: prefs.useGlobeKey ? "globe" : "keyboard")
+                .foregroundColor(.speakistPeach)
+                .frame(width: 24)
+            Text("Hold to record")
+            Spacer()
+            if prefs.useGlobeKey {
+                Text("🌐  Globe")
+                    .font(.system(.body, design: .monospaced))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.15)))
+            } else {
+                KeyboardShortcuts.Recorder(for: .pushToTalk)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+    }
+
+    /// Shown only after the user picks Globe. Two jobs:
+    ///  1. Surface the *one* macOS setting the Globe key needs
+    ///     (otherwise the OS grabs the key for Character Viewer
+    ///     before Speakist sees it). Without this step Globe just
+    ///     looks broken.
+    ///  2. Offer a one-click escape back to the key-combo flow if
+    ///     the user changes their mind.
+    @ViewBuilder private var globeSelectedCallout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(.speakistMustard)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("One quick macOS setting")
+                        .font(.callout.weight(.semibold))
+                    Text("So macOS doesn't grab the Globe key first: open Keyboard settings and set \u{201C}Press 🌐 key to\u{201D} to \u{201C}Do Nothing\u{201D}.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Keyboard Settings") {
+                        Self.openKeyboardSettings()
+                    }
+                    .buttonStyle(.link)
+                    .font(.footnote)
+                    .padding(.top, 2)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.speakistMustard.opacity(0.10)))
+
+            Button("Use a key combo instead") {
+                prefs.useGlobeKey = false
+            }
+            .buttonStyle(.link)
+            .font(.callout)
+        }
+    }
+
+    /// Open System Settings → Keyboard. Tries the modern Ventura+
+    /// scheme first, falls back to the legacy preference pane URL.
+    /// Either lands the user on the Keyboard pane where the
+    /// "Press 🌐 key to" picker lives near the top.
+    private static func openKeyboardSettings() {
+        let modern = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
+        let legacy = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard")
+        if let url = modern, NSWorkspace.shared.open(url) { return }
+        if let url = legacy { NSWorkspace.shared.open(url) }
     }
 }
 
