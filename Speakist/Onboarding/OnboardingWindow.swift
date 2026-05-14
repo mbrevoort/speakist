@@ -11,8 +11,14 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     init(env: AppEnvironment, onFinish: @escaping () -> Void) {
         self.env = env
         self.onFinish = onFinish
+        // 620 × 580: 580 fits the worst case (shortcut pane with
+        // Globe selected → System Settings callout visible)
+        // without squeezing the "Try it now" editor below its
+        // 70pt minimum or shoving the green "Got it" check up
+        // against the Back/Continue divider. Previous 500pt
+        // height squeezed the shortcut pane noticeably.
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 580),
             styleMask: [.titled, .closable],
             backing: .buffered, defer: false)
         window.title = "Welcome to Speakist"
@@ -64,15 +70,26 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 28)
-                .padding(.horizontal, 32)
+            // ScrollView is the safety net: panes whose content
+            // exceeds the available height (notably the shortcut
+            // pane when Globe is selected and the System Settings
+            // callout is visible) scroll instead of squeezing the
+            // TextEditor below its minimum or clipping the green
+            // "Got it" affordance. The window height is sized for
+            // the worst case to fit without scrolling, but content
+            // that grows in the future degrades gracefully.
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.top, 28)
+                    .padding(.bottom, 20)
+                    .padding(.horizontal, 32)
+            }
             Divider()
             controls
                 .padding(14)
         }
-        .frame(width: 620, height: 500)
+        .frame(width: 620, height: 580)
         .onChange(of: step) { _, newStep in
             if newStep == 3 && shortcutBaseline == nil {
                 shortcutBaseline = okTranscriptCount()
