@@ -290,7 +290,7 @@ private struct ShortcutTryPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Set your shortcut").font(.title2.weight(.semibold))
-            Text("Hold the shortcut anywhere on your Mac, speak, and release. The transcript appears at your cursor. Change the combo here if the default clashes with another app.")
+            Text("Hold the shortcut anywhere on your Mac, speak, and release. The transcript appears at your cursor. Change the shortcut if the default clashes with another app or you prefer a different key combination.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
