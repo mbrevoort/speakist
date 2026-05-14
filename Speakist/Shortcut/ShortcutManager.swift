@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
@@ -32,6 +33,36 @@ final class ShortcutManager {
     /// engine in the recording state with no keyup to terminate it.
     private var releaseRequestedDuringStart = false
 
+    // MARK: - Globe key monitor
+    //
+    // Push-to-talk on the Globe (🌐 / fn) key can't be wired through
+    // KeyboardShortcuts — the sindresorhus library strips `.function`
+    // from any captured event and only listens for keyDown, while the
+    // Globe key produces `flagsChanged` modifier transitions instead
+    // of keyDown. Wispr Flow uses Globe as its default; to match, we
+    // run a parallel NSEvent monitor that watches `.flagsChanged` and
+    // routes `.function` press/release through the same pushDown /
+    // pushUp pipeline as the regular shortcut.
+    //
+    // Two monitors are needed because NSEvent global/local are
+    // exclusive: global only fires when our app isn't key, local only
+    // fires when it is. The push-to-talk use case is dominated by the
+    // user being in another app (typing somewhere), but we also need
+    // it to work when our own Settings window has focus.
+    //
+    // Both monitor handles are kept so we can uninstall cleanly when
+    // the user turns the toggle off — `NSEvent.removeMonitor` requires
+    // the exact opaque token returned by the addMonitor call.
+    private var globeGlobalMonitor: Any?
+    private var globeLocalMonitor: Any?
+    /// Tracks the most recent `.function` flag state so a `.flagsChanged`
+    /// event for *any other* modifier doesn't mistakenly fire push/release.
+    /// `flagsChanged` fires for the entire modifier mask, not just the
+    /// key that changed — without this guard, pressing shift while
+    /// holding Globe would re-fire pushDown.
+    private var globeIsDown = false
+    private var prefsSubscription: AnyCancellable?
+
     init(env: AppEnvironment) {
         self.env = env
     }
@@ -45,6 +76,78 @@ final class ShortcutManager {
         }
         KeyboardShortcuts.onKeyDown(for: .toggleRecord) { [weak self] in
             Task { @MainActor in self?.toggleRecording() }
+        }
+
+        // Install/uninstall Globe monitor based on the current
+        // preference; re-evaluate whenever Preferences emits a
+        // change. The sync method is idempotent so unrelated
+        // preference changes are no-ops.
+        syncGlobeMonitor()
+        prefsSubscription = env.preferences.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.syncGlobeMonitor() }
+    }
+
+    private func syncGlobeMonitor() {
+        if env.preferences.useGlobeKey {
+            installGlobeMonitor()
+        } else {
+            uninstallGlobeMonitor()
+        }
+    }
+
+    private func installGlobeMonitor() {
+        guard globeGlobalMonitor == nil else { return }
+        // Both monitor closures dispatch through `Task { @MainActor }`
+        // rather than calling pushDown/pushUp directly. Running the
+        // recording-start path synchronously inside the NSEvent
+        // handler (i.e. mid-event-dispatch) causes the first HUD
+        // show to race with AppKit's layout pass — the panel ends up
+        // narrower than its canonical size and the gradient border
+        // overflows. The runloop hop matches what the
+        // KeyboardShortcuts library does for the regular shortcut
+        // path, which doesn't have this problem.
+        globeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self else { return }
+            Task { @MainActor in self.handleGlobeFlagsChanged(event) }
+        }
+        globeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self else { return event }
+            Task { @MainActor in self.handleGlobeFlagsChanged(event) }
+            return event
+        }
+        Logger.shared.info("Globe key monitor installed")
+    }
+
+    /// Filter `.flagsChanged` events down to actual Globe-key
+    /// transitions and route them through pushDown / pushUp.
+    /// `flagsChanged` reports the full modifier mask on every change,
+    /// so a shift tap during dictation would otherwise look like
+    /// another Globe transition — the `globeIsDown` guard ignores
+    /// events where the `.function` state hasn't actually flipped.
+    private func handleGlobeFlagsChanged(_ event: NSEvent) {
+        let isDown = event.modifierFlags.contains(.function)
+        guard isDown != globeIsDown else { return }
+        globeIsDown = isDown
+        if isDown { pushDown() } else { pushUp() }
+    }
+
+    private func uninstallGlobeMonitor() {
+        if let m = globeGlobalMonitor {
+            NSEvent.removeMonitor(m)
+            globeGlobalMonitor = nil
+        }
+        if let m = globeLocalMonitor {
+            NSEvent.removeMonitor(m)
+            globeLocalMonitor = nil
+        }
+        // If Globe was held when the toggle was flipped off, treat
+        // it as released so the engine doesn't think it's still
+        // mid-recording (otherwise pushDown would be skipped on next
+        // press due to the "is already recording" guard).
+        if globeIsDown {
+            globeIsDown = false
+            pushUp()
         }
     }
 

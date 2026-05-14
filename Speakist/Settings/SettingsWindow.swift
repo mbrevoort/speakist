@@ -329,12 +329,17 @@ struct ShortcutsSettingsView: View {
                 HStack {
                     Text("Hold to record")
                     Spacer()
-                    KeyboardShortcuts.Recorder(for: .pushToTalk)
+                    ShortcutPickerPills()
                 }
                 Text("Hold the shortcut, speak, and release to transcribe.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
+                if prefs.useGlobeKey {
+                    ShortcutGlobeCallout()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
             Section("Toggle mode") {
                 HStack {
                     Text("Tap to start / tap to stop")

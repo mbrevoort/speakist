@@ -54,6 +54,13 @@ struct OnboardingView: View {
     @State private var polishTried: Bool = false
     @State private var polishSaving: Bool = false
     @State private var polishError: String? = nil
+    /// Bumped on every UserDefaults change so `canAdvance` re-reads
+    /// the current KeyboardShortcuts binding. Needed because
+    /// `KeyboardShortcuts.getShortcut(for:)` reads UserDefaults
+    /// directly without publishing changes; without this nudge the
+    /// Continue button stays at its last computed enabled/disabled
+    /// state even if the user clears the shortcut in the recorder.
+    @State private var shortcutNonce: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +85,14 @@ struct OnboardingView: View {
             let count = entries.filter { $0.transcriptionStatus == "ok" }.count
             if let b = shortcutBaseline, count > b { shortcutTried = true }
             if let b = polishBaseline, count > b { polishTried = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            // Cheap nudge so `canAdvance` re-evaluates with the
+            // current shortcut binding. The notification fires for
+            // every defaults write — fine here because we're only
+            // active during onboarding and the recomputation is
+            // a single dictionary read.
+            shortcutNonce &+= 1
         }
     }
 
@@ -121,8 +136,23 @@ struct OnboardingView: View {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
         case 2: return keychain.hasKey(.refreshToken)
-        case 3: return shortcutTried
-        case 4: return polishTried
+        case 3:
+            // Always advanceable in Globe mode (the binding *is*
+            // the Globe key — can't be unset). In custom-shortcut
+            // mode, only block when the user has cleared the
+            // binding entirely so there's literally no shortcut
+            // assigned. Touch `shortcutNonce` so the recompute
+            // tracks UserDefaults writes from the recorder.
+            _ = shortcutNonce
+            if prefs.useGlobeKey { return true }
+            return KeyboardShortcuts.getShortcut(for: .pushToTalk) != nil
+        case 4:
+            // Polish is opt-in and reversible from Settings. Don't
+            // force the user to flip the toggle or test it during
+            // onboarding — `polishTried` still drives the "got it"
+            // affordance inside the pane but no longer gates
+            // advance.
+            return true
         default: return true
         }
     }
@@ -282,24 +312,33 @@ private struct ShortcutTryPane: View {
     let tried: Bool
 
     @State private var demoText: String = ""
+    /// Drives auto-focus on the test-it-now editor when the pane
+    /// first appears. Stored as @FocusState so SwiftUI manages the
+    /// first-responder dance with the NSHostingView wrapper.
+    @FocusState private var demoFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Set your shortcut").font(.title2.weight(.semibold))
-            Text("Hold the shortcut anywhere on your Mac, speak, and release. The transcript appears at your cursor. Change the combo here if the default clashes with another app.")
+            Text("Hold the shortcut anywhere on your Mac, speak, and release. The transcript appears at your cursor. Change the shortcut if the default clashes with another app or you prefer a different key combination.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Image(systemName: "keyboard")
+                Image(systemName: prefs.useGlobeKey ? "globe" : "keyboard")
                     .foregroundColor(.speakistPeach)
                     .frame(width: 24)
                 Text("Hold to record")
                 Spacer()
-                KeyboardShortcuts.Recorder(for: .pushToTalk)
+                ShortcutPickerPills()
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+
+            if prefs.useGlobeKey {
+                ShortcutGlobeCallout()
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Try it now").font(.headline)
@@ -316,6 +355,7 @@ private struct ShortcutTryPane: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
                 )
+                .focused($demoFocused)
 
             if tried {
                 HStack(spacing: 8) {
@@ -324,6 +364,23 @@ private struct ShortcutTryPane: View {
                     Text("Got it — shortcut works.")
                         .font(.callout.weight(.medium))
                 }
+            }
+        }
+        // Animate the callout's appearance/dismissal so toggling
+        // the shortcut mode doesn't jolt the layout. Bound to the
+        // toggle state itself so SwiftUI only animates when that
+        // flips — unrelated state changes (typing in the test
+        // field, the `tried` flag flipping) aren't affected.
+        .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
+        // First-responder dance: NSHostingView and the surrounding
+        // window need a moment to install before SwiftUI's focus
+        // request will land. A 60ms delay is enough on every Mac
+        // we've tested without being visible to the user — the
+        // cursor blink is already in the editor by the time their
+        // eyes have parsed "Try it now."
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                demoFocused = true
             }
         }
     }
