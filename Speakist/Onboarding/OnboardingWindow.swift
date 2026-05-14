@@ -70,20 +70,30 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ScrollView is the safety net: panes whose content
-            // exceeds the available height (notably the shortcut
-            // pane when Globe is selected and the System Settings
-            // callout is visible) scroll instead of squeezing the
-            // TextEditor below its minimum or clipping the green
-            // "Got it" affordance. The window height is sized for
-            // the worst case to fit without scrolling, but content
-            // that grows in the future degrades gracefully.
-            ScrollView {
-                content
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(.top, 28)
-                    .padding(.bottom, 20)
-                    .padding(.horizontal, 32)
+            // GeometryReader gives us the viewport size so we can
+            // force the scrollable content to fill at least that
+            // height. Panes that want to center vertically (like
+            // WelcomePane) use Spacers + maxHeight: .infinity
+            // internally, which only resolves to "fill the
+            // viewport" if their parent claims that height —
+            // ScrollView alone leaves vertical space unbounded.
+            //
+            // ScrollView itself is the safety net: panes whose
+            // content overflows (notably the shortcut pane with
+            // Globe selected and the System Settings callout
+            // visible) scroll instead of squeezing intrinsic-size
+            // children. The window height is sized for the worst
+            // case to fit without scrolling.
+            GeometryReader { viewport in
+                ScrollView {
+                    content
+                        .frame(maxWidth: .infinity,
+                               minHeight: viewport.size.height - 48,
+                               alignment: .topLeading)
+                        .padding(.top, 28)
+                        .padding(.bottom, 20)
+                        .padding(.horizontal, 32)
+                }
             }
             Divider()
             controls
@@ -177,7 +187,14 @@ struct OnboardingView: View {
 
 private struct WelcomePane: View {
     var body: some View {
+        // Spacers + maxHeight: .infinity vertically center the
+        // microphone + welcome text. Resolves correctly because
+        // OnboardingView's GeometryReader gives the content a
+        // minHeight matching the viewport, so this pane claims
+        // the full visible space rather than collapsing to
+        // intrinsic content height inside the ScrollView.
         VStack(spacing: 16) {
+            Spacer()
             Image(systemName: "mic.fill")
                 .resizable().aspectRatio(contentMode: .fit)
                 .frame(width: 68, height: 68)
@@ -187,7 +204,9 @@ private struct WelcomePane: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
