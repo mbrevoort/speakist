@@ -54,6 +54,13 @@ struct OnboardingView: View {
     @State private var polishTried: Bool = false
     @State private var polishSaving: Bool = false
     @State private var polishError: String? = nil
+    /// Bumped on every UserDefaults change so `canAdvance` re-reads
+    /// the current KeyboardShortcuts binding. Needed because
+    /// `KeyboardShortcuts.getShortcut(for:)` reads UserDefaults
+    /// directly without publishing changes; without this nudge the
+    /// Continue button stays at its last computed enabled/disabled
+    /// state even if the user clears the shortcut in the recorder.
+    @State private var shortcutNonce: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +85,14 @@ struct OnboardingView: View {
             let count = entries.filter { $0.transcriptionStatus == "ok" }.count
             if let b = shortcutBaseline, count > b { shortcutTried = true }
             if let b = polishBaseline, count > b { polishTried = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            // Cheap nudge so `canAdvance` re-evaluates with the
+            // current shortcut binding. The notification fires for
+            // every defaults write — fine here because we're only
+            // active during onboarding and the recomputation is
+            // a single dictionary read.
+            shortcutNonce &+= 1
         }
     }
 
@@ -121,7 +136,16 @@ struct OnboardingView: View {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
         case 2: return keychain.hasKey(.refreshToken)
-        case 3: return shortcutTried
+        case 3:
+            // Always advanceable in Globe mode (the binding *is*
+            // the Globe key — can't be unset). In custom-shortcut
+            // mode, only block when the user has cleared the
+            // binding entirely so there's literally no shortcut
+            // assigned. Touch `shortcutNonce` so the recompute
+            // tracks UserDefaults writes from the recorder.
+            _ = shortcutNonce
+            if prefs.useGlobeKey { return true }
+            return KeyboardShortcuts.getShortcut(for: .pushToTalk) != nil
         case 4: return polishTried
         default: return true
         }
