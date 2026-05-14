@@ -98,30 +98,38 @@ final class ShortcutManager {
 
     private func installGlobeMonitor() {
         guard globeGlobalMonitor == nil else { return }
-        // The handler runs on the main thread for NSEvent monitors,
-        // so it's safe to read/write @MainActor state directly. We
-        // still hop through `Task { @MainActor in ... }` because
-        // pushDown/pushUp are marked isolated.
-        let handler: @MainActor (NSEvent) -> Void = { [weak self] event in
+        // Both monitor closures dispatch through `Task { @MainActor }`
+        // rather than calling pushDown/pushUp directly. Running the
+        // recording-start path synchronously inside the NSEvent
+        // handler (i.e. mid-event-dispatch) causes the first HUD
+        // show to race with AppKit's layout pass — the panel ends up
+        // narrower than its canonical size and the gradient border
+        // overflows. The runloop hop matches what the
+        // KeyboardShortcuts library does for the regular shortcut
+        // path, which doesn't have this problem.
+        globeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             guard let self else { return }
-            let isDown = event.modifierFlags.contains(.function)
-            // Filter out flagsChanged events for *other* modifiers
-            // (shift, option, etc.) that arrive while Globe state is
-            // unchanged. Without this, a shift tap during dictation
-            // would look like another Globe transition.
-            guard isDown != self.globeIsDown else { return }
-            self.globeIsDown = isDown
-            if isDown { self.pushDown() } else { self.pushUp() }
+            Task { @MainActor in self.handleGlobeFlagsChanged(event) }
         }
-        globeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
-            // Global monitor closure runs on main per NSEvent docs.
-            MainActor.assumeIsolated { handler(event) }
-        }
-        globeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-            MainActor.assumeIsolated { handler(event) }
+        globeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self else { return event }
+            Task { @MainActor in self.handleGlobeFlagsChanged(event) }
             return event
         }
         Logger.shared.info("Globe key monitor installed")
+    }
+
+    /// Filter `.flagsChanged` events down to actual Globe-key
+    /// transitions and route them through pushDown / pushUp.
+    /// `flagsChanged` reports the full modifier mask on every change,
+    /// so a shift tap during dictation would otherwise look like
+    /// another Globe transition — the `globeIsDown` guard ignores
+    /// events where the `.function` state hasn't actually flipped.
+    private func handleGlobeFlagsChanged(_ event: NSEvent) {
+        let isDown = event.modifierFlags.contains(.function)
+        guard isDown != globeIsDown else { return }
+        globeIsDown = isDown
+        if isDown { pushDown() } else { pushUp() }
     }
 
     private func uninstallGlobeMonitor() {
