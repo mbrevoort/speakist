@@ -282,6 +282,10 @@ private struct ShortcutTryPane: View {
     let tried: Bool
 
     @State private var demoText: String = ""
+    /// Drives auto-focus on the test-it-now editor when the pane
+    /// first appears. Stored as @FocusState so SwiftUI manages the
+    /// first-responder dance with the NSHostingView wrapper.
+    @FocusState private var demoFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -290,16 +294,19 @@ private struct ShortcutTryPane: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            shortcutCard
-                .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
+            HStack {
+                Image(systemName: prefs.useGlobeKey ? "globe" : "keyboard")
+                    .foregroundColor(.speakistPeach)
+                    .frame(width: 24)
+                Text("Hold to record")
+                Spacer()
+                ShortcutPickerPills()
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
 
-            // System Settings callout shown only when Globe is the
-            // active binding. Animated via the parent VStack's
-            // `.animation(...)` modifier so toggling between modes
-            // doesn't pop the layout — the callout fades + slides
-            // in/out and the surrounding content eases into place.
             if prefs.useGlobeKey {
-                globeSelectedCallout
+                ShortcutGlobeCallout()
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
@@ -318,6 +325,7 @@ private struct ShortcutTryPane: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
                 )
+                .focused($demoFocused)
 
             if tried {
                 HStack(spacing: 8) {
@@ -328,170 +336,23 @@ private struct ShortcutTryPane: View {
                 }
             }
         }
-        // Animate the callout's appearance/dismissal so toggling the
-        // shortcut mode doesn't jolt the layout. Bound to the toggle
-        // state itself so SwiftUI only animates when that flips —
-        // unrelated state changes (typing in the test field, the
-        // `tried` flag flipping) aren't affected.
+        // Animate the callout's appearance/dismissal so toggling
+        // the shortcut mode doesn't jolt the layout. Bound to the
+        // toggle state itself so SwiftUI only animates when that
+        // flips — unrelated state changes (typing in the test
+        // field, the `tried` flag flipping) aren't affected.
         .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
-    }
-
-    /// The "Hold to record" card. Shows the Globe pill and the
-    /// key-combo recorder side-by-side; clicking either selects it
-    /// as the active push-to-talk binding. The selected pill picks
-    /// up a peach border + tinted fill so the active choice is
-    /// unambiguous at a glance.
-    ///
-    /// Why both visible (rather than a single picker that swaps
-    /// content): the first-time user sees the two real choices in
-    /// front of them — "this single key" or "a combo I pick" — and
-    /// the decision is the choice, not a tab-and-then-fill flow.
-    @ViewBuilder private var shortcutCard: some View {
-        HStack {
-            Image(systemName: prefs.useGlobeKey ? "globe" : "keyboard")
-                .foregroundColor(.speakistPeach)
-                .frame(width: 24)
-            Text("Hold to record")
-            Spacer()
-            HStack(spacing: 8) {
-                globePill
-                customRecorderPill
+        // First-responder dance: NSHostingView and the surrounding
+        // window need a moment to install before SwiftUI's focus
+        // request will land. A 60ms delay is enough on every Mac
+        // we've tested without being visible to the user — the
+        // cursor blink is already in the editor by the time their
+        // eyes have parsed "Try it now."
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                demoFocused = true
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
-    }
-
-    /// Globe pill — clicking flips into Globe mode. Peach tint
-    /// when active; muted gray otherwise.
-    private var globePill: some View {
-        Button {
-            prefs.useGlobeKey = true
-        } label: {
-            Text("🌐 Globe")
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(prefs.useGlobeKey
-                              ? Color.speakistPeach.opacity(0.25)
-                              : Color.secondary.opacity(0.12))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(
-                            prefs.useGlobeKey ? Color.speakistPeach : .clear,
-                            lineWidth: 1.5
-                        )
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Custom-shortcut pill. Two states:
-    ///
-    ///  * Globe is the active choice (this pill *not* selected) →
-    ///    render as a plain SwiftUI Button showing the current
-    ///    shortcut as static text. Click flips `useGlobeKey` to
-    ///    false. The actual recorder is hidden in this state
-    ///    because `KeyboardShortcuts.Recorder` is an NSView that
-    ///    intercepts clicks for its own recording UI — wrapping it
-    ///    in a SwiftUI gesture is unreliable (clicks don't reach
-    ///    SwiftUI's gesture system), so we replace it with a real
-    ///    button when we need a clean mode-toggle affordance.
-    ///
-    ///  * This pill is the active choice → render the actual
-    ///    `KeyboardShortcuts.Recorder` so the user can click it to
-    ///    record a new combo. Peach border indicates selection.
-    ///
-    /// Net flow matches the user's stated UX: one click selects
-    /// the custom-shortcut option, a second click on the (now
-    /// active) recorder lets you change the combo.
-    private var customRecorderPill: some View {
-        Group {
-            if prefs.useGlobeKey {
-                Button {
-                    prefs.useGlobeKey = false
-                } label: {
-                    Text(currentShortcutDisplay)
-                        .font(.system(.body, design: .monospaced))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.secondary.opacity(0.12))
-                        )
-                }
-                .buttonStyle(.plain)
-            } else {
-                KeyboardShortcuts.Recorder(for: .pushToTalk)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.speakistPeach, lineWidth: 1.5)
-                            .allowsHitTesting(false)
-                    )
-            }
-        }
-    }
-
-    /// Human-readable form of the current push-to-talk shortcut
-    /// (e.g. "⌃⌘X"). Defaults to an em-dash placeholder if the
-    /// user has cleared the binding entirely.
-    private var currentShortcutDisplay: String {
-        if let shortcut = KeyboardShortcuts.getShortcut(for: .pushToTalk) {
-            return shortcut.description
-        }
-        return "—"
-    }
-
-    /// Macos-setting callout shown only when Globe is the active
-    /// shortcut. Without flipping "Press 🌐 key to" to "Do Nothing",
-    /// macOS grabs the key for Character Viewer / language switch
-    /// before our event monitor sees it and Globe looks broken.
-    ///
-    /// `frame(maxWidth: .infinity, alignment: .leading)` on the
-    /// inner HStack makes the callout stretch to the same width as
-    /// the shortcut card above (rather than sizing to content,
-    /// which left it visibly narrower in the previous design).
-    @ViewBuilder private var globeSelectedCallout: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle.fill")
-                .foregroundColor(.speakistMustard)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("One quick macOS setting")
-                    .font(.callout.weight(.semibold))
-                Text("So macOS doesn't grab the Globe key first: open Keyboard settings and set \u{201C}Press 🌐 key to\u{201D} to \u{201C}Do Nothing\u{201D}.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("This only changes how the Globe key behaves on its own — fn-shortcuts like fn-F2 still work.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary.opacity(0.8))
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Open Keyboard Settings") {
-                    Self.openKeyboardSettings()
-                }
-                .buttonStyle(.link)
-                .font(.footnote)
-                .padding(.top, 2)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.speakistMustard.opacity(0.10)))
-    }
-
-    /// Open System Settings → Keyboard. Tries the modern Ventura+
-    /// scheme first, falls back to the legacy preference pane URL.
-    /// Either lands the user on the Keyboard pane where the
-    /// "Press 🌐 key to" picker lives near the top.
-    private static func openKeyboardSettings() {
-        let modern = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
-        let legacy = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard")
-        if let url = modern, NSWorkspace.shared.open(url) { return }
-        if let url = legacy { NSWorkspace.shared.open(url) }
     }
 }
 

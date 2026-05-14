@@ -329,27 +329,17 @@ struct ShortcutsSettingsView: View {
                 HStack {
                     Text("Hold to record")
                     Spacer()
-                    KeyboardShortcuts.Recorder(for: .pushToTalk)
+                    ShortcutPickerPills()
                 }
-                .disabled(prefs.useGlobeKey)
-                .opacity(prefs.useGlobeKey ? 0.4 : 1)
                 Text("Hold the shortcut, speak, and release to transcribe.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-
-                Toggle("Use Globe (🌐) key instead", isOn: Binding(
-                    get: { prefs.useGlobeKey },
-                    set: { prefs.useGlobeKey = $0 }))
                 if prefs.useGlobeKey {
-                    Text("Open System Settings → Keyboard → \"Press 🌐 key to\" and set it to \"Do Nothing\" so macOS doesn't grab the key before Speakist sees it.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("The Globe key on modern Mac keyboards. Matches Wispr Flow's default binding.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+                    ShortcutGlobeCallout()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
+            .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
             Section("Toggle mode") {
                 HStack {
                     Text("Tap to start / tap to stop")
