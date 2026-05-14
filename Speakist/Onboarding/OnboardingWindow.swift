@@ -146,7 +146,13 @@ struct OnboardingView: View {
             _ = shortcutNonce
             if prefs.useGlobeKey { return true }
             return KeyboardShortcuts.getShortcut(for: .pushToTalk) != nil
-        case 4: return polishTried
+        case 4:
+            // Polish is opt-in and reversible from Settings. Don't
+            // force the user to flip the toggle or test it during
+            // onboarding — `polishTried` still drives the "got it"
+            // affordance inside the pane but no longer gates
+            // advance.
+            return true
         default: return true
         }
     }
