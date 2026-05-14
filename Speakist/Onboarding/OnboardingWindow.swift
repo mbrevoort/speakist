@@ -291,14 +291,16 @@ private struct ShortcutTryPane: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             shortcutCard
+                .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
 
-            // System Settings callout shown only after the user picks
-            // the Globe key (without that one macOS toggle the OS
-            // grabs the key for Character Viewer before our monitor
-            // sees it). Kept inside the same VStack so it stretches
-            // to the same width as the shortcut card above.
+            // System Settings callout shown only when Globe is the
+            // active binding. Animated via the parent VStack's
+            // `.animation(...)` modifier so toggling between modes
+            // doesn't pop the layout — the callout fades + slides
+            // in/out and the surrounding content eases into place.
             if prefs.useGlobeKey {
                 globeSelectedCallout
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -326,6 +328,12 @@ private struct ShortcutTryPane: View {
                 }
             }
         }
+        // Animate the callout's appearance/dismissal so toggling the
+        // shortcut mode doesn't jolt the layout. Bound to the toggle
+        // state itself so SwiftUI only animates when that flips —
+        // unrelated state changes (typing in the test field, the
+        // `tried` flag flipping) aren't affected.
+        .animation(.easeInOut(duration: 0.18), value: prefs.useGlobeKey)
     }
 
     /// The "Hold to record" card. Shows the Globe pill and the
@@ -381,27 +389,60 @@ private struct ShortcutTryPane: View {
         .buttonStyle(.plain)
     }
 
-    /// KeyboardShortcuts.Recorder wrapped so the act of interacting
-    /// with it also flips into custom-shortcut mode. The recorder
-    /// is an NSViewRepresentable that swallows clicks for its own
-    /// recording UI, so we layer a `simultaneousGesture` to fire a
-    /// mode-switch alongside the recorder's own click handling.
-    /// Peach border appears when this is the active choice.
+    /// Custom-shortcut pill. Two states:
+    ///
+    ///  * Globe is the active choice (this pill *not* selected) →
+    ///    render as a plain SwiftUI Button showing the current
+    ///    shortcut as static text. Click flips `useGlobeKey` to
+    ///    false. The actual recorder is hidden in this state
+    ///    because `KeyboardShortcuts.Recorder` is an NSView that
+    ///    intercepts clicks for its own recording UI — wrapping it
+    ///    in a SwiftUI gesture is unreliable (clicks don't reach
+    ///    SwiftUI's gesture system), so we replace it with a real
+    ///    button when we need a clean mode-toggle affordance.
+    ///
+    ///  * This pill is the active choice → render the actual
+    ///    `KeyboardShortcuts.Recorder` so the user can click it to
+    ///    record a new combo. Peach border indicates selection.
+    ///
+    /// Net flow matches the user's stated UX: one click selects
+    /// the custom-shortcut option, a second click on the (now
+    /// active) recorder lets you change the combo.
     private var customRecorderPill: some View {
-        KeyboardShortcuts.Recorder(for: .pushToTalk)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(
-                        prefs.useGlobeKey ? .clear : Color.speakistPeach,
-                        lineWidth: 1.5
-                    )
-                    .allowsHitTesting(false)
-            )
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    if prefs.useGlobeKey { prefs.useGlobeKey = false }
+        Group {
+            if prefs.useGlobeKey {
+                Button {
+                    prefs.useGlobeKey = false
+                } label: {
+                    Text(currentShortcutDisplay)
+                        .font(.system(.body, design: .monospaced))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.secondary.opacity(0.12))
+                        )
                 }
-            )
+                .buttonStyle(.plain)
+            } else {
+                KeyboardShortcuts.Recorder(for: .pushToTalk)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Color.speakistPeach, lineWidth: 1.5)
+                            .allowsHitTesting(false)
+                    )
+            }
+        }
+    }
+
+    /// Human-readable form of the current push-to-talk shortcut
+    /// (e.g. "⌃⌘X"). Defaults to an em-dash placeholder if the
+    /// user has cleared the binding entirely.
+    private var currentShortcutDisplay: String {
+        if let shortcut = KeyboardShortcuts.getShortcut(for: .pushToTalk) {
+            return shortcut.description
+        }
+        return "—"
     }
 
     /// Macos-setting callout shown only when Globe is the active
