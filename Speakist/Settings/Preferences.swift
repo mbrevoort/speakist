@@ -40,6 +40,7 @@ final class Preferences: ObservableObject {
         static let launchAtLogin = "launchAtLogin"
         static let shortcutPaused = "shortcutPaused"
         static let onboardingCompleted = "onboardingCompleted"
+        static let useGlobeKey = "useGlobeKey"
         static let rateDeepgramNova3 = "rate.deepgram.nova3"
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
         static let apiBaseURL = "apiBaseURL"
@@ -122,6 +123,11 @@ final class Preferences: ObservableObject {
             K.launchAtLogin: false,
             K.shortcutPaused: false,
             K.onboardingCompleted: false,
+            // When true, the Globe (🌐 / fn) key acts as push-to-talk.
+            // Implemented outside KeyboardShortcuts because that library
+            // can't bind pure modifier keys — see ShortcutManager's
+            // Globe monitor. Off by default; opt-in.
+            K.useGlobeKey: false,
             K.rateDeepgramNova3: 0.0043,
             K.rateDeepgramNova2: 0.0043,
             // Speakist API endpoint. Defaults to the channel's URL baked
@@ -256,6 +262,17 @@ final class Preferences: ObservableObject {
     var onboardingCompleted: Bool {
         get { defaults.bool(forKey: K.onboardingCompleted) }
         set { defaults.set(newValue, forKey: K.onboardingCompleted); objectWillChange.send() }
+    }
+    /// Use the Globe (🌐 / fn) key as push-to-talk. Lives outside the
+    /// KeyboardShortcuts recorder because that library refuses pure
+    /// modifier keys (the sindresorhus implementation explicitly
+    /// subtracts the `.function` flag from any captured event). When
+    /// on, ShortcutManager installs an NSEvent monitor that watches
+    /// `.flagsChanged` for `.function` transitions and routes them
+    /// through the same pushDown/pushUp pipeline.
+    var useGlobeKey: Bool {
+        get { defaults.bool(forKey: K.useGlobeKey) }
+        set { defaults.set(newValue, forKey: K.useGlobeKey); objectWillChange.send() }
     }
     /// Phase A transcription routing flag — see `K.useTranscribeProxy`.
     /// True = audio flows Mac → Worker → Deepgram (new path).
