@@ -32,12 +32,19 @@ final class CursorInserter {
     func insert(text: String, hasEditableFocus: Bool, bundleID: String?) async -> PasteOutcome {
         guard !text.isEmpty else { return .failed("Empty transcript") }
 
+        // Always end the pasted text with a space so back-to-back
+        // dictations don't run together — without it, a trailing
+        // period collides with the next sentence's first word, or
+        // the last word of one transcript fuses to the first word
+        // of the next. Matches the iOS keyboard's insert path.
+        let textToPaste = (text.last?.isWhitespace ?? false) ? text : text + " "
+
         let pasteboard = NSPasteboard.general
         let snapshot = Self.snapshot(pasteboard: pasteboard)
         let snapshotChangeCount = pasteboard.changeCount
 
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.setString(textToPaste, forType: .string)
 
         // Hard requirement: without AX trust we can't synthesize key
         // events. Surface as clipboard-only so the user knows to ⌘V.
