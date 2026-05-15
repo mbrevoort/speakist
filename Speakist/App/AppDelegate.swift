@@ -8,9 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var menuBar: MenuBarController!
     private var shortcutManager: ShortcutManager!
-    private var historyWindow: HistoryWindowController?
+    private var mainWindow: MainWindowController?
     private var onboardingWindow: OnboardingWindowController?
-    private var settingsWindow: SettingsWindowController?
 
     override init() {
         self.env = AppEnvironment()
@@ -18,7 +17,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        // Speakist now ships as a regular Dock + Cmd+Tab app. Earlier
+        // versions were menu-bar-only (`.accessory`) and only became
+        // regular while a user-facing window was on screen — but users
+        // who couldn't find the menu bar icon had no way back into the
+        // app. Going `.regular` permanently means there's always a
+        // Dock entry and the app is reachable from Cmd+Tab. The status
+        // bar icon stays installed for at-a-glance recording state.
+        NSApp.setActivationPolicy(.regular)
+
+        installMainMenu()
 
         Analytics.shared.bootstrap()
         env.start()
@@ -33,29 +41,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Dynamic activation policy: when a user-facing window (Settings,
-        // History, Onboarding) is visible, become a regular app so we show
-        // up in Cmd+Tab and the Dock. When no such window is open, revert
-        // to .accessory (menu-bar-only). See updateActivationPolicy().
-        let center = NotificationCenter.default
-        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.updateActivationPolicy() }
-        }
-        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                // Poll after the window actually goes away — willClose fires
-                // just before isVisible flips.
-                try? await Task.sleep(nanoseconds: 50_000_000)
-                self?.updateActivationPolicy()
-            }
-        }
-
         // Refresh /api/me + vocabulary whenever the app comes back to
         // the foreground. Picks up account-level state changes the user
         // made in the browser — invitation accepted, workspace switched
         // via the dashboard topbar, balance topped up, dictionary
         // entries added/edited/deleted, etc. Both calls are idempotent
         // and cheap, so re-firing them on every foreground is harmless.
+        let center = NotificationCenter.default
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -64,34 +56,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        if !env.preferences.onboardingCompleted {
+        if env.preferences.onboardingCompleted {
+            // First-launch UX: show the unified main window so users
+            // discover the new in-app surface immediately. Skipped
+            // during onboarding because the onboarding window owns
+            // the screen until it's dismissed.
+            showMainWindow()
+        } else {
             showOnboarding()
         }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    /// Switch between `.regular` (Dock icon + Cmd+Tab presence) when any
-    /// user-facing window is on screen, and `.accessory` (menu-bar-only) when
-    /// none are. We filter to `canBecomeKey` + `.normal` level so the HUD
-    /// panel and status-bar items don't accidentally keep us in .regular.
-    private func updateActivationPolicy() {
-        let hasUserWindow = NSApp.windows.contains { w in
-            w.isVisible && w.canBecomeKey && w.level == .normal
-        }
-        let target: NSApplication.ActivationPolicy = hasUserWindow ? .regular : .accessory
-        guard NSApp.activationPolicy() != target else { return }
-        NSApp.setActivationPolicy(target)
+    /// Re-open the main window when the user clicks the Dock icon
+    /// after closing everything. Standard `.regular` app behavior —
+    /// without this the click is a no-op.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMainWindow() }
+        return true
     }
 
     // MARK: - Menu actions
 
     private func handleMenuAction(_ action: MenuBarAction) {
         switch action {
+        case .openMain:
+            showMainWindow()
         case .openSettings:
-            openSettings()
+            showMainWindow(section: .account)
         case .openHistory:
-            showHistory()
+            showMainWindow(section: .history)
+        case .openQuickDictate:
+            showMainWindow(section: .quickDictate)
         case .openOnboarding:
             showOnboarding()
         case .revealLogs:
@@ -105,18 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func openSettings() {
-        if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(env: env)
+    func showMainWindow(section: MainSection? = nil) {
+        if mainWindow == nil {
+            mainWindow = MainWindowController(env: env)
         }
-        settingsWindow?.show()
-    }
-
-    func showHistory() {
-        if historyWindow == nil {
-            historyWindow = HistoryWindowController(env: env)
-        }
-        historyWindow?.show()
+        mainWindow?.show(section: section)
     }
 
     func showOnboarding() {
@@ -125,8 +115,185 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.env.preferences.onboardingCompleted = true
                 self?.onboardingWindow?.close()
                 self?.onboardingWindow = nil
+                // Drop the user into the main window the moment they
+                // finish onboarding so the new surface is the first
+                // thing they see.
+                self?.showMainWindow()
             }
         }
         onboardingWindow?.show()
     }
+
+    // MARK: - App menu (top menu bar)
+
+    /// Install Speakist's top menu bar. Required for `.regular` apps
+    /// to behave correctly — without this the system synthesizes a
+    /// minimal default menu that's missing standard items like Cut /
+    /// Copy / Paste and the app's About / Quit shortcuts. Mac users
+    /// expect Cmd+, to open Settings and Cmd+Q to quit, and Cmd+Tab
+    /// users expect to land on a window with a real menu bar at the
+    /// top of the screen.
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = buildAppMenu()
+        mainMenu.addItem(appMenuItem)
+
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = buildEditMenu()
+        mainMenu.addItem(editMenuItem)
+
+        let viewMenuItem = NSMenuItem()
+        viewMenuItem.submenu = buildViewMenu()
+        mainMenu.addItem(viewMenuItem)
+
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = buildWindowMenu()
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = buildHelpMenu()
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+        NSApp.helpMenu = helpMenu
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    private func buildAppMenu() -> NSMenu {
+        let name = AppIdentity.displayName
+        let menu = NSMenu(title: name)
+
+        menu.addItem(withTitle: "About \(name)",
+                     action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
+
+        let settings = NSMenuItem(title: "Settings…",
+                                  action: #selector(handleAppMenuSettings),
+                                  keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+
+        let checkUpdates = NSMenuItem(title: "Check for Updates…",
+                                      action: #selector(handleAppMenuCheckForUpdates),
+                                      keyEquivalent: "")
+        checkUpdates.target = self
+        menu.addItem(checkUpdates)
+
+        menu.addItem(.separator())
+
+        let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: "Services")
+        services.submenu = servicesMenu
+        NSApp.servicesMenu = servicesMenu
+        menu.addItem(services)
+
+        menu.addItem(.separator())
+
+        menu.addItem(withTitle: "Hide \(name)",
+                     action: #selector(NSApplication.hide(_:)),
+                     keyEquivalent: "h")
+        let hideOthers = NSMenuItem(title: "Hide Others",
+                                    action: #selector(NSApplication.hideOtherApplications(_:)),
+                                    keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        menu.addItem(hideOthers)
+        menu.addItem(withTitle: "Show All",
+                     action: #selector(NSApplication.unhideAllApplications(_:)),
+                     keyEquivalent: "")
+
+        menu.addItem(.separator())
+
+        menu.addItem(withTitle: "Quit \(name)",
+                     action: #selector(NSApplication.terminate(_:)),
+                     keyEquivalent: "q")
+
+        return menu
+    }
+
+    private func buildEditMenu() -> NSMenu {
+        let menu = NSMenu(title: "Edit")
+        menu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        menu.addItem(redo)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        menu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        menu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        menu.addItem(withTitle: "Delete", action: #selector(NSText.delete(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        return menu
+    }
+
+    private func buildViewMenu() -> NSMenu {
+        let menu = NSMenu(title: "View")
+        let quick = NSMenuItem(title: "Quick Dictate",
+                               action: #selector(handleViewQuickDictate),
+                               keyEquivalent: "1")
+        quick.target = self
+        menu.addItem(quick)
+        let history = NSMenuItem(title: "History",
+                                 action: #selector(handleViewHistory),
+                                 keyEquivalent: "2")
+        history.target = self
+        menu.addItem(history)
+        let settings = NSMenuItem(title: "Settings",
+                                  action: #selector(handleViewSettings),
+                                  keyEquivalent: "3")
+        settings.target = self
+        menu.addItem(settings)
+        return menu
+    }
+
+    private func buildWindowMenu() -> NSMenu {
+        let menu = NSMenu(title: "Window")
+        let show = NSMenuItem(title: "Show \(AppIdentity.displayName)",
+                              action: #selector(handleWindowShowMain),
+                              keyEquivalent: "0")
+        show.target = self
+        menu.addItem(show)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Minimize",
+                     action: #selector(NSWindow.performMiniaturize(_:)),
+                     keyEquivalent: "m")
+        menu.addItem(withTitle: "Zoom",
+                     action: #selector(NSWindow.performZoom(_:)),
+                     keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Bring All to Front",
+                     action: #selector(NSApplication.arrangeInFront(_:)),
+                     keyEquivalent: "")
+        return menu
+    }
+
+    private func buildHelpMenu() -> NSMenu {
+        let menu = NSMenu(title: "Help")
+        let onboarding = NSMenuItem(title: "Show Onboarding",
+                                    action: #selector(handleHelpShowOnboarding),
+                                    keyEquivalent: "")
+        onboarding.target = self
+        menu.addItem(onboarding)
+        let logs = NSMenuItem(title: "Reveal Logs in Finder",
+                              action: #selector(handleHelpRevealLogs),
+                              keyEquivalent: "")
+        logs.target = self
+        menu.addItem(logs)
+        return menu
+    }
+
+    // MARK: - Menu selectors
+
+    @objc private func handleAppMenuSettings() { handleMenuAction(.openSettings) }
+    @objc private func handleAppMenuCheckForUpdates() { handleMenuAction(.checkForUpdates) }
+    @objc private func handleViewQuickDictate() { handleMenuAction(.openQuickDictate) }
+    @objc private func handleViewHistory() { handleMenuAction(.openHistory) }
+    @objc private func handleViewSettings() { handleMenuAction(.openSettings) }
+    @objc private func handleWindowShowMain() { handleMenuAction(.openMain) }
+    @objc private func handleHelpShowOnboarding() { handleMenuAction(.openOnboarding) }
+    @objc private func handleHelpRevealLogs() { handleMenuAction(.revealLogs) }
 }

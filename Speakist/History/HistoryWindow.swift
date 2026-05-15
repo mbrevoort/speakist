@@ -2,39 +2,10 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-@MainActor
-final class HistoryWindowController: NSWindowController, NSWindowDelegate {
-    private let env: AppEnvironment
-
-    init(env: AppEnvironment) {
-        self.env = env
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 540),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
-            backing: .buffered, defer: false)
-        window.title = "Speakist — History"
-        window.minSize = NSSize(width: 720, height: 480)
-        window.center()
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
-        window.delegate = self
-
-        let root = HistoryView()
-            .environmentObject(env)
-            .environmentObject(env.historyStore)
-            .environmentObject(env.preferences)
-            .environmentObject(env.correctionStore)
-        window.contentView = NSHostingView(rootView: root)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func show() {
-        NSApp.activate(ignoringOtherApps: true)
-        showWindow(nil)
-    }
-}
-
+/// The history pane is now embedded directly in `MainView` (sidebar
+/// section). The previous standalone window controller was removed
+/// when Speakist consolidated all surfaces into a single main
+/// window.
 struct HistoryView: View {
     @EnvironmentObject var env: AppEnvironment
     @EnvironmentObject var history: HistoryStore
@@ -43,18 +14,17 @@ struct HistoryView: View {
     @State private var selection: String?
 
     var body: some View {
-        NavigationSplitView {
+        // `HSplitView` (not `NavigationSplitView`) so the History pane
+        // composes cleanly inside `MainView`'s outer
+        // `NavigationSplitView`. Nesting two `NavigationSplitView`s on
+        // macOS renders two sidebars side-by-side, which doesn't match
+        // the unified single-window layout we want.
+        HSplitView {
             sidebar
-        } detail: {
-            if let id = selection, let entry = history.entries.first(where: { $0.id == id }) {
-                DetailView(entry: entry)
-                    .id(id)
-            } else {
-                ContentUnavailableView("Nothing selected", systemImage: "text.bubble",
-                                       description: Text("Choose a transcription on the left."))
-            }
+                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+            detail
+                .frame(minWidth: 360)
         }
-        .navigationTitle("History")
     }
 
     private var sidebar: some View {
@@ -82,7 +52,17 @@ struct HistoryView: View {
             }
             .listStyle(.inset)
         }
-        .frame(minWidth: 300)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        if let id = selection, let entry = history.entries.first(where: { $0.id == id }) {
+            DetailView(entry: entry)
+                .id(id)
+        } else {
+            ContentUnavailableView("Nothing selected", systemImage: "text.bubble",
+                                   description: Text("Choose a transcription on the left."))
+        }
     }
 }
 
