@@ -26,7 +26,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // bar icon stays installed for at-a-glance recording state.
         NSApp.setActivationPolicy(.regular)
 
-        installMainMenu()
+        // Install the top menu bar in two stages:
+        //
+        //   1. Defer the first install to the next main-runloop tick
+        //      via `DispatchQueue.main.async`. SwiftUI rebuilds the
+        //      menu from its `Settings` scene on its first scene pass,
+        //      which runs *after* `applicationDidFinishLaunching`
+        //      returns — installing synchronously here gets clobbered.
+        //
+        //   2. Re-install on every `didBecomeActive` (wired below). If
+        //      SwiftUI ever re-renders its scenes (e.g. when the
+        //      Settings window opens/closes), it'll regenerate the
+        //      menu and overwrite ours; the activate-time reinstall
+        //      is our safety net.
+        //
+        // We tried routing menu items through SwiftUI's `.commands`
+        // system, but Button actions on a `Settings` scene only fire
+        // when that scene's window is key, which never happens here
+        // (we use our own `NSWindowController` for the main window).
+        // AppKit-owned `NSApp.mainMenu` is the only reliable path.
+        DispatchQueue.main.async { [weak self] in
+            self?.installMainMenu()
+        }
 
         Analytics.shared.bootstrap()
         env.start()
@@ -51,6 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
+                // Re-install in case SwiftUI rebuilt the menu since
+                // last activation. No-op cost if the menu pointer is
+                // already ours.
+                self.installMainMenu()
                 await self.env.accountManager.refreshIdentity()
                 await self.env.correctionStore.syncFromServer(api: self.env.apiClient)
             }
@@ -126,14 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - App menu (top menu bar)
 
-    /// Install Speakist's top menu bar. Required for `.regular` apps
-    /// to behave correctly — without this the system synthesizes a
-    /// minimal default menu that's missing standard items like Cut /
-    /// Copy / Paste and the app's About / Quit shortcuts. Mac users
-    /// expect Cmd+, to open Settings and Cmd+Q to quit, and Cmd+Tab
-    /// users expect to land on a window with a real menu bar at the
-    /// top of the screen.
-    private func installMainMenu() {
+    /// Build and install Speakist's top menu bar. Called deferred from
+    /// `applicationDidFinishLaunching` (to dodge SwiftUI's initial
+    /// scene pass that overwrites NSApp.mainMenu) and again from every
+    /// `didBecomeActive` notification (as a safety net in case SwiftUI
+    /// regenerates its menu later).
+    func installMainMenu() {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
@@ -170,6 +193,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "About \(name)",
                      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                      keyEquivalent: "")
+        menu.addItem(.separator())
+
+        // First action item in the Speakist menu so the main window is
+        // always one click away — recovery path when the user has
+        // closed the window. ⌘O reads as "open the app" rather than
+        // ⌘N's "create something new", which fits a single-window app.
+        let openMain = NSMenuItem(title: "Open Window",
+                                  action: #selector(handleAppMenuOpenMain),
+                                  keyEquivalent: "o")
+        openMain.target = self
+        menu.addItem(openMain)
+
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…",
@@ -288,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu selectors
 
+    @objc private func handleAppMenuOpenMain() { handleMenuAction(.openMain) }
     @objc private func handleAppMenuSettings() { handleMenuAction(.openSettings) }
     @objc private func handleAppMenuCheckForUpdates() { handleMenuAction(.checkForUpdates) }
     @objc private func handleViewQuickDictate() { handleMenuAction(.openQuickDictate) }

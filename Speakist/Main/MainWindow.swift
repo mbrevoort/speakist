@@ -197,7 +197,14 @@ struct MainView: View {
             .padding(.bottom, 6)
             Divider()
             detailBody
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // Pin to top-leading so the breadcrumb header sits at the
+        // top of the detail pane. Without this the VStack centers
+        // vertically inside `NavigationSplitView`'s detail container
+        // whenever the body (e.g. an HSplitView in HistoryView)
+        // doesn't claim all the available vertical space.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder

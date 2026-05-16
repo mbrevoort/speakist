@@ -102,17 +102,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        // Primary entry point: open the unified main window. Kept at
-        // the top of the menu (above Settings / History) so users who
-        // do find the status item have an obvious "show me the app"
-        // affordance — mirrors what right-clicking the Dock icon
-        // surfaces.
-        let openMain = NSMenuItem(title: "Open \(AppIdentity.displayName)",
-                                  action: #selector(handleOpenMain),
-                                  keyEquivalent: "")
-        openMain.target = self
-        menu.addItem(openMain)
-
+        // Dropping the redundant "Open Speakist" entry that used to
+        // sit here — the top app menu (Speakist › Open Window) and
+        // ⌘O are the canonical recovery path, and the Dock icon plus
+        // any of the section shortcuts below also reopen the window.
         let quickDictate = NSMenuItem(title: "Quick Dictate",
                                       action: #selector(handleOpenQuickDictate),
                                       keyEquivalent: "")

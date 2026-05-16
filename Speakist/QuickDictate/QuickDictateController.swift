@@ -223,6 +223,14 @@ final class QuickDictateController: ObservableObject {
         let providerLabel = providerParts.first ?? "auto"
         let modelLabel = providerParts.count > 1 ? providerParts[1] : ""
 
+        // pasteStatus = "pasted" because Quick Dictate's contract is
+        // "land the text on the clipboard so the user can paste it"
+        // — i.e., the text successfully reached its destination.
+        // The shortcut-driven push-to-talk path uses "clipboard_only"
+        // when its synthetic ⌘V *failed* to insert at the cursor;
+        // surfacing that same status here would flag every Quick
+        // Dictate entry with the ⚠️ "didn't paste" badge in History,
+        // which would be misleading.
         history.save(TranscriptionEntry(
             id: entryID,
             createdAt: Date(),
@@ -233,7 +241,7 @@ final class QuickDictateController: ObservableObject {
             finalTranscript: finalText,
             audioPath: archivedPath,
             targetBundleID: nil,
-            pasteStatus: "clipboard_only",
+            pasteStatus: "pasted",
             transcriptionStatus: "ok",
             errorMessage: nil,
             editedAt: raw != finalText ? Date() : nil))

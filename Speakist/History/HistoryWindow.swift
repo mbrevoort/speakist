@@ -19,12 +19,24 @@ struct HistoryView: View {
         // `NavigationSplitView`. Nesting two `NavigationSplitView`s on
         // macOS renders two sidebars side-by-side, which doesn't match
         // the unified single-window layout we want.
+        //
+        // Sidebar widths are deliberately modest (260 ideal, 220 min)
+        // so the detail column has room to breathe when the outer
+        // workspace sidebar is also visible — otherwise the detail
+        // gets squeezed into a narrow strip on the right.
         HSplitView {
             sidebar
-                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420)
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 340,
+                       maxHeight: .infinity)
             detail
-                .frame(minWidth: 360)
+                .frame(minWidth: 280, maxWidth: .infinity,
+                       maxHeight: .infinity)
         }
+        // Force the split view to claim all available vertical space
+        // in the detail pane — without this it sizes to its content's
+        // intrinsic height and gets vertically centered, which leaves
+        // a giant gap below the breadcrumb header.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sidebar: some View {
@@ -59,9 +71,16 @@ struct HistoryView: View {
         if let id = selection, let entry = history.entries.first(where: { $0.id == id }) {
             DetailView(entry: entry)
                 .id(id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // Frame the empty state to fill the detail column so the
+            // `ContentUnavailableView`'s built-in centering actually
+            // centers — without an explicit fill it lays out at its
+            // intrinsic size and floats to one edge of the splitter
+            // cell.
             ContentUnavailableView("Nothing selected", systemImage: "text.bubble",
                                    description: Text("Choose a transcription on the left."))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

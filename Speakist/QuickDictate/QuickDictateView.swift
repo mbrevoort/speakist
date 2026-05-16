@@ -185,7 +185,7 @@ private struct QuickDictatePane: View {
                 Button {
                     controller.saveAndCopy()
                 } label: {
-                    Label("Copy & save", systemImage: "doc.on.clipboard.fill")
+                    Label("Copy", systemImage: "doc.on.clipboard.fill")
                         .font(.headline)
                         .padding(.horizontal, 8)
                 }
