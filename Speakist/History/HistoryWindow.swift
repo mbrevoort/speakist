@@ -2,39 +2,10 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-@MainActor
-final class HistoryWindowController: NSWindowController, NSWindowDelegate {
-    private let env: AppEnvironment
-
-    init(env: AppEnvironment) {
-        self.env = env
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 540),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
-            backing: .buffered, defer: false)
-        window.title = "Speakist — History"
-        window.minSize = NSSize(width: 720, height: 480)
-        window.center()
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
-        window.delegate = self
-
-        let root = HistoryView()
-            .environmentObject(env)
-            .environmentObject(env.historyStore)
-            .environmentObject(env.preferences)
-            .environmentObject(env.correctionStore)
-        window.contentView = NSHostingView(rootView: root)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func show() {
-        NSApp.activate(ignoringOtherApps: true)
-        showWindow(nil)
-    }
-}
-
+/// The history pane is now embedded directly in `MainView` (sidebar
+/// section). The previous standalone window controller was removed
+/// when Speakist consolidated all surfaces into a single main
+/// window.
 struct HistoryView: View {
     @EnvironmentObject var env: AppEnvironment
     @EnvironmentObject var history: HistoryStore
@@ -43,18 +14,29 @@ struct HistoryView: View {
     @State private var selection: String?
 
     var body: some View {
-        NavigationSplitView {
+        // `HSplitView` (not `NavigationSplitView`) so the History pane
+        // composes cleanly inside `MainView`'s outer
+        // `NavigationSplitView`. Nesting two `NavigationSplitView`s on
+        // macOS renders two sidebars side-by-side, which doesn't match
+        // the unified single-window layout we want.
+        //
+        // Sidebar widths are deliberately modest (260 ideal, 220 min)
+        // so the detail column has room to breathe when the outer
+        // workspace sidebar is also visible — otherwise the detail
+        // gets squeezed into a narrow strip on the right.
+        HSplitView {
             sidebar
-        } detail: {
-            if let id = selection, let entry = history.entries.first(where: { $0.id == id }) {
-                DetailView(entry: entry)
-                    .id(id)
-            } else {
-                ContentUnavailableView("Nothing selected", systemImage: "text.bubble",
-                                       description: Text("Choose a transcription on the left."))
-            }
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 340,
+                       maxHeight: .infinity)
+            detail
+                .frame(minWidth: 280, maxWidth: .infinity,
+                       maxHeight: .infinity)
         }
-        .navigationTitle("History")
+        // Force the split view to claim all available vertical space
+        // in the detail pane — without this it sizes to its content's
+        // intrinsic height and gets vertically centered, which leaves
+        // a giant gap below the breadcrumb header.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sidebar: some View {
@@ -82,7 +64,24 @@ struct HistoryView: View {
             }
             .listStyle(.inset)
         }
-        .frame(minWidth: 300)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        if let id = selection, let entry = history.entries.first(where: { $0.id == id }) {
+            DetailView(entry: entry)
+                .id(id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            // Frame the empty state to fill the detail column so the
+            // `ContentUnavailableView`'s built-in centering actually
+            // centers — without an explicit fill it lays out at its
+            // intrinsic size and floats to one edge of the splitter
+            // cell.
+            ContentUnavailableView("Nothing selected", systemImage: "text.bubble",
+                                   description: Text("Choose a transcription on the left."))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 

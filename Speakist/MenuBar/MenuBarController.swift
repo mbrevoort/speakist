@@ -5,8 +5,10 @@ import SwiftUI
 import KeyboardShortcuts
 
 enum MenuBarAction {
+    case openMain
     case openSettings
     case openHistory
+    case openQuickDictate
     case openOnboarding
     case revealLogs
     case checkForUpdates
@@ -97,15 +99,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: "")
             toggle.target = self
             menu.addItem(toggle)
+            menu.addItem(.separator())
         }
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(handleOpenSettings), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
+        // Dropping the redundant "Open Speakist" entry that used to
+        // sit here — the top app menu (Speakist › Open Window) and
+        // ⌘O are the canonical recovery path, and the Dock icon plus
+        // any of the section shortcuts below also reopen the window.
+        let quickDictate = NSMenuItem(title: "Quick Dictate",
+                                      action: #selector(handleOpenQuickDictate),
+                                      keyEquivalent: "")
+        quickDictate.target = self
+        menu.addItem(quickDictate)
 
-        let history = NSMenuItem(title: "History…", action: #selector(handleOpenHistory), keyEquivalent: "")
+        let history = NSMenuItem(title: "History",
+                                 action: #selector(handleOpenHistory),
+                                 keyEquivalent: "")
         history.target = self
         menu.addItem(history)
+
+        let settings = NSMenuItem(title: "Settings…",
+                                  action: #selector(handleOpenSettings),
+                                  keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
 
         menu.addItem(.separator())
 
@@ -133,6 +150,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     // MARK: - Menu handlers
 
+    @objc private func handleOpenMain() { dispatch(.openMain) }
+    @objc private func handleOpenQuickDictate() { dispatch(.openQuickDictate) }
     @objc private func handleOpenSettings() { dispatch(.openSettings) }
     @objc private func handleOpenHistory() { dispatch(.openHistory) }
     @objc private func handleOpenOnboarding() { dispatch(.openOnboarding) }

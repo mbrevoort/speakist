@@ -19,99 +19,11 @@ struct BrandHeader: View {
     }
 }
 
-enum SettingsSection: String, CaseIterable, Identifiable {
-    case account, general, shortcuts, audio, transcription, polish, vocabulary, history, about
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .account: return "Account"
-        case .general: return "General"
-        case .shortcuts: return "Shortcuts"
-        case .audio: return "Audio"
-        case .transcription: return "Transcription"
-        case .polish: return "Polish"
-        case .vocabulary: return "Vocabulary"
-        case .history: return "History"
-        case .about: return "About"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .account: return "person.crop.circle"
-        case .general: return "gear"
-        case .shortcuts: return "keyboard"
-        case .audio: return "mic"
-        case .transcription: return "waveform"
-        case .polish: return "sparkles"
-        case .vocabulary: return "character.book.closed"
-        case .history: return "clock.arrow.circlepath"
-        case .about: return "info.circle"
-        }
-    }
-}
-
-struct SettingsWindow: View {
-    @State private var selection: SettingsSection = .account
-
-    var body: some View {
-        NavigationSplitView {
-            VStack(alignment: .leading, spacing: 0) {
-                BrandHeader()
-                    .padding(.horizontal, 12)
-                    .padding(.top, 14)
-                    .padding(.bottom, 8)
-                Divider()
-                List(SettingsSection.allCases, selection: $selection) { section in
-                    NavigationLink(value: section) {
-                        Label(section.title, systemImage: section.systemImage)
-                    }
-                }
-                .listStyle(.sidebar)
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
-        } detail: {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("Speakist")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.secondary)
-                    Text("›")
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text(selection.title)
-                        .font(.system(size: 20, weight: .semibold))
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 6)
-                Divider()
-                detailView
-            }
-            .frame(minWidth: 500)
-        }
-        .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 720, minHeight: 520)
-        .tint(.speakistPeach)
-    }
-
-    @ViewBuilder
-    private var detailView: some View {
-        switch selection {
-        case .account: AccountSettingsView()
-        case .general: GeneralSettingsView()
-        case .shortcuts: ShortcutsSettingsView()
-        case .audio: AudioSettingsView()
-        case .transcription: TranscriptionSettingsView()
-        case .polish: PolishSettingsView()
-        case .vocabulary: VocabularySettingsView()
-        case .history: HistorySettingsView()
-        case .about: AboutSettingsView()
-        }
-    }
-}
+// The settings detail views (`AccountSettingsView`, `GeneralSettingsView`,
+// etc.) below are now mounted directly by `MainView`'s sidebar
+// dispatcher. The earlier `SettingsWindow` wrapper + `SettingsSection`
+// enum were removed when the standalone Settings window was folded
+// into the unified main window.
 
 // MARK: - Account
 

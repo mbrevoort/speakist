@@ -83,7 +83,12 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
-        LSUIElement: true
+        # Speakist is a regular Dock + Cmd+Tab app. The status bar
+        # icon is still installed at launch for at-a-glance recording
+        # state, but `LSUIElement: false` ensures users who don't
+        # find the menu bar icon can still reach the app via the
+        # Dock, Cmd+Tab, and the standard top menu bar.
+        LSUIElement: false
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: "© 2026 Mike Brevoort. All rights reserved."
         NSMicrophoneUsageDescription: "Speakist listens when you hold your dictation shortcut and transcribes what you say."
