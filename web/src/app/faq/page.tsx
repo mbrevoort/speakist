@@ -118,10 +118,10 @@ const QUESTIONS: QA[] = [
         experience really good. If you&apos;d like to vote for another
         platform, email{" "}
         <a
-          href="mailto:hello@brevoortstudio.com"
+          href="mailto:hello@speakist.ai"
           className="text-peach-deep hover:underline underline-offset-4"
         >
-          hello@brevoortstudio.com
+          hello@speakist.ai
         </a>{" "}
         — we read everything.
       </>
@@ -135,10 +135,10 @@ const QUESTIONS: QA[] = [
         charged in error, hit a long outage, or otherwise feel something
         went wrong, email{" "}
         <a
-          href="mailto:hello@brevoortstudio.com"
+          href="mailto:hello@speakist.ai"
           className="text-peach-deep hover:underline underline-offset-4"
         >
-          hello@brevoortstudio.com
+          hello@speakist.ai
         </a>
         . We review case-by-case and we&apos;d rather you be happy than
         right about a clause.
@@ -163,7 +163,7 @@ export default function FAQPage() {
             <p className="mt-4 text-base text-muted-foreground">
               Anything we missed?{" "}
               <a
-                href="mailto:hello@brevoortstudio.com"
+                href="mailto:hello@speakist.ai"
                 className="text-peach-deep hover:underline underline-offset-4"
               >
                 Ask us directly
