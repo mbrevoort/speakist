@@ -161,7 +161,7 @@ export default function TermsPage() {
                 <strong>Refunds.</strong> All credit purchases are{" "}
                 <strong>final and non-refundable</strong>, except where
                 required by law. If you believe you were charged in
-                error, contact us at hello@brevoortstudio.com and we will
+                error, contact us at hello@speakist.ai and we will
                 review on a case-by-case basis. We may, in our
                 discretion, issue refunds for billing errors, extended
                 service outages, or fraud.
@@ -363,10 +363,10 @@ export default function TermsPage() {
               <P>
                 Questions? Email{" "}
                 <a
-                  href="mailto:hello@brevoortstudio.com"
+                  href="mailto:hello@speakist.ai"
                   className="text-peach-deep hover:underline underline-offset-4"
                 >
-                  hello@brevoortstudio.com
+                  hello@speakist.ai
                 </a>
                 .
               </P>

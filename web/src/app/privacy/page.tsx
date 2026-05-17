@@ -298,7 +298,7 @@ export default function PrivacyPage() {
                 </LI>
                 <LI>
                   <strong>Delete</strong> your account by contacting us at
-                  hello@brevoortstudio.com or via your settings
+                  hello@speakist.ai or via your settings
                 </LI>
                 <LI>
                   <strong>Export</strong> your usage and vocabulary data on
@@ -375,10 +375,10 @@ export default function PrivacyPage() {
               <P>
                 Questions or requests? Email{" "}
                 <a
-                  href="mailto:hello@brevoortstudio.com"
+                  href="mailto:hello@speakist.ai"
                   className="text-peach-deep hover:underline underline-offset-4"
                 >
-                  hello@brevoortstudio.com
+                  hello@speakist.ai
                 </a>
                 .
               </P>

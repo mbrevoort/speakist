@@ -773,26 +773,34 @@ struct AboutSettingsView: View {
                         .font(.callout)
                         .foregroundColor(.secondary)
                     HStack(spacing: 12) {
+                        // Speakist's marketing site, privacy policy,
+                        // and terms of service all live on
+                        // speakist.ai now. The pre-launch
+                        // `brevoortstudio.com` URLs (and the matching
+                        // `hello@brevoortstudio.com` address) were a
+                        // placeholder from when the studio site
+                        // fronted everything; the product domain
+                        // is the canonical home.
                         Button("Website") {
-                            if let url = URL(string: "https://brevoortstudio.com") {
+                            if let url = URL(string: "https://speakist.ai") {
                                 NSWorkspace.shared.open(url)
                             }
                         }
                         .buttonStyle(.link)
                         Button("Contact") {
-                            if let url = URL(string: "mailto:hello@brevoortstudio.com") {
+                            if let url = URL(string: "mailto:hello@speakist.ai") {
                                 NSWorkspace.shared.open(url)
                             }
                         }
                         .buttonStyle(.link)
                         Button("Privacy") {
-                            if let url = URL(string: "https://brevoortstudio.com/privacy") {
+                            if let url = URL(string: "https://speakist.ai/privacy") {
                                 NSWorkspace.shared.open(url)
                             }
                         }
                         .buttonStyle(.link)
                         Button("Terms") {
-                            if let url = URL(string: "https://brevoortstudio.com/terms") {
+                            if let url = URL(string: "https://speakist.ai/terms") {
                                 NSWorkspace.shared.open(url)
                             }
                         }
