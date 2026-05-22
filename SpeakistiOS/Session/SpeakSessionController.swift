@@ -39,6 +39,15 @@ final class SpeakSessionController: ObservableObject {
     /// with the history entry if the keyboard was able to sniff it.
     private var currentHostBundleID: String?
 
+    /// `UIApplication.beginBackgroundTask` identifier held for the
+    /// duration of an upload+transcribe round-trip. The user is
+    /// typically already back in the host app's text field when this
+    /// starts, so the containing app is in the background; without
+    /// this assertion iOS suspends us within ~30s and the in-flight
+    /// URLSession dies, losing the response. `.invalid` whenever we
+    /// don't currently hold the assertion.
+    private var transcriptionBgTaskID: UIBackgroundTaskIdentifier = .invalid
+
     private let history: HistoryStore
     private let tokenProvider: () -> String?
     private let baseURL: URL
@@ -214,7 +223,19 @@ final class SpeakSessionController: ObservableObject {
         pushStatusToSharedDefaults()
         DarwinNotifier.post(.appStateChanged)
 
+        // Request background runtime up-front so iOS keeps the
+        // containing app alive long enough to finish the upload +
+        // transcription round-trip. The keyboard extension can't do
+        // the network call itself (iOS forbids it from the mic side),
+        // so the user is almost always in another app's text field by
+        // the time this fires — meaning we're already backgrounded
+        // and on the suspend countdown. iOS grants ~30s of extra
+        // runtime, which combined with the 120s URLSession ceiling
+        // covers the common slow-cellular case.
+        beginTranscriptionBackgroundTask()
+
         Task {
+            defer { self.endTranscriptionBackgroundTask() }
             do {
                 let audioURL = try await recorder.stop()
                 Logger.shared.info("recorded \(audioURL.lastPathComponent)")
@@ -226,6 +247,29 @@ final class SpeakSessionController: ObservableObject {
                 self.pushStatusToSharedDefaults()
             }
         }
+    }
+
+    private func beginTranscriptionBackgroundTask() {
+        guard transcriptionBgTaskID == .invalid else { return }
+        // UIKit guarantees the expiration handler runs on the main
+        // thread, so `MainActor.assumeIsolated` is sound — we just
+        // can't prove it at the type level because the closure is
+        // non-isolated. iOS calls the handler when it's about to
+        // forcibly suspend us; we MUST end the task there or the
+        // app gets terminated rather than just suspended.
+        transcriptionBgTaskID = UIApplication.shared.beginBackgroundTask(withName: "speakist.transcribe") { [weak self] in
+            MainActor.assumeIsolated {
+                Logger.shared.warn("transcription background-task assertion expired before completion")
+                self?.endTranscriptionBackgroundTask()
+            }
+        }
+    }
+
+    private func endTranscriptionBackgroundTask() {
+        let id = transcriptionBgTaskID
+        guard id != .invalid else { return }
+        transcriptionBgTaskID = .invalid
+        UIApplication.shared.endBackgroundTask(id)
     }
 
     private func transcribeAndPublish(audioURL: URL) async {
