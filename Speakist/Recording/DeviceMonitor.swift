@@ -28,6 +28,16 @@ struct AudioInputDevice: Identifiable, Hashable {
 final class DeviceMonitor: ObservableObject {
     @Published private(set) var inputs: [AudioInputDevice] = []
 
+    /// Fires when the system's default input or output device changes
+    /// (user picked a new device in System Settings, plugged in a USB
+    /// headset, BT headphones connected, etc.). `AudioRecorder`
+    /// subscribes to invalidate its prewarmed engine — the engine's
+    /// `inputNode` is bound to a specific HAL device at prewarm time,
+    /// and resuming on a stale device deadlocks inside the HAL
+    /// handshake. Coalesced with refresh() so subscribers see the
+    /// updated `inputs` list when they react.
+    let routingChanged = PassthroughSubject<Void, Never>()
+
     private var listenerInstalled = false
 
     func start() {
@@ -130,12 +140,32 @@ final class DeviceMonitor: ObservableObject {
     private func installListener() {
         guard !listenerInstalled else { return }
         listenerInstalled = true
-        var addr = AudioObjectPropertyAddress(
+        var devicesAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main) { [weak self] _, _ in
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddr, DispatchQueue.main) { [weak self] _, _ in
             Task { @MainActor in self?.refresh() }
+        }
+
+        // Default-device flips fire here even when the device list
+        // didn't change (e.g. the user picks a different mic in
+        // System Settings) and also when the list did change
+        // (headphones plugged in, BT connected). Both cases must
+        // invalidate the recorder's prewarmed engine; the devices
+        // listener alone misses the System-Settings case.
+        for selector in [kAudioHardwarePropertyDefaultInputDevice,
+                         kAudioHardwarePropertyDefaultOutputDevice] {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: selector,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main) { [weak self] _, _ in
+                Task { @MainActor in
+                    self?.refresh()
+                    self?.routingChanged.send()
+                }
+            }
         }
     }
 }

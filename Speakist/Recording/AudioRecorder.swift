@@ -90,6 +90,17 @@ final class AudioRecorder: ObservableObject {
     /// stay warm; `start()` resets it for a clean ring.
     private var spectrumAnalyzer = SpectrumAnalyzer(fftSize: 512, sampleRate: 16_000)
 
+    /// NotificationCenter token for `AVAudioEngineConfigurationChange`
+    /// on the current engine. The notification fires when AVAudioEngine
+    /// decides its routing has become invalid — typically because the
+    /// system default device flipped underneath us. Re-installed each
+    /// time `engine` is replaced; nil between installations.
+    private var configChangeObserver: NSObjectProtocol?
+    /// Combine subscription to `DeviceMonitor.routingChanged`. Holds
+    /// the routing-change handler alive for the lifetime of the
+    /// recorder.
+    private var routingChangeCancellable: AnyCancellable?
+
     private let targetFormat: AVAudioFormat = {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
     }()
@@ -97,6 +108,25 @@ final class AudioRecorder: ObservableObject {
     init(preferences: Preferences, deviceMonitor: DeviceMonitor) {
         self.preferences = preferences
         self.deviceMonitor = deviceMonitor
+        installEngineConfigObserver()
+        // React to system default-device flips by invalidating the
+        // prewarmed engine. The engine binds to a specific HAL
+        // device at prewarm time; if the user plugs/unplugs
+        // headphones or changes the default in System Settings, the
+        // engine's HAL handle goes stale and the next start() can
+        // wedge inside prepare()/start() on the main thread —
+        // before the 5s engine-start timeout ever fires.
+        routingChangeCancellable = deviceMonitor.routingChanged
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                Task { @MainActor in self?.handleRoutingChange() }
+            }
+    }
+
+    deinit {
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: - Prewarm
@@ -355,6 +385,7 @@ final class AudioRecorder: ObservableObject {
             engine = AVAudioEngine()
             engineQueue = AudioRecorder.makeEngineQueue()
             didPrewarm = false
+            installEngineConfigObserver()
             queueRef.async {
                 engineRef.stop()
                 if let au = audioUnit {
@@ -499,21 +530,71 @@ final class AudioRecorder: ObservableObject {
     }
 
     /// Abandon the current AVAudioEngine + serial queue and create
-    /// fresh ones. Used to recover from a wedged `engine.start()` —
-    /// when the HAL deadlocks, the hung dispatch block keeps the
-    /// queue blocked, so any work we'd dispatch behind it would also
-    /// hang. The old instances become zombies that get deallocated
-    /// whenever the wedged operation eventually returns (which may
-    /// be never, if Core Audio doesn't time out internally — that's
-    /// a small memory leak we accept as the price of recovery).
+    /// fresh ones. Used in two recovery scenarios:
+    ///   * A wedged `engine.start()` (5s timeout fired) — the hung
+    ///     dispatch block keeps the old queue blocked, so we have to
+    ///     swap to a fresh queue or any new work would also hang.
+    ///   * A routing change (default input/output device flipped, or
+    ///     `AVAudioEngineConfigurationChange` fired) — the prewarmed
+    ///     engine's HAL handle is stale, and the next start() would
+    ///     deadlock on the synchronous HAL calls in `start()` that
+    ///     run before the timeout-wrapped `engine.start()`.
+    ///
+    /// The old instances become zombies that get deallocated whenever
+    /// the wedged operation eventually returns (which may be never if
+    /// Core Audio doesn't time out internally — that's a small memory
+    /// leak we accept as the price of recovery).
     ///
     /// `didPrewarm` is reset so the *next* press pays the full
-    /// cold-start to re-establish the HAL on the fresh engine.
+    /// cold-start to re-establish the HAL on the fresh engine. The
+    /// `AVAudioEngineConfigurationChange` observer is re-bound to the
+    /// new engine so we keep catching subsequent routing changes.
     @MainActor
     private func resetAudioStack() {
         engine = AVAudioEngine()
         engineQueue = Self.makeEngineQueue()
         didPrewarm = false
+        installEngineConfigObserver()
+    }
+
+    /// (Re)install the `AVAudioEngineConfigurationChange` observer on
+    /// the current `engine`. AVFoundation posts this notification when
+    /// the engine decides its routing is no longer valid (typically
+    /// because the default input/output device changed). We treat it
+    /// the same as the Core Audio default-device listener: drop the
+    /// prewarmed engine and let the next press cold-start on a fresh
+    /// one. Belt-and-suspenders coverage — the property listener in
+    /// `DeviceMonitor` catches most cases, but AVAudioEngine sometimes
+    /// reports invalidation for routing edges that don't surface as a
+    /// default-device change (e.g. mid-stream device disconnect).
+    private func installEngineConfigObserver() {
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleRoutingChange() }
+        }
+    }
+
+    /// Drop the prewarmed engine in response to a system audio
+    /// routing change. No-op while a recording is live — yanking the
+    /// engine mid-tap would corrupt the in-flight WAV; AVAudioEngine
+    /// will surface its own error if the route change actually broke
+    /// the active session, and the user can press the shortcut again
+    /// to recover.
+    @MainActor
+    private func handleRoutingChange() {
+        guard !isRecording else {
+            Logger.shared.warn("Audio routing changed during active recording; leaving engine in place")
+            return
+        }
+        guard didPrewarm else { return }
+        Logger.shared.info("Audio routing changed — invalidating prewarmed engine so next press rebinds to current default device")
+        resetAudioStack()
     }
 
     /// Race `op` against a sleep. Throws `AudioStartTimeout` if the
