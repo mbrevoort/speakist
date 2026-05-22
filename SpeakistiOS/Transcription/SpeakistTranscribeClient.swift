@@ -39,7 +39,14 @@ struct SpeakistTranscribeClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 30
+        // 120s ceiling — `timeoutInterval` governs the full request
+        // lifetime including the server's response wait, not just
+        // connect. On slow cellular a 60-second WAV can easily take
+        // 30-60s to upload, then the server pays another few seconds
+        // for the Whisper round-trip. The previous 30s budget was
+        // dropping legitimate uploads as TranscriptionError.network
+        // before the transcript ever came back.
+        request.timeoutInterval = 120
         request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.setValue(transcriptionClientId, forHTTPHeaderField: "X-Transcription-Id")
