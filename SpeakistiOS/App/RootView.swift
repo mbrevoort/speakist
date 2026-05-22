@@ -29,7 +29,15 @@ struct RootView: View {
                     .zIndex(10)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: session.isActivatingOrListening)
+        // Snappier fade on the overlay so the perceived gap between
+        // "tapped Start in the keyboard" and "purple overlay visible"
+        // is the cold-launch cost only — not 200ms of SwiftUI easing
+        // on top. The plum launch screen (UILaunchScreen.UIColorName
+        // = LaunchBackground) already paints the same background
+        // color the overlay uses, so the user sees plum from the
+        // first frame; this transition only times the inner waveform
+        // and labels fading in.
+        .animation(.easeOut(duration: 0.08), value: session.isActivatingOrListening)
         .tint(.speakistPeach)
     }
 }

@@ -686,10 +686,31 @@ final class KeyboardViewController: UIInputViewController {
                 displayMode = .typing
             }
         case .activating:
-            // Session armed (audio session set up, mic warm) but not
-            // capturing yet — show begin speaking unless we're already
-            // recording.
-            if displayMode != .listening { displayMode = .beginSpeaking }
+            // Session is armed (mic warm) but not yet capturing. The
+            // main app now auto-promotes to .listening as soon as the
+            // user backgrounds it (the swipe-back gesture), so any
+            // .activating reading the keyboard sees is one of:
+            //
+            //   A. The kickoff is in flight (.startSession from a
+            //      cold launch, .beginSpeaking from an explicit
+            //      Start Flow tap) and the user hasn't swiped back
+            //      yet — keep that mode so the existing pill stays
+            //      on screen.
+            //   B. A previous dictation just finished and the app
+            //      re-armed for the next round — the keyboard is in
+            //      .typing and should STAY there so the user can
+            //      type or tap Start Flow when they're ready. The
+            //      next tap hot-paths straight to listening with no
+            //      app switch (see beginSpeakistFlow).
+            //   C. We're racing the auto-promote and already flipped
+            //      to .listening — leave that alone too.
+            //
+            // The only mode that doesn't make sense to leave alone is
+            // .transient (an error/transcribing banner that's now
+            // stale because we've re-armed). Drop those to typing.
+            if displayMode == .transient {
+                displayMode = .typing
+            }
         case .listening:
             displayMode = .listening
         case .transcribing:
