@@ -345,7 +345,15 @@ targets:
           - arm64
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        UILaunchScreen: {}
+        # Plum-tinted launch screen — same color as the listening
+        # overlay so a cold-launch via `speakist://start-session`
+        # hands off directly to the overlay without a white flash in
+        # between. Trims the perceived "tap → listening" latency to
+        # roughly the cost of waiting for the SwiftUI overlay to
+        # render, since the user already sees plum while the runtime
+        # is still spinning up.
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         # URL scheme so the keyboard can bring us foreground. All four
         # channel schemes registered; resolver in URLSchemeBridge picks
         # the one matching the current build.

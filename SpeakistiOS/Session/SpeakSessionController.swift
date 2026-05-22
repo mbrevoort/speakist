@@ -64,6 +64,14 @@ final class SpeakSessionController: ObservableObject {
         self.tokenProvider = tokenProvider
         wireDarwinObservers()
         wireSystemObservers()
+        // On cold launches via the keyboard's `speakist://start-session`
+        // URL, consume the pending-request flag immediately rather than
+        // waiting for `didBecomeActiveNotification` later in the
+        // foreground transition. That moves the `.activating` flip to
+        // BEFORE the first SwiftUI body computation, so RootView's
+        // first render already shows ListeningOverlay — no flash of
+        // the home view between launch and overlay.
+        consumePendingKeyboardRequest()
         pushStatusToSharedDefaults()
     }
 
@@ -134,6 +142,16 @@ final class SpeakSessionController: ObservableObject {
     // MARK: - State transitions
 
     func startActivating(hostBundleID: String?, tone: String?) {
+        // Idempotency guard. The cold-launch path now pre-arms in
+        // `init` (via `consumePendingKeyboardRequest`), and `.onOpenURL`
+        // arrives a tick later and re-invokes us via `handle(route:)`.
+        // Without this we'd tear down a perfectly good recorder and
+        // re-allocate, leaking the previous tap. If the second call
+        // brings a fresher host bundle ID, capture it.
+        if status == .activating || status == .listening {
+            if let hostBundleID { self.currentHostBundleID = hostBundleID }
+            return
+        }
         status = .activating
         lastError = nil
         sessionExpiresAt = Date().addingTimeInterval(defaultSessionDuration)
@@ -492,6 +510,42 @@ final class SpeakSessionController: ObservableObject {
             }
         }
         systemObservers.append(token)
+
+        // Auto-start recording the moment the user swipes back to the
+        // host app. Previously the user had to swipe back AND then tap
+        // "Begin Speaking" in the keyboard — two friction points for
+        // the same intent (the user came here to dictate). The only
+        // reason someone would land on `.activating` and then leave
+        // Speakist is to go talk into another app, so we treat the
+        // background transition as the implicit "I'm ready" signal.
+        //
+        // We hook `didEnterBackgroundNotification`, NOT
+        // `willResignActiveNotification` — the latter also fires for
+        // Control Center, the notification shade, and incoming-call
+        // banners, which are NOT swipe-backs and should leave the
+        // session armed-but-not-recording. `didEnterBackground` only
+        // fires on an actual app switch.
+        let bgToken = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.autoPromoteOnBackgroundIfArmed()
+            }
+        }
+        systemObservers.append(bgToken)
+    }
+
+    /// If the user swiped back while we're still in `.activating`,
+    /// promote straight to `.listening` so they don't have to tap
+    /// Begin Speaking in the keyboard. No-op from any other state —
+    /// `.listening` is already capturing, `.transcribing/.done` are
+    /// post-recording, `.idle/.error` mean there's nothing to start.
+    private func autoPromoteOnBackgroundIfArmed() {
+        guard status == .activating else { return }
+        Logger.shared.info("auto-promote: app backgrounded while armed → listening")
+        startRecordingIfReady()
     }
 
     private func handleAudioInterruption(_ notification: Notification) {
