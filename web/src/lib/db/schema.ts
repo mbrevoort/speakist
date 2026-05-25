@@ -591,6 +591,27 @@ export const transcriptionFeedback = sqliteTable(
     audioSeconds: integer("audio_seconds", { mode: "number" }),
     language: text("language"),
 
+    // Snapshot of the request context that was active at the original
+    // /api/transcribe call. The bench / evaluation pipeline replays a
+    // synced fixture against the providers, and any difference between
+    // "what the client sent then" and "what we send during the bench"
+    // is a confound — most notably for vocab-bleed bugs, which depend
+    // on the keyterm list the upstream STT was biased on.
+    //
+    // `keytermsJson` is first-class so we can index/query it later
+    // ("show me all feedback where vocab contained 'Stripe'"). The
+    // value is a JSON-encoded array of strings; NULL = client did
+    // not report a keyterm list (current iOS state). Empty array =
+    // client explicitly said "no vocab in scope".
+    keytermsJson: text("keyterms_json"),
+
+    // Everything else the client sent on /api/transcribe (replace
+    // rules + the boolean toggles: dictation, fillerWords,
+    // measurements, profanityFilter, detectLanguage) lives here as
+    // a JSON blob. Rarely queried, occasionally diagnostic, future-
+    // proof against new transcribe options without a migration.
+    transcriptionOptionsJson: text("transcription_options_json"),
+
     failureKind: text("failure_kind").$type<
       "wrong_word" | "punctuation" | "both" | "other"
     >(),

@@ -130,7 +130,7 @@ const getArgsSchema = z.object({ id: z.string().min(1) });
 export const getFeedbackTool: McpToolDefinition = {
   name: "get_feedback",
   description:
-    "Fetch full detail for one feedback report: raw STT (pre-polish), polished delivered text, what the user said it should be, plus provider/model/polish_mode/audio metadata. The 3 text fields are the input the agent uses to propose a polish-prompt edit.",
+    "Fetch full detail for one feedback report: raw STT (pre-polish), polished delivered text, what the user said it should be, plus provider/model/polish_mode/language/audio metadata AND the per-request context snapshot (keyterms + transcription_options) that was active at the original /api/transcribe call. The 3 text fields drive polish-prompt edits; the context snapshot lets the STT bench replay the audio in the same config the user had.",
   scope: "feedback:read",
   inputSchema: {
     type: "object",
@@ -164,6 +164,15 @@ export const getFeedbackTool: McpToolDefinition = {
             polish_applied: row.polishApplied,
             polish_mode: row.polishMode,
             audio_seconds: row.audioSeconds,
+            language: row.language,
+            // Request-context snapshot from the original transcribe
+            // call. `keyterms === null` means the submitting client
+            // didn't report a list (older builds, current iOS).
+            // `keyterms === []` means it explicitly said "empty".
+            // `transcription_options === null` likewise distinguishes
+            // "not reported" from "reported as empty object".
+            keyterms: row.keyterms,
+            transcription_options: row.transcriptionOptions,
             has_audio: row.hasAudio,
             status: row.status,
             resolution: row.resolution,
