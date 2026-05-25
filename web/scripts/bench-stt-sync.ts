@@ -244,7 +244,15 @@ interface FeedbackFullRecord {
   status: string;
   resolution: string | null;
   reviewed_at: string | null;
-  language?: string | null;
+  language: string | null;
+  /** Vocab list active at recording time. `null` = client didn't report
+   *  (older builds); `[]` = explicitly empty. We faithfully preserve
+   *  the distinction down into the sidecar. */
+  keyterms: string[] | null;
+  /** Snapshot of the rest of the transcribe-request options (dictation,
+   *  fillerWords, measurements, profanityFilter, detectLanguage,
+   *  replaceRules). Open shape; forward-compatible. */
+  transcription_options: Record<string, unknown> | null;
 }
 
 async function listFeedback(
@@ -331,9 +339,17 @@ interface FeedbackSidecar {
   description: string;
   groundTruth: string;
   language?: string | null;
-  /** Original transcription context. Not consumed by bench-stt.ts but
-   *  preserved for human triage and for future bench enhancements
-   *  (e.g. "replay this fixture against the same provider/model"). */
+  /** Surface keyterms at the top level — bench-stt.ts reads this and
+   *  passes it through as TranscriptionInput.keyterms when calling
+   *  Deepgram/Groq, so vocab-bleed bugs reproduce in the bench exactly
+   *  the way they did for the user. Omitted (rather than `null`) when
+   *  the feedback row didn't capture keyterms — bench-stt.ts then
+   *  transcribes with no keyterm hint set, which is the only honest
+   *  fallback. */
+  keyterms?: string[];
+  /** Original transcription context. Embedded for human triage and for
+   *  future bench enhancements (e.g. "replay this fixture against the
+   *  same provider/model"). bench-stt.ts ignores this block. */
   feedback: {
     id: string;
     createdAt: string;
@@ -347,6 +363,9 @@ interface FeedbackSidecar {
     audioSeconds: number | null;
     userNote: string | null;
     transcriptionClientId: string;
+    /** Decoded transcription_options blob from the feedback row, or null
+     *  if the submitting client didn't report a snapshot. */
+    transcriptionOptions: Record<string, unknown> | null;
   };
   expects: Array<{ kind: string; [k: string]: unknown }>;
 }
@@ -363,6 +382,12 @@ function buildSidecar(full: FeedbackFullRecord, defaultMaxWer: number): Feedback
     description,
     groundTruth: full.expected_text,
     language: full.language ?? undefined,
+    // Only set top-level keyterms when the feedback row actually
+    // captured them. `null` (older client, didn't report) becomes
+    // `undefined` here so bench-stt.ts's fixture loader sees the
+    // field as absent rather than empty — which it would otherwise
+    // interpret as "explicitly no keyterms".
+    keyterms: full.keyterms ?? undefined,
     feedback: {
       id: full.id,
       createdAt: full.created_at,
@@ -376,6 +401,7 @@ function buildSidecar(full: FeedbackFullRecord, defaultMaxWer: number): Feedback
       audioSeconds: full.audio_seconds,
       userNote: full.user_note,
       transcriptionClientId: full.transcription_client_id,
+      transcriptionOptions: full.transcription_options,
     },
     expects: [{ kind: "max_wer", ratio: defaultMaxWer }],
   };

@@ -107,10 +107,50 @@ pnpm bench:stt:sync -- --dry-run
 ```
 
 Re-runs are idempotent: audio bytes are cached on disk, sidecars are
-always refreshed from the latest MCP response. Vocab/keyterm context is
-NOT captured by the feedback table today, so synced fixtures run with no
-keyterms set — for vocab-bleed reproduction you'll still want a few
-hand-curated fixtures alongside.
+always refreshed from the latest MCP response.
+
+**Per-request context capture**: each feedback row carries the vocab
+list (`keyterms_json`) and the transcribe-option snapshot
+(`transcription_options_json`) that were active at the time the user
+reported it. Mac populates both from the same `VocabularyBuilder` +
+`Preferences` source that drives real `/api/transcribe` calls, so a
+synced fixture replays in the bench with the exact provider config
+that produced the bug — including for vocab-bleed reproduction. iOS
+doesn't yet have a vocab store or option toggles, so iOS-submitted
+rows arrive with `keyterms: []` and all-false options (a faithful
+record of what iOS actually sends to STT).
+
+The sync writes `keyterms` at the sidecar's top level (where
+`bench-stt.ts` reads it from). The full per-request snapshot is
+preserved inside the sidecar's `feedback` block for human triage:
+
+```jsonc
+{
+  "groundTruth": "...",
+  "language": "en",
+  "keyterms": ["Stripe", "Anthropic", "Mytra"],   // → bench input
+  "feedback": {
+    "id": "...",
+    "transcriptionOptions": {                     // → triage only
+      "dictation": true,
+      "fillerWords": false,
+      "measurements": false,
+      "profanityFilter": false,
+      "detectLanguage": false,
+      "replaceRules": [
+        { "find": "stripe", "replacement": "Stripe" }
+      ]
+    },
+    ...
+  }
+}
+```
+
+Older feedback rows submitted before this capture went live arrive
+with `keyterms: null` / `transcriptionOptions: null`. The sync omits
+the top-level `keyterms` field in those cases rather than writing
+`null`, so the bench falls back to "transcribe with no keyterm hint"
+— which is also what the upstream STT would have done at the time.
 
 ## Running
 

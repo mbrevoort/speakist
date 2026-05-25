@@ -241,6 +241,27 @@ struct ReportFeedbackSheet: View {
             }
         }
 
+        // Per-request context snapshot — same source-of-truth as
+        // TranscriptionService.buildClient() / process() use when
+        // building a real /api/transcribe call, so the values we record
+        // match what the user actually had active. Caller-time values
+        // (see SpeakistAPIClient.submitFeedback docs for the caveat;
+        // for our typical "report within minutes" flow the drift is
+        // ~zero).
+        let keyterms = VocabularyBuilder.keyterms(from: env.correctionStore)
+        let replaceRules = VocabularyBuilder.replaceRules(from: env.correctionStore)
+        let options = SpeakistAPIClient.TranscriptionOptionsPayload(
+            dictation: env.preferences.dictationMode,
+            fillerWords: env.preferences.includeFillerWords,
+            measurements: env.preferences.convertMeasurements,
+            profanityFilter: env.preferences.maskProfanity,
+            detectLanguage: env.preferences.autoDetectLanguage,
+            replaceRules: replaceRules.map {
+                .init(find: $0.find, replacement: $0.replacement)
+            }
+        )
+        let language = env.preferences.language.isEmpty ? nil : env.preferences.language
+
         do {
             let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
             _ = try await env.apiClient.submitFeedback(
@@ -250,13 +271,18 @@ struct ReportFeedbackSheet: View {
                 expectedText: expectedText.trimmingCharacters(in: .whitespacesAndNewlines),
                 failureKind: failureKind,
                 userNote: trimmedNote.isEmpty ? nil : trimmedNote,
-                audio: audioData
+                audio: audioData,
+                language: language,
+                keyterms: keyterms,
+                transcriptionOptions: options
             )
             env.historyStore.markReported(id: entry.id)
             Analytics.shared.capture("feedback_submitted", properties: [
                 "platform": "mac",
                 "audio_shared": audioData != nil,
                 "failure_kind": failureKind?.rawValue ?? "unspecified",
+                "keyterms_count": keyterms.count,
+                "replace_rules_count": replaceRules.count,
             ])
             dismiss()
         } catch SpeakistAPIClient.Error.notSignedIn {

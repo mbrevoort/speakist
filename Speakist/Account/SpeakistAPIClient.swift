@@ -438,6 +438,30 @@ final class SpeakistAPIClient {
         let status: String
     }
 
+    /// Per-request context snapshot sent alongside a feedback submission.
+    /// Mirrors the SpeakistTranscribeClient request shape so the bench /
+    /// evaluation pipeline can replay the audio against the same provider
+    /// config the user had at recording time. Encoded as a JSON object
+    /// in the `transcription_options` multipart field; the server stores
+    /// it as a forward-compatible blob (no schema migration when a new
+    /// flag is added on either side).
+    struct TranscriptionOptionsPayload: Encodable {
+        var dictation: Bool
+        var fillerWords: Bool
+        var measurements: Bool
+        var profanityFilter: Bool
+        var detectLanguage: Bool
+        /// `find:replacement` pairs sent on the X-Replace header. Encoded
+        /// as objects rather than strings so the server-side reader can
+        /// distinguish "find" from "replacement" without re-parsing.
+        var replaceRules: [Rule]
+
+        struct Rule: Encodable {
+            var find: String
+            var replacement: String
+        }
+    }
+
     /// Submit a "Report bad transcription" payload to the server.
     /// Multipart so the optional audio attachment streams cleanly.
     /// Returns the server-assigned feedback id on success.
@@ -447,6 +471,15 @@ final class SpeakistAPIClient {
     /// texts. `audioContentType` should be `audio/wav` for our
     /// recordings — pass through whatever Content-Type the file's
     /// extension corresponds to if you ever swap encodings.
+    ///
+    /// `language`, `keyterms`, and `transcriptionOptions` snapshot the
+    /// per-request context active at the time the user submits the
+    /// report. They're caller-time values rather than recording-time
+    /// values — vocabulary + option toggles are stable enough across
+    /// the seconds-to-hours report-after-recording window that the
+    /// drift is usually zero, and the alternative (snapshotting into
+    /// TranscriptionEntry at recording time) would touch a lot more
+    /// surface. Future enhancement.
     func submitFeedback(
         transcriptionClientId: String,
         rawText: String,
@@ -455,7 +488,10 @@ final class SpeakistAPIClient {
         failureKind: FeedbackKind?,
         userNote: String?,
         audio: Data?,
-        audioContentType: String = "audio/wav"
+        audioContentType: String = "audio/wav",
+        language: String? = nil,
+        keyterms: [String]? = nil,
+        transcriptionOptions: TranscriptionOptionsPayload? = nil
     ) async throws -> FeedbackResponse {
         guard let url = URL(string: "/api/feedback", relativeTo: baseURL) else {
             throw Error.badResponse
@@ -488,6 +524,25 @@ final class SpeakistAPIClient {
         }
         if let userNote, !userNote.isEmpty {
             appendField(name: "user_note", value: userNote)
+        }
+        if let language, !language.isEmpty {
+            appendField(name: "language", value: language)
+        }
+        if let keyterms {
+            // Always send when caller supplied the array — even an empty
+            // [] is meaningful (it says "user has no vocab in scope"),
+            // which is distinguishable on the server from "client
+            // omitted the field" (older builds).
+            if let data = try? JSONEncoder().encode(keyterms),
+               let json = String(data: data, encoding: .utf8) {
+                appendField(name: "keyterms", value: json)
+            }
+        }
+        if let transcriptionOptions {
+            if let data = try? JSONEncoder().encode(transcriptionOptions),
+               let json = String(data: data, encoding: .utf8) {
+                appendField(name: "transcription_options", value: json)
+            }
         }
         if let audio {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
