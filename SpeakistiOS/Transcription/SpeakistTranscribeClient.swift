@@ -84,6 +84,11 @@ struct SpeakistTranscribeClient {
 
         struct TranscribeResponse: Decodable {
             let text: String
+            /// Pre-polish STT output. Optional in the Decodable layer so
+            /// older Worker deployments (pre rawText-response change)
+            /// don't fail to decode; downstream code falls back to
+            /// `text` when this is nil.
+            let rawText: String?
             let audioSeconds: Double
             let provider: String
             let model: String
@@ -96,6 +101,7 @@ struct SpeakistTranscribeClient {
         }
         return TranscriptionResult(
             text: decoded.text,
+            rawText: decoded.rawText,
             providerModelLabel: decoded.model,
             audioSeconds: decoded.audioSeconds
         )

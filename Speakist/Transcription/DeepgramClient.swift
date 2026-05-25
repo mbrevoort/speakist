@@ -113,7 +113,15 @@ struct DeepgramClient: TranscriptionClient {
 
         let text = decoded.results?.channels.first?.alternatives.first?.transcript ?? ""
         let audioSeconds = decoded.metadata?.duration ?? 0
-        return TranscriptionResult(text: text, providerModelLabel: model.rawValue, audioSeconds: audioSeconds)
+        // Direct-to-Deepgram path doesn't run polish, so `text` is
+        // already the raw STT — leave rawText nil to signal "same as
+        // text" rather than duplicating the string.
+        return TranscriptionResult(
+            text: text,
+            rawText: nil,
+            providerModelLabel: model.rawValue,
+            audioSeconds: audioSeconds
+        )
     }
 
     // MARK: - Response model

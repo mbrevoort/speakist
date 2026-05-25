@@ -127,7 +127,20 @@ final class TranscriptionService {
         let language = preferences.language.isEmpty ? nil : preferences.language
 
         // 3. Transcribe (1 retry for transient failures).
-        var rawText = ""
+        //
+        // `finalText` is what we paste / display / store as finalTranscript
+        // — on the proxy path this is the post-polish result, on the
+        // legacy Deepgram-direct path polish doesn't run so it's just
+        // the raw STT.
+        //
+        // `rawSttText` is the pre-polish output, preserved separately
+        // so a "Report bad transcription" submission carries the
+        // actual upstream STT string. Falls back to `finalText` when
+        // result.rawText is nil — that's the legacy Deepgram-direct
+        // path (where raw == final by construction) and older Worker
+        // builds (where the server didn't yet return rawText).
+        var finalText = ""
+        var rawSttText = ""
         var audioSeconds = request.recording.durationSeconds
         do {
             let result = try await withRetry {
@@ -136,7 +149,9 @@ final class TranscriptionService {
                                             language: language)
             }
             Logger.shared.info("PERF process \(ms("transcribeReturned"))")
-            rawText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            rawSttText = (result.rawText ?? result.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if result.audioSeconds > 0 {
                 audioSeconds = result.audioSeconds
             }
@@ -164,7 +179,7 @@ final class TranscriptionService {
             return
         }
 
-        if rawText.isEmpty {
+        if finalText.isEmpty {
             Logger.shared.info("empty transcript, nothing to paste")
             hud.hide()
             audioArchive.discard(tempURL: request.recording.url)
@@ -173,7 +188,7 @@ final class TranscriptionService {
 
         // 4. Paste.
         let outcome = await cursorInserter.insert(
-            text: rawText,
+            text: finalText,
             hasEditableFocus: focus.hasEditableFocus,
             bundleID: focus.bundleID
         )
@@ -197,8 +212,8 @@ final class TranscriptionService {
             durationMs: durationMs,
             provider: client.providerLabel,
             model: client.modelLabel,
-            rawTranscript: rawText,
-            finalTranscript: rawText,
+            rawTranscript: rawSttText,
+            finalTranscript: finalText,
             audioPath: archivedURL?.path,
             targetBundleID: focus.bundleID,
             pasteStatus: pasteStatus,
@@ -216,11 +231,11 @@ final class TranscriptionService {
         // This branching lives here (not at call sites below) so the Phase A
         // proxy flow is one HTTP round-trip total from Mac's perspective.
         if !preferences.useTranscribeProxy {
-            Task.detached { [weak self, entryID, rawText, audioSeconds, modelLabel = client.modelLabel] in
+            Task.detached { [weak self, entryID, finalText, audioSeconds, modelLabel = client.modelLabel] in
                 guard let self else { return }
                 await self.reportUsage(
                     transcriptionClientId: entryID,
-                    wordCount: Self.wordCount(rawText),
+                    wordCount: Self.wordCount(finalText),
                     audioMs: Int(audioSeconds * 1000),
                     model: modelLabel
                 )
@@ -236,7 +251,7 @@ final class TranscriptionService {
             "model": client.modelLabel,
             "audio_seconds": audioSeconds,
             "duration_ms": durationMs,
-            "word_count": Self.wordCount(rawText),
+            "word_count": Self.wordCount(finalText),
             "paste_status": pasteStatus,
             "target_bundle_id": focus.bundleID ?? "",
         ])

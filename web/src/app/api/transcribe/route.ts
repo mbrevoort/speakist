@@ -430,6 +430,13 @@ export async function POST(req: Request): Promise<Response> {
 
   return finish("ok", json({
     text: finalText,
+    // Pre-polish STT output. Always populated, even when polish is
+    // disabled or skipped (in which case rawText === text). Clients
+    // persist this on the history row so a later "Report bad
+    // transcription" submission carries the actual upstream STT
+    // string, not the polished version — that's what the evaluation
+    // pipeline needs to distinguish STT-side vs polish-side bugs.
+    rawText: output.text,
     audioSeconds: output.audioSeconds,
     provider: providerId,
     model,

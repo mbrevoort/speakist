@@ -171,6 +171,14 @@ struct SpeakistTranscribeClient: TranscriptionClient {
 
         return TranscriptionResult(
             text: decoded.text,
+            // `rawText` is the pre-polish STT output, returned by the
+            // server since the rawText-response change. Older Worker
+            // builds omit it; in that case decoded.rawText is nil and
+            // downstream code falls back to `text` (which equals the
+            // raw STT on those older builds since polish runs
+            // server-side and produces the same string for the
+            // polishApplied=false case).
+            rawText: decoded.rawText,
             providerModelLabel: decoded.model,
             audioSeconds: decoded.audioSeconds
         )
@@ -178,6 +186,10 @@ struct SpeakistTranscribeClient: TranscriptionClient {
 
     private struct TranscribeResponse: Decodable {
         let text: String
+        /// Pre-polish STT output. Optional in the Decodable layer so
+        /// older Worker deployments (pre rawText-response) don't fail
+        /// to decode; defaults to nil and is handled upstream.
+        let rawText: String?
         let audioSeconds: Double
         let provider: String
         let model: String
