@@ -18,6 +18,8 @@
 // Not for: Stripe secrets (those live in env only), session tokens (Auth.js
 // owns those), user passwords (we don't have any).
 
+import { base64Decode, base64Encode } from "@/lib/base64";
+
 const ALGORITHM = "AES-GCM";
 const IV_BYTES = 12;
 
@@ -99,17 +101,5 @@ export function secretPreview(plaintext: string): string {
   return `…${s.slice(-4)}`;
 }
 
-// --- base64 helpers (Web Crypto primitives want Uint8Array) ----------------
-
-function base64Encode(bytes: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s);
-}
-
-function base64Decode(s: string): Uint8Array {
-  const raw = atob(s);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
+// Base64 helpers live in lib/base64.ts so callers in service-tokens
+// and MCP can share them.

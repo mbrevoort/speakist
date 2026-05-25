@@ -619,6 +619,42 @@ export const transcriptionFeedback = sqliteTable(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Service tokens
+//
+// Non-browser auth surface for cron-driven agents (the scheduled
+// polish-fixture proposer is the first consumer). See migration 0019
+// for the column-by-column rationale; the short version is:
+//
+//   * Plaintext token has the form `ssat_<24-byte-base64url>` and is
+//     shown to the operator exactly once at creation time.
+//   * The DB only ever stores SHA-256(plaintext). Verifier hashes the
+//     incoming bearer + indexes into `tokenHash` (UNIQUE).
+//   * `scopesJson` is a stringified JSON array of scope strings.
+//     App-layer parses + validates; one JSON.parse call.
+//   * `revokedAt` is a soft-delete; the row sticks around so the
+//     audit trail (who created what, when last used) is never lost.
+// ---------------------------------------------------------------------------
+
+export const serviceTokens = sqliteTable(
+  "service_tokens",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    label: text("label").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    scopesJson: text("scopes_json").notNull(),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
+    lastUsedAt: timestampMs("last_used_at"),
+    revokedAt: timestampMs("revoked_at"),
+  },
+  (t) => ({
+    createdIdx: index("service_tokens_created_idx").on(t.createdAt),
+  })
+);
+
 // ---- Type exports for the rest of the app ---------------------------------
 
 export type User = typeof users.$inferSelect;
@@ -638,3 +674,4 @@ export type Release = typeof releases.$inferSelect;
 export type NewRelease = typeof releases.$inferInsert;
 export type TranscriptionFeedback = typeof transcriptionFeedback.$inferSelect;
 export type NewTranscriptionFeedback = typeof transcriptionFeedback.$inferInsert;
+export type ServiceToken = typeof serviceTokens.$inferSelect;
