@@ -146,6 +146,14 @@ private struct DetailView: View {
     @State private var showingReportSheet = false
     @State private var player: AVAudioPlayer?
     @State private var isPlayingAudio = false
+    /// Drives the save-on-blur behavior for the Final transcript
+    /// TextEditor below. SwiftUI fires our `.onChange(of:)` whenever
+    /// the editor gains or loses key focus; we save on the
+    /// false-transition. Without this the user had to navigate to a
+    /// different history row before edits committed — a confusing
+    /// failure mode that also caused the "Report bad transcription"
+    /// button to read stale text from the store.
+    @FocusState private var finalDraftFocused: Bool
 
     init(entry: TranscriptionEntry) {
         self._entry = State(initialValue: entry)
@@ -179,6 +187,16 @@ private struct DetailView: View {
                         }
                         if entry.reportedAt == nil {
                             Button {
+                                // Commit any in-flight TextEditor edit
+                                // BEFORE the sheet binds to `entry` — the
+                                // sheet captures `entry` at present-time,
+                                // so unsaved finalDraft would otherwise
+                                // be lost from the feedback payload.
+                                // (FocusState save-on-blur covers the
+                                // common case; this is the belt for the
+                                // user who clicks Report without
+                                // tabbing out of the text field first.)
+                                saveEditsIfChanged()
                                 showingReportSheet = true
                             } label: { Label("Report bad transcription", systemImage: "flag") }
                                 .labelStyle(.iconOnly)
@@ -209,9 +227,16 @@ private struct DetailView: View {
                     TextEditor(text: $finalDraft)
                         .font(.callout)
                         .frame(minHeight: 160)
+                        .focused($finalDraftFocused)
                         .onAppear { finalDraft = entry.finalTranscript }
-                        .onChange(of: finalDraft) { _, _ in /* saved on blur */ }
-                        .focusable()
+                        // Save when the editor loses focus — this makes
+                        // the GroupBox label literally true. Belt + the
+                        // `.onDisappear` below + the explicit save at
+                        // the Report button so an edited-but-not-blurred
+                        // draft still rides into a feedback report.
+                        .onChange(of: finalDraftFocused) { _, focused in
+                            if !focused { saveEditsIfChanged() }
+                        }
                 }
 
                 if let path = entry.audioPath {
