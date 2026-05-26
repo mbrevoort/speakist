@@ -154,7 +154,12 @@ final class QuickDictateController: ObservableObject {
                 forTranscriptionId: client.transcriptionClientId)
             self.editedText = result.text
             self.lastTranscriptionId = client.transcriptionClientId
-            self.lastRawTranscript = result.text
+            // Preserve the pre-polish STT separately so a later "Report
+            // bad transcription" submission carries the actual upstream
+            // string. `result.rawText` is nil on older Worker builds
+            // (pre rawText-response change) — fall back to `text` then,
+            // matching legacy behavior.
+            self.lastRawTranscript = result.rawText ?? result.text
             self.lastAudioPath = archivedPath
             self.phase = .reviewing(text: result.text,
                                     audioSeconds: result.audioSeconds,

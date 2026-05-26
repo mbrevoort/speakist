@@ -180,6 +180,25 @@ struct ReportFeedbackView: View {
             }
         }
 
+        // Per-request context snapshot. iOS doesn't (yet) expose
+        // vocabulary or the transcribe-option toggles in settings —
+        // SpeakistTranscribeClient on iOS calls /api/transcribe with no
+        // X-Keyterms header and none of the X-* toggles. We send the
+        // equivalent ([] keyterms + all-false options) explicitly here
+        // so the feedback row reflects what iOS actually sent to the
+        // server, rather than NULL (which would be ambiguous with
+        // "older build that didn't report"). When iOS gains a vocab
+        // store + settings UI, populate these from the same source
+        // SpeakistTranscribeClient uses.
+        let options = SpeakistAPIClient.TranscriptionOptionsPayload(
+            dictation: false,
+            fillerWords: false,
+            measurements: false,
+            profanityFilter: false,
+            detectLanguage: false,
+            replaceRules: []
+        )
+
         do {
             let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
             _ = try await apiClient.submitFeedback(
@@ -189,7 +208,10 @@ struct ReportFeedbackView: View {
                 expectedText: expectedText.trimmingCharacters(in: .whitespacesAndNewlines),
                 failureKind: failureKind,
                 userNote: trimmedNote.isEmpty ? nil : trimmedNote,
-                audio: audioData
+                audio: audioData,
+                language: nil,           // iOS sends no X-Language; server auto-detects.
+                keyterms: [],            // iOS has no vocab store yet — see comment above.
+                transcriptionOptions: options
             )
             history.markReported(id: entry.id)
             Analytics.shared.capture("feedback_submitted", properties: [

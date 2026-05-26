@@ -301,4 +301,148 @@ export const POLISH_FIXTURES: PolishFixture[] = [
       { kind: "max_length_ratio", ratio: 1.3 },
     ],
   },
+
+  // ---- Conjunction merging (intuitive only) --------------------------------
+  // The intuitive prompt should combine consecutive short choppy sentences
+  // with "and"/"but"/"so"/"because" when meaning is preserved. We detect
+  // this by checking that the first sentence boundary ("store. It") is
+  // gone in the output — the model has fused at least the first pair.
+  {
+    name: "conjunction-merge-intuitive",
+    description:
+      "Intuitive mode should combine consecutive short choppy sentences with conjunctions.",
+    mode: "intuitive",
+    input: "i went to the store. it was closed. i came back home.",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      // Content preserved
+      { kind: "must_contain", substrings: ["store", "closed", "home"], case_insensitive: true },
+      // At least the first sentence boundary should be merged — if the
+      // model preserved hard periods between all three sentences,
+      // it didn't apply the conjunction rule. We check for "store. It"
+      // (case-insensitive) which only appears when sentences 1 and 2
+      // weren't merged.
+      { kind: "must_not_contain", substrings: ["store. It", "store. it"] },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+
+  // ---- No trailing pleasantries (both modes) -------------------------------
+  // Llama-3.1-8B's RLHF training makes it eager to end polite requests
+  // with "Thank you." or "Hope this helps." The prompt forbids this
+  // explicitly. Test against the worst-case input: a politely-phrased
+  // request the model is most tempted to "complete".
+  {
+    name: "no-trailing-thank-you-intuitive",
+    description:
+      "Polite request must not have 'Thank you' or similar pleasantry appended.",
+    mode: "intuitive",
+    input: "can you take a look at the pull request when you get a chance",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["pull request", "?"] },
+      {
+        kind: "must_not_contain",
+        substrings: ["thank you", "thanks", "appreciate", "hope this helps"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "no-trailing-thank-you-prescriptive",
+    description:
+      "Conservative mode must also resist appending closing pleasantries.",
+    mode: "prescriptive",
+    input: "could you review the design doc and let me know what you think",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["design doc", "?"] },
+      {
+        kind: "must_not_contain",
+        substrings: ["thank you", "thanks", "appreciate", "hope this helps"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+
+  // ---- Long-form paragraph breaks ------------------------------------------
+  // Long-form dictation with a clear topic shift ("moving on to") should
+  // be broken into paragraphs. Intuitive mode does this aggressively;
+  // prescriptive mode also does it at obvious shifts.
+  {
+    name: "long-form-paragraph-break-intuitive",
+    description:
+      "Long-form dictation with topic shift should be broken into paragraphs.",
+    mode: "intuitive",
+    input:
+      "so today's standup we covered three things the migration is on track the payment bug is fixed we still need to figure out the staging env situation moving on to my own work this week im focused on the api refactor i made good progress yesterday and i think i can finish the core changes by wednesday after that ill start on the tests",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      // Paragraph break at the topic shift
+      { kind: "must_contain", substrings: ["\n\n"] },
+      // Content preserved
+      {
+        kind: "must_contain",
+        substrings: ["staging", "refactor"],
+        case_insensitive: true,
+      },
+      // No invented closing pleasantries
+      {
+        kind: "must_not_contain",
+        substrings: ["thank you", "hope this helps"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.5 },
+    ],
+  },
+
+  // ---- Long-form numbered list ---------------------------------------------
+  // Explicit "first/second/third" enumeration should produce a numbered
+  // markdown list. Only intuitive mode does this restructuring.
+  {
+    name: "long-form-numbered-list",
+    description:
+      "Speaker explicitly enumerates 'first/second/third' — output should be a numbered list.",
+    mode: "intuitive",
+    input:
+      "there are three things we need to do first we need to migrate the database second we need to update the api endpoints and third we need to deploy the new frontend make sure these happen in order",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      // Numbered list markers
+      { kind: "must_contain", substrings: ["1.", "2.", "3."] },
+      // Content preserved
+      {
+        kind: "must_contain",
+        substrings: ["database", "endpoints", "frontend"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.5 },
+    ],
+  },
+
+  // ---- Don't invent structure for short prose -----------------------------
+  // The list/paragraph behavior must be load-bearing — the model must
+  // NOT add markdown bullets or paragraph breaks for short flowing
+  // prose that doesn't ask for structure.
+  {
+    name: "short-prose-no-invented-structure",
+    description:
+      "Short flowing prose should NOT be reformatted as a list or with paragraph breaks.",
+    mode: "intuitive",
+    input:
+      "i was thinking about what we should have for dinner tonight maybe pasta or something simple",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_not_contain", substrings: ["\n\n", "1.", "- "] },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
 ];

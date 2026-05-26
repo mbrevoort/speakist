@@ -320,7 +320,11 @@ final class SpeakSessionController: ObservableObject {
                 audioSeconds: result.audioSeconds,
                 source: .keyboard(hostBundleID: currentHostBundleID),
                 providerModel: result.providerModelLabel,
-                rawTranscript: result.text,
+                // Pre-polish STT preserved separately so feedback
+                // carries the actual upstream string; fall back to
+                // `text` for older Worker builds where rawText isn't
+                // returned yet (== the old behavior).
+                rawTranscript: result.rawText ?? result.text,
                 transcriptionClientId: client.transcriptionClientId,
                 audioPath: archivedPath
             ))

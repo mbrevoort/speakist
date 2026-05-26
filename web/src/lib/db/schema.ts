@@ -591,6 +591,27 @@ export const transcriptionFeedback = sqliteTable(
     audioSeconds: integer("audio_seconds", { mode: "number" }),
     language: text("language"),
 
+    // Snapshot of the request context that was active at the original
+    // /api/transcribe call. The bench / evaluation pipeline replays a
+    // synced fixture against the providers, and any difference between
+    // "what the client sent then" and "what we send during the bench"
+    // is a confound — most notably for vocab-bleed bugs, which depend
+    // on the keyterm list the upstream STT was biased on.
+    //
+    // `keytermsJson` is first-class so we can index/query it later
+    // ("show me all feedback where vocab contained 'Stripe'"). The
+    // value is a JSON-encoded array of strings; NULL = client did
+    // not report a keyterm list (current iOS state). Empty array =
+    // client explicitly said "no vocab in scope".
+    keytermsJson: text("keyterms_json"),
+
+    // Everything else the client sent on /api/transcribe (replace
+    // rules + the boolean toggles: dictation, fillerWords,
+    // measurements, profanityFilter, detectLanguage) lives here as
+    // a JSON blob. Rarely queried, occasionally diagnostic, future-
+    // proof against new transcribe options without a migration.
+    transcriptionOptionsJson: text("transcription_options_json"),
+
     failureKind: text("failure_kind").$type<
       "wrong_word" | "punctuation" | "both" | "other"
     >(),
@@ -619,6 +640,42 @@ export const transcriptionFeedback = sqliteTable(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Service tokens
+//
+// Non-browser auth surface for cron-driven agents (the scheduled
+// polish-fixture proposer is the first consumer). See migration 0019
+// for the column-by-column rationale; the short version is:
+//
+//   * Plaintext token has the form `ssat_<24-byte-base64url>` and is
+//     shown to the operator exactly once at creation time.
+//   * The DB only ever stores SHA-256(plaintext). Verifier hashes the
+//     incoming bearer + indexes into `tokenHash` (UNIQUE).
+//   * `scopesJson` is a stringified JSON array of scope strings.
+//     App-layer parses + validates; one JSON.parse call.
+//   * `revokedAt` is a soft-delete; the row sticks around so the
+//     audit trail (who created what, when last used) is never lost.
+// ---------------------------------------------------------------------------
+
+export const serviceTokens = sqliteTable(
+  "service_tokens",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    label: text("label").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    scopesJson: text("scopes_json").notNull(),
+    createdBy: text("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
+    lastUsedAt: timestampMs("last_used_at"),
+    revokedAt: timestampMs("revoked_at"),
+  },
+  (t) => ({
+    createdIdx: index("service_tokens_created_idx").on(t.createdAt),
+  })
+);
+
 // ---- Type exports for the rest of the app ---------------------------------
 
 export type User = typeof users.$inferSelect;
@@ -638,3 +695,4 @@ export type Release = typeof releases.$inferSelect;
 export type NewRelease = typeof releases.$inferInsert;
 export type TranscriptionFeedback = typeof transcriptionFeedback.$inferSelect;
 export type NewTranscriptionFeedback = typeof transcriptionFeedback.$inferInsert;
+export type ServiceToken = typeof serviceTokens.$inferSelect;

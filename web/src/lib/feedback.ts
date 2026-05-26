@@ -20,6 +20,25 @@ export type FeedbackStatus =
   | "dismissed"
   | "proposed";
 
+/** Decoded transcription-options snapshot from `transcription_options_json`.
+ *  Mirrors the request shape of /api/transcribe, minus the bits the
+ *  feedback row already stores in dedicated columns (provider, model,
+ *  language, audioSeconds, keyterms). Every field optional because
+ *  feedback rows from before this column existed have NULL and clients
+ *  may legitimately omit fields they don't track. */
+export interface TranscriptionOptionsSnapshot {
+  dictation?: boolean;
+  fillerWords?: boolean;
+  measurements?: boolean;
+  profanityFilter?: boolean;
+  detectLanguage?: boolean;
+  /** "find:replacement" pairs as sent on /api/transcribe. */
+  replaceRules?: string[];
+  /** Free-form for forward compatibility — any extra fields the client
+   *  serialized that we haven't formalized yet stay accessible by name. */
+  [extra: string]: unknown;
+}
+
 export interface FeedbackListRow {
   id: string;
   createdAt: Date;
@@ -36,6 +55,14 @@ export interface FeedbackListRow {
   polishApplied: boolean;
   polishMode: "intuitive" | "prescriptive" | null;
   audioSeconds: number | null;
+  language: string | null;
+  /** Vocab/keyterm list the client had in scope at transcription time.
+   *  `null` = client did not report a list (older Mac builds, current
+   *  iOS). `[]` = explicitly empty. */
+  keyterms: string[] | null;
+  /** Decoded snapshot of the rest of the transcribe request options.
+   *  `null` = client did not report. */
+  transcriptionOptions: TranscriptionOptionsSnapshot | null;
   failureKind: "wrong_word" | "punctuation" | "both" | "other" | null;
   userNote: string | null;
   hasAudio: boolean;
@@ -118,6 +145,10 @@ export async function listFeedback(
       polishApplied: transcriptionFeedback.polishApplied,
       polishMode: transcriptionFeedback.polishMode,
       audioSeconds: transcriptionFeedback.audioSeconds,
+      language: transcriptionFeedback.language,
+      keytermsJson: transcriptionFeedback.keytermsJson,
+      transcriptionOptionsJson:
+        transcriptionFeedback.transcriptionOptionsJson,
       failureKind: transcriptionFeedback.failureKind,
       userNote: transcriptionFeedback.userNote,
       audioObjectKey: transcriptionFeedback.audioObjectKey,
@@ -154,6 +185,11 @@ export async function listFeedback(
     polishApplied: r.polishApplied,
     polishMode: r.polishMode,
     audioSeconds: r.audioSeconds,
+    language: r.language,
+    keyterms: decodeKeyterms(r.keytermsJson),
+    transcriptionOptions: decodeTranscriptionOptions(
+      r.transcriptionOptionsJson
+    ),
     failureKind: r.failureKind,
     userNote: r.userNote,
     hasAudio: r.audioObjectKey !== null,
@@ -199,6 +235,11 @@ export async function getFeedbackById(
     polishApplied: f.polishApplied,
     polishMode: f.polishMode,
     audioSeconds: f.audioSeconds,
+    language: f.language,
+    keyterms: decodeKeyterms(f.keytermsJson),
+    transcriptionOptions: decodeTranscriptionOptions(
+      f.transcriptionOptionsJson
+    ),
     failureKind: f.failureKind,
     userNote: f.userNote,
     hasAudio: f.audioObjectKey !== null,
@@ -207,6 +248,45 @@ export async function getFeedbackById(
     resolution: f.resolution,
     reviewedAt: f.reviewedAt,
   };
+}
+
+/** Parse the `keyterms_json` column into a string array. Returns null
+ *  when the column is null/empty/malformed — old feedback rows and
+ *  rows from clients that don't yet report keyterms both surface as
+ *  null. A malformed payload also surfaces as null rather than
+ *  throwing: the rest of the row is still useful for triage. */
+function decodeKeyterms(json: string | null): string[] | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    return null;
+  }
+}
+
+/** Parse the `transcription_options_json` column into a typed
+ *  snapshot. Same null-on-bad-data discipline as decodeKeyterms — the
+ *  rest of the feedback row is still valuable even if this blob is
+ *  missing or malformed. */
+function decodeTranscriptionOptions(
+  json: string | null
+): TranscriptionOptionsSnapshot | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return null;
+    }
+    return parsed as TranscriptionOptionsSnapshot;
+  } catch {
+    return null;
+  }
 }
 
 /**

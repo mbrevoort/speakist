@@ -1,0 +1,9 @@
+{
+  "description": "TTS smoke test — confirms both providers can transcribe a trivially clean sentence. Not a real quality bench.",
+  "groundTruth": "The quick brown fox jumps over the lazy dog.",
+  "language": "en",
+  "expects": [
+    { "kind": "max_wer", "ratio": 0.15 },
+    { "kind": "must_contain", "substrings": ["fox", "dog"], "case_insensitive": true }
+  ]
+}

@@ -26,9 +26,10 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { AuthzError, requireUserFromRequest } from "@/lib/authz";
+import { AuthzError } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { transcriptionFeedback } from "@/lib/db/schema";
+import { requireFeedbackAccess } from "@/lib/feedback-access";
 
 const bodySchema = z
   .object({
@@ -45,15 +46,15 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  let user;
+  // Mutating operation — feedback:triage scope required.
+  let principal;
   try {
-    user = await requireUserFromRequest(req);
+    principal = await requireFeedbackAccess(req, "feedback:triage");
   } catch (err) {
-    const status = err instanceof AuthzError ? err.status : 401;
-    return Response.json({ error: "unauthorized" }, { status });
-  }
-  if (!user.isSuperAdmin) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+    if (err instanceof AuthzError) {
+      return Response.json({ error: err.message }, { status: err.status });
+    }
+    return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
@@ -77,10 +78,14 @@ export async function PATCH(
   }
   // Stamp the reviewer when the row leaves the `new` state. Idempotent
   // re-saves while already-reviewed don't overwrite the original
-  // reviewer (they could; we just don't see a reason to).
+  // reviewer (they could; we just don't see a reason to). Service-
+  // token-driven PATCHes leave `reviewedBy` unset since there's no
+  // user identity behind the call — `reviewedAt` still records when.
   if (parsed.data.status && parsed.data.status !== "new") {
     updates.reviewedAt = new Date();
-    updates.reviewedBy = user.id;
+    if (principal.kind === "user") {
+      updates.reviewedBy = principal.userId;
+    }
   }
 
   const db = getDb();
@@ -99,15 +104,14 @@ export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  let user;
+  // Mutating + destructive — feedback:triage scope required.
   try {
-    user = await requireUserFromRequest(req);
+    await requireFeedbackAccess(req, "feedback:triage");
   } catch (err) {
-    const status = err instanceof AuthzError ? err.status : 401;
-    return Response.json({ error: "unauthorized" }, { status });
-  }
-  if (!user.isSuperAdmin) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
+    if (err instanceof AuthzError) {
+      return Response.json({ error: err.message }, { status: err.status });
+    }
+    return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;

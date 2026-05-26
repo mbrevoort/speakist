@@ -1,0 +1,18 @@
+# Audio fixtures are gitignored by default — they're often large and
+# personal recordings. Sidecar .json files for HAND-CURATED fixtures
+# ARE committed so the manifest of expected fixtures lives in version
+# control.
+#
+# Synced fixtures (those pulled from production feedback via
+# `pnpm bench:stt:sync`) are gitignored on BOTH the audio AND the
+# sidecar, because the sidecar embeds user-dictated text that may
+# contain PII. Force-commit individual ones with `git add -f` if you
+# want them tracked.
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.webm
+*.aiff
+feedback-*.json

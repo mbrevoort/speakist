@@ -28,6 +28,21 @@
 //                                     wrong_word | punctuation |
 //                                     both | other
 //   user_note                TEXT   optional free-text note (≤500 chars)
+//   language                 TEXT   optional ISO-639 code that was on
+//                                   the original transcribe request.
+//                                   Used for "auto-detect" reproduction.
+//   keyterms                 TEXT   optional JSON array of strings —
+//                                   the vocab list the client had in
+//                                   scope at transcription time. Drives
+//                                   vocab-bleed reproducibility on the
+//                                   STT bench.
+//   transcription_options    TEXT   optional JSON object snapshotting
+//                                   the rest of the transcribe request
+//                                   (replaceRules, dictation,
+//                                   fillerWords, measurements,
+//                                   profanityFilter, detectLanguage).
+//                                   Forward-compatible blob; new fields
+//                                   pass through without a migration.
 //   audio                    FILE   optional audio file (WAV/MP3/OGG)
 
 import { and, eq } from "drizzle-orm";
@@ -131,6 +146,19 @@ export async function POST(req: Request): Promise<Response> {
       ? userNoteRaw.slice(0, MAX_NOTE_CHARS)
       : null;
 
+  // Request-context snapshot. All three are optional — older clients
+  // omit them, and we'd rather accept the report than reject on a
+  // missing context field. Parse-and-normalize here so the DB only
+  // sees well-formed JSON (or NULL); a malformed blob from a buggy
+  // client becomes NULL rather than corrupt-but-stored data.
+  const language = stringField(form, "language");
+  const keytermsJson = normalizeKeytermsField(
+    stringField(form, "keyterms")
+  );
+  const transcriptionOptionsJson = normalizeOptionsField(
+    stringField(form, "transcription_options")
+  );
+
   // 4. Look up the original usage_events row to (a) verify the user
   //    actually owns this transcription_client_id, and (b) snapshot
   //    provider/model/audioMs/etc. so the feedback row is
@@ -228,7 +256,9 @@ export async function POST(req: Request): Promise<Response> {
     polishMode: null, // we don't record polish_mode on usage_events; future enhancement
     audioSeconds:
       typeof usage?.audioMs === "number" ? usage.audioMs / 1000 : null,
-    language: null,
+    language,
+    keytermsJson,
+    transcriptionOptionsJson,
     failureKind,
     userNote,
     audioObjectKey,
@@ -288,6 +318,50 @@ function stringField(form: FormData, name: string): string | null {
   if (value === null) return null;
   if (typeof value !== "string") return null;
   return value;
+}
+
+/** Parse + re-stringify the `keyterms` form field so the DB stores
+ *  canonical JSON. Accepts:
+ *    - a JSON array of strings → re-stringified, non-strings filtered
+ *    - any other JSON shape → null (treat as "client didn't report")
+ *    - non-JSON / empty / null → null
+ *  Re-encoding rather than passing through verbatim means we always
+ *  store JSON.parse-able output even if a buggy client double-encoded
+ *  or sent a trailing comma. */
+function normalizeKeytermsField(raw: string | null): string | null {
+  if (raw === null || raw.length === 0) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const cleaned = parsed.filter(
+      (v): v is string => typeof v === "string" && v.length > 0
+    );
+    return JSON.stringify(cleaned);
+  } catch {
+    return null;
+  }
+}
+
+/** Parse + re-stringify the `transcription_options` form field. Same
+ *  null-on-bad-data discipline as normalizeKeytermsField. Accepts any
+ *  JSON object; forward-compatible by design — we don't strip unknown
+ *  keys, so when /api/transcribe grows a new option the client can
+ *  start sending it without a backend change. */
+function normalizeOptionsField(raw: string | null): string | null {
+  if (raw === null || raw.length === 0) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return null;
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return null;
+  }
 }
 
 /** Map a content-type to a sensible file extension for the R2 object

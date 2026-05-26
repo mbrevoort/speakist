@@ -22,7 +22,9 @@
     "db:seed:prod": "wrangler d1 execute speakist-prod --remote --env production --file=scripts/seed.sql",
     "test": "vitest",
     "test:run": "vitest run",
-    "bench:polish": "tsx scripts/bench-polish.ts"
+    "bench:polish": "tsx scripts/bench-polish.ts",
+    "bench:stt": "tsx scripts/bench-stt.ts",
+    "bench:stt:sync": "tsx scripts/bench-stt-sync.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

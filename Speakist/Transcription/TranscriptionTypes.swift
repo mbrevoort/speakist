@@ -30,7 +30,18 @@ enum TranscriptionError: Error, LocalizedError {
 }
 
 struct TranscriptionResult: Sendable {
+    /// The text the client should display / paste. On the Phase-A
+    /// proxy path this is the post-polish output; on the legacy
+    /// Deepgram-direct path polish doesn't run, so it's just the
+    /// raw STT.
     let text: String
+    /// Pre-polish STT output, when the path that produced this result
+    /// went through a polish stage AND that stage's input is
+    /// recoverable. `nil` means the caller should treat `text` as
+    /// both raw and final (true on the Deepgram-direct legacy path,
+    /// and also true on the proxy path when the server is older than
+    /// the rawText-response change).
+    let rawText: String?
     let providerModelLabel: String
     let audioSeconds: Double
 }
