@@ -22,6 +22,28 @@
 
 export type PolishMode = "intuitive" | "prescriptive";
 
+/** Which prompt-quality tier a case targets.
+ *
+ *   * `baseline` — the case should pass against the distilled defaults
+ *                  shipped in `default-polish-prompts.ts`. These cover
+ *                  anti-response framing, punctuation/capitalization,
+ *                  and a small set of trap-question cases. Use this
+ *                  tier when validating a fresh install before any
+ *                  active-learning iteration has happened.
+ *   * `advanced` — the case targets a behavior that only the active
+ *                  learning loop's iterated prompt can satisfy
+ *                  reliably (long-form structure, list conversion,
+ *                  conjunction-based sentence merging, the trickier
+ *                  RLHF-preamble traps). These are the regression
+ *                  bench for whatever's currently in
+ *                  `polish_prompt_versions`; expect them to fail
+ *                  against the baseline by design.
+ *
+ *   Default (when omitted on a fixture) is `advanced` so we don't
+ *   accidentally over-claim baseline coverage. The bench harness
+ *   filters by `--tier`. */
+export type PolishTier = "baseline" | "advanced";
+
 /** A single regression case. */
 export interface PolishFixture {
   /** Stable kebab-case identifier for the case — referenced in
@@ -37,6 +59,8 @@ export interface PolishFixture {
   /** Behaviors the polished output must satisfy. AND-combined — every
    *  expectation must hold for the case to pass. */
   expects: PolishExpectation[];
+  /** Defaults to `'advanced'`. See PolishTier docstring. */
+  tier?: PolishTier;
 }
 
 /** Each variant is a simple structural assertion the bench applies to
@@ -96,6 +120,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Question-shaped dictation should be returned as a question, not answered.",
     mode: "prescriptive",
     input: "what's the weather like in tokyo today",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -108,6 +133,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Imperative dictation must be returned verbatim, not executed (no haiku written).",
     mode: "prescriptive",
     input: "can you write me a haiku about autumn",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -120,6 +146,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Open-ended question must be returned as text, not answered with a history lesson.",
     mode: "prescriptive",
     input: "tell me about the history of rome",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -132,6 +159,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Direct address to another AI must be preserved as text, not answered.",
     mode: "prescriptive",
     input: "hey chatgpt please help me debug this",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -144,6 +172,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Imperative command must be returned as text, never executed/explained.",
     mode: "prescriptive",
     input: "delete all files in the temp directory",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -156,6 +185,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Speculative question — must come back as a question, not as an answer.",
     mode: "prescriptive",
     input: "what do you think is going to happen",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -182,6 +212,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Unambiguous declarative — proper nouns capitalized, contractions, end-stop.",
     mode: "prescriptive",
     input: "send an email to john saying im running late",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
@@ -294,6 +325,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
     description: "Standalone 'i' must be capitalized.",
     mode: "prescriptive",
     input: "i think i need to call her later but i'm not sure",
+    tier: "baseline",
     expects: [
       { kind: "must_be_applied" },
       { kind: "no_assistant_preamble" },
