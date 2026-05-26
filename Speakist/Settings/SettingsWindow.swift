@@ -595,18 +595,44 @@ struct VocabularySettingsView: View {
     @State private var newFrom = ""
     @State private var newTo = ""
 
+    /// Display-side filter: hide internal-only entries that haven't
+    /// been promoted to STT vocabulary. Speakist auto-ingests every
+    /// inline transcript edit into a local-only staging area so the
+    /// reactive classifier can decide whether the correction looks
+    /// like a real vocab item (proper noun, technical term, slang,
+    /// abbreviation) or a one-off contextual edit. Surfacing the
+    /// staging entries in the UI would just add noise — the user
+    /// only cares about entries that actually affect transcription.
+    /// Anything they explicitly Add below also goes straight to .stt.
+    private var visibleEntries: [CorrectionRow] {
+        store.all.filter { $0.appliesTo == .stt }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Learned corrections")
+                Text("Vocabulary")
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            Text("Corrections are applied two ways per transcription: proper-noun entries bias the transcription engine when it supports keyterm boosts (so the mistake is less likely to happen again), and every entry is applied as a post-transcription find/replace so any remaining miss still gets fixed in the final text.")
+            Text("Words and phrases Speakist uses to bias your transcriptions and apply post-transcription replacements. Add proper nouns, slang you prefer in writing, or any term Speakist consistently mishears. Inline edits you make in History also feed this list automatically when the same correction recurs.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
-            Table(store.all) {
+            // Count + Proper-noun columns are intentionally not shown.
+            // Both still drive behavior internally — count gates
+            // classifier promotion at ≥ 2 and supplies sort order;
+            // isProperNoun decides whether the entry rides as a
+            // Deepgram acoustic keyterm bias on top of the always-
+            // applied find/replace — but neither is something the
+            // user needs to manage. Surfacing them was internal-
+            // mechanics noise: it suggested actions the user shouldn't
+            // have to take. The values are set automatically on
+            // insert (DiffEngine.isProperNounLike for the flag;
+            // ON CONFLICT increment for the count) and the visible
+            // table shows just what the user manages: the pair, and
+            // whether they want it.
+            Table(visibleEntries) {
                 TableColumn("From") { row in
                     TextField("", text: Binding(
                         get: { row.fromText },
@@ -617,14 +643,6 @@ struct VocabularySettingsView: View {
                         get: { row.toText },
                         set: { var copy = row; copy.toText = $0; store.upsert(copy) }))
                 }
-                TableColumn("Count") { row in Text("\(row.count)") }
-                    .width(min: 50, max: 70)
-                TableColumn("Proper noun") { row in
-                    Toggle("", isOn: Binding(
-                        get: { row.isProperNoun },
-                        set: { var copy = row; copy.isProperNoun = $0; store.upsert(copy) }))
-                }
-                .width(min: 90, max: 110)
                 TableColumn("") { row in
                     Button {
                         store.delete(row)
@@ -645,6 +663,12 @@ struct VocabularySettingsView: View {
                     let f = newFrom.trimmingCharacters(in: .whitespacesAndNewlines)
                     let t = newTo.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !f.isEmpty, !t.isEmpty else { return }
+                    // Manual additions are by definition deliberate
+                    // user actions, so they default to `.stt` (sent to
+                    // the upstream STT provider). Auto-ingested entries
+                    // from inline transcript edits default to `.local`
+                    // — see CorrectionAppliesTo and migration v2 for
+                    // the full mental model.
                     store.upsert(CorrectionRow(
                         dbID: nil,
                         fromText: f,
@@ -652,7 +676,8 @@ struct VocabularySettingsView: View {
                         count: 1,
                         lastSeen: Date(),
                         isProperNoun: DiffEngine.isProperNounLike(t),
-                        userManaged: true))
+                        userManaged: true,
+                        appliesTo: .stt))
                     newFrom = ""; newTo = ""
                 }
                 .keyboardShortcut(.defaultAction)
