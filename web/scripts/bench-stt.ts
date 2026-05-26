@@ -130,6 +130,18 @@ interface SttExpectation {
   ratio?: number;
 }
 
+interface SttTranscriptionOptions {
+  dictation?: boolean;
+  fillerWords?: boolean;
+  measurements?: boolean;
+  profanityFilter?: boolean;
+  detectLanguage?: boolean;
+  /** `find:replacement` pairs as captured from the user's /api/transcribe
+   *  call. Provider adapters that don't support replace rules (e.g. Groq
+   *  Whisper) ignore them; Deepgram applies them server-side. */
+  replaceRules?: Array<{ find: string; replacement: string }>;
+}
+
 interface SttFixture {
   /** Basename without extension. Used as the fixture identifier. */
   name: string;
@@ -145,6 +157,13 @@ interface SttFixture {
   keyterms?: string[];
   /** ISO language code; omit for auto-detect. */
   language?: string;
+  /** Per-request transcribe options snapshotted from the user's original
+   *  /api/transcribe call. Drives faithful replay of the exact provider
+   *  config that produced the reported failure. Without this, the bench
+   *  would call Deepgram in a different mode than the user actually had
+   *  (e.g. dictation: true vs false) and polish would see a different
+   *  input than prod — invalidating any quality comparison. */
+  transcriptionOptions?: SttTranscriptionOptions;
   /** Structural assertions to check on the transcribed text. */
   expects: SttExpectation[];
 }
@@ -184,6 +203,7 @@ function loadFixtures(dir: string): SttFixture[] {
       groundTruth: sidecar.groundTruth,
       keyterms: sidecar.keyterms,
       language: sidecar.language,
+      transcriptionOptions: sidecar.transcriptionOptions,
       expects: sidecar.expects ?? [],
     });
   }
@@ -239,6 +259,18 @@ async function runTranscription(
     audioBytes.byteOffset + audioBytes.byteLength
   );
 
+  // Faithful replay: apply the per-fixture transcribe options snapshot
+  // (captured at the original /api/transcribe call) rather than baking
+  // in defaults. Without this, the bench's Deepgram/Whisper call uses
+  // a different mode than the user actually had, which produces a
+  // different rawText, which produces a different polish input — and
+  // any "polish quality changed" finding would be confounded.
+  //
+  // Fixtures without an options snapshot (older feedback rows
+  // submitted before the snapshot column existed, hand-curated
+  // fixtures) get all-false defaults — matching what a fresh
+  // Speakist client would send.
+  const opts = fixture.transcriptionOptions ?? {};
   const input: TranscriptionInput = {
     providerId: cfg.adapter.id,
     model,
@@ -247,13 +279,22 @@ async function runTranscription(
     transcriptionClientId: `bench-${fixture.name}-${Date.now()}`,
     keyterms: fixture.keyterms,
     language: fixture.language,
-    detectLanguage: !fixture.language,
-    // Sensible defaults for the dictation use-case. Could be made
-    // per-fixture if we ever need to bench the toggles themselves.
-    dictation: true,
-    fillerWords: false,
-    measurements: false,
-    profanityFilter: false,
+    // Honor an explicit detectLanguage from the snapshot. Fall back to
+    // "no explicit language present → detect" which matches what the
+    // Mac client does when preferences.language is empty.
+    detectLanguage: opts.detectLanguage ?? !fixture.language,
+    dictation: opts.dictation ?? false,
+    fillerWords: opts.fillerWords ?? false,
+    measurements: opts.measurements ?? false,
+    profanityFilter: opts.profanityFilter ?? false,
+    // ReplaceRules are flattened to the "find:replacement" wire format
+    // the adapters expect. Filter out malformed entries (missing pieces,
+    // colons in either side that would break the delimiter) — those are
+    // a hygiene issue in the user's vocab corpus, not a transport bug.
+    replaceRules: (opts.replaceRules ?? [])
+      .filter((r) => r.find && r.replacement)
+      .filter((r) => !r.find.includes(":") && !r.replacement.includes(":"))
+      .map((r) => `${r.find}:${r.replacement}`),
   };
 
   const req = cfg.adapter.buildRequest(input, apiKey);
@@ -454,12 +495,35 @@ async function main(): Promise<void> {
         let scoredText = stt.text;
         let polishErrorReason: string | undefined;
         if (args.polish && stt.text && groqApiKey) {
-          const polishResult = await polishWithApiKey({
+          // Retry-with-jittered-backoff on 429s — mirrors bench-polish.ts.
+          // Polish runs against Groq's free-tier 6000-TPM limit while the
+          // bench is also calling Groq for Whisper STT, so the two
+          // pipelines compete for the same token bucket. Without this
+          // every other --polish run silently degrades to "raw STT used
+          // as polished" and the report becomes meaningless.
+          let polishResult = await polishWithApiKey({
             apiKey: groqApiKey,
             model: POLISH_MODEL,
             systemPrompt: polishPrompt,
             rawText: stt.text,
           });
+          let polishRetries = 0;
+          while (
+            !polishResult.applied &&
+            polishResult.errorReason?.startsWith("http_429") &&
+            polishRetries < 4
+          ) {
+            const backoffMs =
+              4_000 * Math.pow(1.5, polishRetries) + Math.random() * 1_000;
+            await sleep(backoffMs);
+            polishRetries++;
+            polishResult = await polishWithApiKey({
+              apiKey: groqApiKey,
+              model: POLISH_MODEL,
+              systemPrompt: polishPrompt,
+              rawText: stt.text,
+            });
+          }
           polishedText = polishResult.text;
           polishLatencyMs = polishResult.latencyMs;
           scoredText = polishedText;
@@ -486,8 +550,16 @@ async function main(): Promise<void> {
           failedExpectations: failed,
         });
 
+        // Per-case status uses the same `errorReason` field the aggregate
+        // counts on — so an ERROR / FAIL / PASS in the per-case stream
+        // matches what the per-provider summary says at the bottom.
+        // Previously these diverged: per-case only flagged stt errors
+        // (so a polish 429 looked like PASS), while aggregate counted
+        // any errorReason (so the same case looked like ERROR). The
+        // two views need to agree or the bench becomes confusing to
+        // read under TPM pressure.
         const status =
-          stt.errorReason ? "ERROR" :
+          errorReason ? "ERROR" :
           failed.length === 0 ? "PASS" : "FAIL";
         const itLabel = args.iterations > 1 ? ` [${iter}/${args.iterations}]` : "";
         const lat = polishLatencyMs ? `${stt.latencyMs}+${polishLatencyMs}ms` : `${stt.latencyMs}ms`;
@@ -543,6 +615,10 @@ function truncate(s: string, n: number): string {
 function pct(n: number, d: number): string {
   if (d === 0) return "0%";
   return `${((100 * n) / d).toFixed(1)}%`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function pickPct(sorted: number[], p: number): number {

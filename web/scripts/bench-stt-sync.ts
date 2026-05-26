@@ -347,9 +347,20 @@ interface FeedbackSidecar {
    *  transcribes with no keyterm hint set, which is the only honest
    *  fallback. */
   keyterms?: string[];
+  /** Per-request transcribe options snapshot, surfaced at the top
+   *  level so bench-stt.ts can apply them when calling the provider.
+   *  Same null-vs-omitted semantics as `keyterms`: present when the
+   *  submitting client captured a snapshot, omitted when not.
+   *  Without this the bench would hardcode defaults (e.g. dictation:
+   *  true) that don't match the user's actual configuration, which
+   *  produces different STT output than prod and confounds any
+   *  quality comparison. */
+  transcriptionOptions?: Record<string, unknown>;
   /** Original transcription context. Embedded for human triage and for
    *  future bench enhancements (e.g. "replay this fixture against the
-   *  same provider/model"). bench-stt.ts ignores this block. */
+   *  same provider/model"). bench-stt.ts already reads keyterms and
+   *  transcriptionOptions from the top level above; the `feedback`
+   *  block is purely informational. */
   feedback: {
     id: string;
     createdAt: string;
@@ -364,7 +375,9 @@ interface FeedbackSidecar {
     userNote: string | null;
     transcriptionClientId: string;
     /** Decoded transcription_options blob from the feedback row, or null
-     *  if the submitting client didn't report a snapshot. */
+     *  if the submitting client didn't report a snapshot. Kept here in
+     *  addition to the top-level copy above for human triage — the
+     *  top-level is what the bench consumes. */
     transcriptionOptions: Record<string, unknown> | null;
   };
   expects: Array<{ kind: string; [k: string]: unknown }>;
@@ -388,6 +401,12 @@ function buildSidecar(full: FeedbackFullRecord, defaultMaxWer: number): Feedback
     // field as absent rather than empty — which it would otherwise
     // interpret as "explicitly no keyterms".
     keyterms: full.keyterms ?? undefined,
+    // Same omit-on-null treatment for transcription options. When
+    // the snapshot is present the bench replays the exact provider
+    // config the user had at recording time (dictation toggle,
+    // replace rules, etc.); when it's absent the bench falls back
+    // to all-false defaults — matching a fresh Speakist client.
+    transcriptionOptions: full.transcription_options ?? undefined,
     feedback: {
       id: full.id,
       createdAt: full.created_at,
