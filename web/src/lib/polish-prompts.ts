@@ -42,9 +42,13 @@ import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   polishPromptVersions,
+  serviceTokens,
+  users,
   type PolishPromptMode,
   type PolishPromptSource,
 } from "@/lib/db/schema";
+import { env } from "@/lib/env";
+import { notifyPromptUpdate } from "@/lib/slack";
 
 // Re-export the shared types so callers can import everything from
 // this module without reaching into the Drizzle schema.
@@ -295,6 +299,23 @@ async function insertActiveVersion(args: {
     .limit(1);
   const nextVersion = (maxRow?.max ?? 0) + 1;
 
+  // Capture the previous active row's bench_score before we
+  // deactivate it. Used to compute a delta for the Slack
+  // notification at the bottom of this function — so admins see
+  // "bench 0.95 (+0.02)" in their channel instead of just the new
+  // absolute number.
+  const [prevActive] = await db
+    .select({ benchScore: polishPromptVersions.benchScore })
+    .from(polishPromptVersions)
+    .where(
+      and(
+        eq(polishPromptVersions.mode, args.mode),
+        eq(polishPromptVersions.isActive, true)
+      )
+    )
+    .limit(1);
+  const previousBenchScore = prevActive?.benchScore ?? null;
+
   // Deactivate the current active row, if any. Filtered on
   // is_active = 1 so the partial unique index can't be tripped by
   // a concurrent insert: at most one row matches.
@@ -348,11 +369,84 @@ async function insertActiveVersion(args: {
     throw new Error("insertActiveVersion: insert returned no rows");
   }
 
-  // TODO(PR 3): notifyPromptUpdate(...) once the prompt_update Slack
-  // destination lands. Fire-and-forget after this return so a Slack
-  // failure can't block the DB commit.
+  // Fire-and-forget the Slack notification. Failures are swallowed
+  // inside slack.ts so a webhook outage can't block the DB commit
+  // we already made — by the time this Promise rejects (if ever),
+  // the version is live regardless.
+  void fireSlackNotification(inserted, previousBenchScore).catch((err) => {
+    console.error("[polish-prompts] notifyPromptUpdate failed:", err);
+  });
 
   return hydrate(inserted);
+}
+
+/** Resolve the actor + delta + URL for a fresh version row, then
+ *  hand off to notifyPromptUpdate. Kept separate from
+ *  insertActiveVersion so the write path doesn't await the actor
+ *  lookups (one or two extra reads only to render a Slack message). */
+async function fireSlackNotification(
+  inserted: typeof polishPromptVersions.$inferSelect,
+  previousBenchScore: number | null
+): Promise<void> {
+  // `seed` rows come from migration 0022's SQL INSERTs; they don't
+  // call createVersion and never reach this path. The notifier
+  // never fires for them — kept in the source enum so future-us can
+  // re-add a seed via the TS surface if needed.
+  if (inserted.source === "seed") return;
+
+  const actor = await resolveActor(
+    inserted.createdByUserId,
+    inserted.createdByTokenId
+  );
+  const benchScoreDelta =
+    inserted.benchScore != null && previousBenchScore != null
+      ? inserted.benchScore - previousBenchScore
+      : null;
+  const detailUrl = new URL(
+    "/admin/polish-prompts",
+    env.public.NEXT_PUBLIC_SITE_URL
+  ).toString();
+
+  await notifyPromptUpdate({
+    mode: inserted.mode,
+    newVersion: inserted.version,
+    source: inserted.source,
+    notes: inserted.notes,
+    benchScore: inserted.benchScore,
+    benchScoreDelta,
+    actor,
+    detailUrl,
+  });
+}
+
+/** Friendly attribution for the Slack message. One of:
+ *   * `<email>`            — admin write (createdByUserId set)
+ *   * `token "<label>"`    — agent write (createdByTokenId set)
+ *   * `system`             — neither (shouldn't happen via the TS
+ *                            surface, but guards against raw SQL
+ *                            writes that bypass the domain layer). */
+async function resolveActor(
+  userId: string | null,
+  tokenId: string | null
+): Promise<string> {
+  const db = getDb();
+  if (userId) {
+    const [row] = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return row?.email ?? `user:${userId.slice(0, 8)}`;
+  }
+  if (tokenId) {
+    const [row] = await db
+      .select({ label: serviceTokens.label })
+      .from(serviceTokens)
+      .where(eq(serviceTokens.id, tokenId))
+      .limit(1);
+    return row?.label ? `token "${row.label}"` : `token:${tokenId.slice(0, 8)}`;
+  }
+  return "system";
 }
 
 /**

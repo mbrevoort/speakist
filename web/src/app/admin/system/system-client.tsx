@@ -231,7 +231,7 @@ export function AllowPublicOrgToggle({ initiallyEnabled }: { initiallyEnabled: b
 // The view/edit split mirrors SystemProviderKey above for consistency.
 
 interface SlackWebhookCardProps {
-  destination: "new_user" | "topup" | "feedback";
+  destination: "new_user" | "topup" | "feedback" | "prompt_update";
   title: string;
   description: string;
   hasUrl: boolean;

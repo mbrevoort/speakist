@@ -19,6 +19,8 @@ import type { SerializedToken } from "./page";
 const SCOPE_DESCRIPTIONS: Record<ServiceScope, string> = {
   "feedback:read": "List + fetch feedback rows + download audio",
   "feedback:triage": "Update status / resolution + delete rows",
+  "prompts:read": "Get active polish prompt + list/inspect version history",
+  "prompts:write": "Propose a new active polish prompt version (agent loop)",
 };
 
 interface Props {

@@ -151,7 +151,12 @@ export async function setAllowPublicOrgCreation(
 // pin to https + the canonical hostname so a fat-fingered paste of an
 // unrelated URL is caught at save time rather than at first notification.
 
-const SLACK_DESTINATIONS = ["new_user", "topup", "feedback"] as const;
+const SLACK_DESTINATIONS = [
+  "new_user",
+  "topup",
+  "feedback",
+  "prompt_update",
+] as const;
 type SlackDestination = (typeof SLACK_DESTINATIONS)[number];
 
 interface SlackDestSpec {
@@ -181,6 +186,12 @@ const SLACK_SPECS: Record<SlackDestination, SlackDestSpec> = {
     setEnabledColumn: (v) => ({ slackFeedbackWebhookEnabled: v }),
     pickUrl: (row) => row.slackFeedbackWebhookUrlEncrypted,
     label: "feedback",
+  },
+  prompt_update: {
+    setUrlColumn: (v) => ({ slackPromptUpdateWebhookUrlEncrypted: v }),
+    setEnabledColumn: (v) => ({ slackPromptUpdateWebhookEnabled: v }),
+    pickUrl: (row) => row.slackPromptUpdateWebhookUrlEncrypted,
+    label: "prompt-update",
   },
 };
 

@@ -1,23 +1,33 @@
 // Optional Slack incoming-webhook notifications.
 //
-// Three destinations, each independently configurable + enable-flagged at
+// Four destinations, each independently configurable + enable-flagged at
 // /admin/system:
 //
-//   * `new_user`  — fires once per newly-provisioned user (after the
-//                   Auth.js createUser hook + provisionNewUser ran). The
-//                   user just clicked their first magic link, so this is
-//                   effectively "new sign-up landed."
-//   * `topup`     — fires when a Stripe payment (manual Checkout or
-//                   off-session auto-top-up) credits an org's balance.
-//   * `feedback`  — fires on every successful POST /api/feedback when a
-//                   user clicks "Report bad transcription." Useful for
-//                   spotting quality-issue clusters as they come in.
+//   * `new_user`      — fires once per newly-provisioned user (after
+//                       the Auth.js createUser hook + provisionNewUser
+//                       ran). The user just clicked their first magic
+//                       link, so this is effectively "new sign-up
+//                       landed."
+//   * `topup`         — fires when a Stripe payment (manual Checkout
+//                       or off-session auto-top-up) credits an org's
+//                       balance.
+//   * `feedback`      — fires on every successful POST /api/feedback
+//                       when a user clicks "Report bad transcription."
+//                       Useful for spotting quality-issue clusters as
+//                       they come in.
+//   * `prompt_update` — fires whenever a polish-prompt version is
+//                       written via lib/polish-prompts.ts. Covers
+//                       admin edits, agent proposals (via the MCP
+//                       `propose_polish_prompt` tool), rollbacks, and
+//                       prod→dev mirrors. Low-volume signal kept on a
+//                       separate webhook from feedback so the two
+//                       don't share a channel.
 //
-// All three are fire-and-forget: any failure here is logged and swallowed
-// so it never blocks the user-visible flow (sign-in, webhook ack,
-// feedback submission). The only thing that affects user behavior is
-// whether we *enqueue* the notification at all — gated on the
-// per-destination enable flag.
+// All destinations are fire-and-forget: any failure here is logged and
+// swallowed so it never blocks the user-visible flow (sign-in, webhook
+// ack, feedback submission, prompt write). The only thing that affects
+// user behavior is whether we *enqueue* the notification at all —
+// gated on the per-destination enable flag.
 //
 // URLs are AES-GCM encrypted at rest with APP_ENCRYPTION_KEY (same
 // envelope as system provider keys); we decrypt at post time.
@@ -31,8 +41,9 @@ import { getDb } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
 import { decryptSecret } from "@/lib/crypto";
 import { env } from "@/lib/env";
+import { truncate } from "@/lib/utils";
 
-type Destination = "new_user" | "topup" | "feedback";
+type Destination = "new_user" | "topup" | "feedback" | "prompt_update";
 
 /** Display name on every Slack message we post. Slack uses this for
  *  the bot row in the channel timeline. */
@@ -66,6 +77,8 @@ async function loadDestination(dest: Destination): Promise<DestinationColumns | 
       topupEnabled: appSettings.slackTopupWebhookEnabled,
       feedbackUrl: appSettings.slackFeedbackWebhookUrlEncrypted,
       feedbackEnabled: appSettings.slackFeedbackWebhookEnabled,
+      promptUpdateUrl: appSettings.slackPromptUpdateWebhookUrlEncrypted,
+      promptUpdateEnabled: appSettings.slackPromptUpdateWebhookEnabled,
     })
     .from(appSettings)
     .where(eq(appSettings.id, 1))
@@ -79,6 +92,8 @@ async function loadDestination(dest: Destination): Promise<DestinationColumns | 
       return { encrypted: row.topupUrl, enabled: row.topupEnabled };
     case "feedback":
       return { encrypted: row.feedbackUrl, enabled: row.feedbackEnabled };
+    case "prompt_update":
+      return { encrypted: row.promptUpdateUrl, enabled: row.promptUpdateEnabled };
   }
 }
 
@@ -273,11 +288,101 @@ export async function notifyFeedback(n: FeedbackNotification): Promise<void> {
   });
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}
-
 function quoted(s: string): string {
   return s.split("\n").map((line) => `> ${line}`).join("\n");
+}
+
+// ---- prompt_update --------------------------------------------------------
+
+export interface PromptUpdateNotification {
+  /** Polish mode the new version is for. */
+  mode: "intuitive" | "prescriptive";
+  /** Version number assigned to the new row. */
+  newVersion: number;
+  /** Provenance of the write — drives the header tone + actor copy. */
+  source: "admin" | "agent" | "rollback" | "mirror" | "seed";
+  /** Caller-supplied notes (already auto-prefixed for rollbacks). */
+  notes: string | null;
+  /** New version's score (0..1) or null when no bench was run. */
+  benchScore: number | null;
+  /** Score change vs the previous active version, or null when
+   *  either the previous active had no score or no previous active
+   *  existed. Used to flag regressions in the message header. */
+  benchScoreDelta: number | null;
+  /** Human-readable attribution — email for admin writes, token
+   *  label for agent writes, "system" for seeds/mirrors. */
+  actor: string;
+  /** Absolute URL the action button links to. The admin page
+   *  doesn't deep-link to a specific version yet; surfacing the
+   *  page is enough for an operator to find the new row. */
+  detailUrl: string;
+}
+
+/** Headline emoji picks by source + bench-delta sign:
+ *   * rollback         → :rewind:
+ *   * regression       → :warning:        (delta < 0)
+ *   * agent improvement→ :sparkles:       (agent + delta >= 0)
+ *   * default          → :pencil:
+ */
+function promptHeaderEmoji(
+  source: PromptUpdateNotification["source"],
+  delta: number | null
+): string {
+  if (source === "rollback") return ":rewind:";
+  if (delta != null && delta < 0) return ":warning:";
+  if (source === "agent") return ":sparkles:";
+  return ":pencil:";
+}
+
+export async function notifyPromptUpdate(
+  n: PromptUpdateNotification
+): Promise<void> {
+  const emoji = promptHeaderEmoji(n.source, n.benchScoreDelta);
+  const headerText = `${emoji} *Polish prompt updated* — *${n.mode}* v${n.newVersion}`;
+
+  const benchLine =
+    n.benchScore == null
+      ? "_no bench_"
+      : n.benchScoreDelta == null
+        ? `bench *${n.benchScore.toFixed(2)}*`
+        : `bench *${n.benchScore.toFixed(2)}* (${
+            n.benchScoreDelta >= 0 ? "+" : ""
+          }${n.benchScoreDelta.toFixed(2)})`;
+
+  const contextLine = `source: \`${n.source}\` · by ${n.actor} · ${benchLine}`;
+  // Keep notes preview reasonable — operators click through for the
+  // full body. 400 chars renders as ~4 lines in Slack mrkdwn.
+  const notesPreview = n.notes ? quoted(truncate(n.notes, 400)) : null;
+
+  const blocks: unknown[] = [
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: headerText },
+    },
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: contextLine }],
+    },
+  ];
+  if (notesPreview) {
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: notesPreview },
+    });
+  }
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: { type: "plain_text", text: "Open in admin" },
+        url: n.detailUrl,
+      },
+    ],
+  });
+
+  await postToSlack("prompt_update", {
+    text: `${emoji} Polish prompt updated — ${n.mode} v${n.newVersion} by ${n.actor}`,
+    blocks,
+  });
 }

@@ -37,6 +37,8 @@ export default async function AdminSystemPage() {
       slackTopupEnabled: appSettings.slackTopupWebhookEnabled,
       slackFeedbackUrl: appSettings.slackFeedbackWebhookUrlEncrypted,
       slackFeedbackEnabled: appSettings.slackFeedbackWebhookEnabled,
+      slackPromptUpdateUrl: appSettings.slackPromptUpdateWebhookUrlEncrypted,
+      slackPromptUpdateEnabled: appSettings.slackPromptUpdateWebhookEnabled,
     })
     .from(appSettings)
     .where(eq(appSettings.id, 1))
@@ -168,6 +170,13 @@ export default async function AdminSystemPage() {
             description="Fires every time a user submits a Report bad transcription from the Mac or iOS app. Message includes the polished/expected diff, failure kind, audio-attached flag, and a Triage button linking to /admin/feedback."
             hasUrl={!!row?.slackFeedbackUrl}
             enabled={row?.slackFeedbackEnabled ?? false}
+          />
+          <SlackWebhookCard
+            destination="prompt_update"
+            title="Polish-prompt update"
+            description="Fires whenever a polish-prompt version is written — admin edit, agent proposal (MCP), rollback, or prod→dev mirror. Low-volume signal; recommended on its own channel so it doesn't share airtime with feedback. Message includes mode, new version, source, actor, and bench score with delta vs the previous active."
+            hasUrl={!!row?.slackPromptUpdateUrl}
+            enabled={row?.slackPromptUpdateEnabled ?? false}
           />
         </div>
       </section>

@@ -501,6 +501,12 @@ export const appSettings = sqliteTable("app_settings", {
   slackTopupWebhookEnabled: bool("slack_topup_webhook_enabled").notNull().default(false),
   slackFeedbackWebhookUrlEncrypted: text("slack_feedback_webhook_url_encrypted"),
   slackFeedbackWebhookEnabled: bool("slack_feedback_webhook_enabled").notNull().default(false),
+  // Migration 0023 — fires on every polish-prompt version write
+  // (admin edit, agent proposal, rollback, prod→dev mirror).
+  // Separate destination from feedback because volume + audience
+  // differ. See lib/slack.ts:notifyPromptUpdate.
+  slackPromptUpdateWebhookUrlEncrypted: text("slack_prompt_update_webhook_url_encrypted"),
+  slackPromptUpdateWebhookEnabled: bool("slack_prompt_update_webhook_enabled").notNull().default(false),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
 
