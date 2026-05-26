@@ -595,18 +595,31 @@ struct VocabularySettingsView: View {
     @State private var newFrom = ""
     @State private var newTo = ""
 
+    /// Display-side filter: hide internal-only entries that haven't
+    /// been promoted to STT vocabulary. Speakist auto-ingests every
+    /// inline transcript edit into a local-only staging area so the
+    /// reactive classifier can decide whether the correction looks
+    /// like a real vocab item (proper noun, technical term, slang,
+    /// abbreviation) or a one-off contextual edit. Surfacing the
+    /// staging entries in the UI would just add noise — the user
+    /// only cares about entries that actually affect transcription.
+    /// Anything they explicitly Add below also goes straight to .stt.
+    private var visibleEntries: [CorrectionRow] {
+        store.all.filter { $0.appliesTo == .stt }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Learned corrections")
+                Text("Vocabulary")
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            Text("Corrections are applied two ways per transcription: proper-noun entries bias the transcription engine when it supports keyterm boosts (so the mistake is less likely to happen again), and every entry is applied as a post-transcription find/replace so any remaining miss still gets fixed in the final text.")
+            Text("Words and phrases Speakist uses to bias your transcriptions and apply post-transcription replacements. Add proper nouns, slang you prefer in writing, or any term Speakist consistently mishears. Inline edits you make in History also feed this list automatically when the same correction recurs.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
-            Table(store.all) {
+            Table(visibleEntries) {
                 TableColumn("From") { row in
                     TextField("", text: Binding(
                         get: { row.fromText },
