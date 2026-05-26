@@ -141,25 +141,30 @@ final class CorrectionStore: ObservableObject {
         }
     }
 
-    /// Find local-only rows eligible for classifier promotion and
-    /// dispatch them. Each callback runs on its own Task; we don't
-    /// block the caller.
+    /// Find every local-only row and dispatch it to the classifier.
+    /// Each callback runs on its own Task; we don't block the
+    /// caller.
     ///
-    /// Eligibility rules — both conditions OR-combined:
-    ///   * `isProperNoun = true` AND `count ≥ 1`. The DiffEngine's
-    ///     "contains uppercase or digit" heuristic gives us strong
-    ///     upfront evidence that the user just fixed a brand, name,
-    ///     code identifier, or version string. A single edit is
-    ///     enough signal — wait for repetition would just hide the
-    ///     user's most obvious corrections.
-    ///   * `count ≥ 2`, regardless of the heuristic. Catches
-    ///     lowercase technical jargon, slang phrases, abbreviations
-    ///     the heuristic missed; the repetition itself is the
-    ///     vocab-worthy signal.
+    /// There is intentionally NO count threshold. The classifier is
+    /// the gate: it decides whether an auto-ingested correction
+    /// looks like a real vocab item or a one-off contextual edit.
+    /// Earlier iterations of this code required `count >= 2` (the
+    /// user had to make the same correction twice before anything
+    /// happened), then a partial relaxation that ran at count=1
+    /// for proper-noun-like edits but still required count>=2 for
+    /// everything else — both versions leaked the count threshold
+    /// into UX. From the user's perspective, "I gave the system a
+    /// correction and it did nothing" is broken, regardless of how
+    /// cheap or conservative the gate was internally. The bench
+    /// established 100% precision on every skip category (common-
+    /// word swaps, grammar fixes, function words, self-corrections,
+    /// punctuation, multi-word rewrites, single-char finds), so
+    /// the threshold was guarding against a failure mode that
+    /// doesn't actually appear.
     ///
-    /// Function-word swaps and common-word substitutions still go
-    /// through the classifier (gated by count ≥ 2) and the
-    /// classifier reliably skips them — see bench-classifier.
+    /// In-memory dedup via `classifierAttempted` still prevents
+    /// re-classifying the same (from, to) pair within a single
+    /// session.
     ///
     /// Also called from `syncFromServer` so a fresh launch picks up
     /// any rows that were left local-only on a previous session
@@ -168,24 +173,12 @@ final class CorrectionStore: ObservableObject {
     /// gets a clean re-try.
     private func promotePromotables() {
         guard apiClient != nil else { return }
-        for row in all where row.appliesTo == .local && isPromotionCandidate(row) {
+        for row in all where row.appliesTo == .local {
             let key = wireKey(from: row.fromText, to: row.toText)
             guard !classifierAttempted.contains(key) else { continue }
             classifierAttempted.insert(key)
             attemptPromotion(row)
         }
-    }
-
-    /// Two-tier eligibility gate. The proper-noun-like fast path
-    /// catches the most common user expectation ("I just edited a
-    /// proper noun, it should appear in vocab immediately") without
-    /// surfacing the count threshold in the UI. The count ≥ 2
-    /// fallback keeps lowercase / function-word / one-off
-    /// contextual cases conservative.
-    private func isPromotionCandidate(_ row: CorrectionRow) -> Bool {
-        if row.isProperNoun && row.count >= 1 { return true }
-        if row.count >= 2 { return true }
-        return false
     }
 
     /// Run a single (from, to) pair through the server's classifier
