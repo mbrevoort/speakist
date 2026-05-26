@@ -21,6 +21,7 @@ import {
   type PolishPromptMode,
   type PromptVersion,
 } from "@/lib/polish-prompts";
+import { isMirrorConfigured } from "@/lib/polish-prompts-mirror";
 import { bakedInPromptForMode } from "@/lib/transcription/polish";
 import { PromptManager, type SerializedVersion } from "./prompt-manager";
 
@@ -56,13 +57,19 @@ export default async function AdminPolishPromptsPage() {
     )
   );
 
+  // Decides whether the "Mirror → dev" button is enabled — checked
+  // once at render time so the client doesn't need its own env
+  // visibility. Returns false on dev (no DEV_MIRROR_* set there) and
+  // on prod if the operator hasn't completed the one-time setup yet.
+  const mirrorAvailable = isMirrorConfigured();
+
   return (
     <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader
         title="Polish prompts"
         description="Active learning loop seed + history. Every change — admin edit, agent proposal, rollback, cross-env mirror — creates a new version. The current active row is what /api/transcribe serves."
       />
-      <PromptManager bundles={bundles} />
+      <PromptManager bundles={bundles} mirrorAvailable={mirrorAvailable} />
     </div>
   );
 }

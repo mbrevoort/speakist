@@ -22,7 +22,9 @@ import { requireSuperAdmin } from "@/lib/authz";
 import {
   createVersion,
   rollbackToVersion,
+  type PolishPromptMode,
 } from "@/lib/polish-prompts";
+import { mirrorActivePromptToDev } from "@/lib/polish-prompts-mirror";
 import type { ActionResult } from "@/lib/server-actions";
 
 export type { ActionResult };
@@ -108,6 +110,54 @@ export async function rollbackPolishPromptVersion(
     return {
       ok: false,
       error: err instanceof Error ? err.message : "Couldn't roll back.",
+    };
+  }
+}
+
+// ---- mirror → dev ---------------------------------------------------------
+
+const mirrorSchema = z.object({
+  mode: z.enum(["intuitive", "prescriptive"]),
+});
+
+/** Server action behind the "Mirror → dev" button. Reads this env's
+ *  active prompt for the given mode and POSTs it to the dev Worker's
+ *  receiver. The Slack notification fires on the receiving end via
+ *  insertActiveVersion → notifyPromptUpdate.
+ *
+ *  Failure modes match the API route's: config missing, no active
+ *  version on this env, dev unreachable / rejected. We surface a
+ *  user-friendly message for each so the admin doesn't have to
+ *  parse a raw API response. */
+export async function mirrorActivePolishPromptToDev(
+  formData: FormData
+): Promise<ActionResult> {
+  try {
+    await requireSuperAdmin();
+    const parsed = mirrorSchema.safeParse({ mode: formData.get("mode") });
+    if (!parsed.success) {
+      return { ok: false, error: "Bad input." };
+    }
+    const result = await mirrorActivePromptToDev(
+      parsed.data.mode as PolishPromptMode
+    );
+    if (!result.ok) {
+      // The helper's error codes are self-describing enough that
+      // surfacing the detail directly is more useful than a fixed
+      // map — the admin sees the actual reason ("DEV_MIRROR_TOKEN
+      // not configured", "no active version on prod yet", etc.).
+      return { ok: false, error: result.detail };
+    }
+    revalidatePath("/admin/polish-prompts");
+    return {
+      ok: true,
+      message: `Mirrored ${parsed.data.mode} v${result.sourceVersion} → dev v${result.devVersion ?? "?"}.`,
+    };
+  } catch (err) {
+    console.error("mirrorActivePolishPromptToDev failed:", err);
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Couldn't mirror.",
     };
   }
 }

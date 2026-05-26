@@ -19,7 +19,14 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronUp, History, Pencil, RotateCcw } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  History,
+  Pencil,
+  RotateCcw,
+  Share2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type {
@@ -27,6 +34,7 @@ import type {
   PolishPromptSource,
 } from "@/lib/polish-prompts";
 import {
+  mirrorActivePolishPromptToDev,
   rollbackPolishPromptVersion,
   saveNewPolishPromptVersion,
   type ActionResult,
@@ -58,13 +66,21 @@ interface ModeBundle {
 
 interface Props {
   bundles: ModeBundle[];
+  /** True when DEV_MIRROR_BACKEND_URL + DEV_MIRROR_TOKEN are both
+   *  set on this Worker — i.e. prod after the one-time setup. False
+   *  on dev (which never has the secret) and on prod before setup. */
+  mirrorAvailable: boolean;
 }
 
-export function PromptManager({ bundles }: Props) {
+export function PromptManager({ bundles, mirrorAvailable }: Props) {
   return (
     <div className="space-y-10">
       {bundles.map((b) => (
-        <ModeCard key={b.mode} bundle={b} />
+        <ModeCard
+          key={b.mode}
+          bundle={b}
+          mirrorAvailable={mirrorAvailable}
+        />
       ))}
     </div>
   );
@@ -72,11 +88,34 @@ export function PromptManager({ bundles }: Props) {
 
 // ---- per-mode card --------------------------------------------------------
 
-function ModeCard({ bundle }: { bundle: ModeBundle }) {
+function ModeCard({
+  bundle,
+  mirrorAvailable,
+}: {
+  bundle: ModeBundle;
+  mirrorAvailable: boolean;
+}) {
   const { mode, active, history, bakedIn } = bundle;
   const [editing, setEditing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [viewing, setViewing] = useState<SerializedVersion | null>(null);
+  const [mirrorResult, setMirrorResult] = useState<ActionResult | null>(null);
+  const [mirrorPending, startMirrorTransition] = useTransition();
+
+  function onMirror() {
+    if (!active) return;
+    const confirmed = window.confirm(
+      `Mirror ${mode} v${active.version} to dev? This creates a new version on dev with source='mirror'. Dev's active prompt will change.`
+    );
+    if (!confirmed) return;
+    const fd = new FormData();
+    fd.set("mode", mode);
+    setMirrorResult(null);
+    startMirrorTransition(async () => {
+      const r = await mirrorActivePolishPromptToDev(fd);
+      setMirrorResult(r);
+    });
+  }
 
   // Bench-score delta — how this version compares to the previous
   // *active* one. We walk `history` (newest first) for the most
@@ -103,7 +142,7 @@ function ModeCard({ bundle }: { bundle: ModeBundle }) {
               : "No version yet — /api/transcribe is serving the baked-in baseline."}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button
             type="button"
             variant="outline"
@@ -127,8 +166,43 @@ function ModeCard({ bundle }: { bundle: ModeBundle }) {
               <ChevronDown className="h-3.5 w-3.5" />
             )}
           </Button>
+          {/* Mirror button: rendered only on envs configured for it
+              (prod, after one-time setup). active === null also
+              disables it because there's nothing to mirror — admins
+              shouldn't be able to push "no version" to dev. */}
+          {mirrorAvailable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onMirror}
+              disabled={!active || mirrorPending}
+              title={
+                !active
+                  ? "No active version on this env yet — nothing to mirror."
+                  : "Push this env's active prompt to dev as a new version."
+              }
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              {mirrorPending ? "Mirroring…" : "Mirror → dev"}
+            </Button>
+          )}
         </div>
       </header>
+
+      {mirrorResult && (
+        <p
+          className={cn(
+            "mt-3 text-sm",
+            mirrorResult.ok ? "text-sage" : "text-destructive"
+          )}
+          role="status"
+        >
+          {mirrorResult.ok
+            ? mirrorResult.message ?? "Mirrored."
+            : mirrorResult.error}
+        </p>
+      )}
 
       {active && (
         <ActiveSummary

@@ -81,6 +81,25 @@ const serverSchema = publicSchema.extend({
   // Deepgram (Phase 6) — used server-side to mint short-lived keys.
   DEEPGRAM_PROJECT_ID: z.string().min(1).optional(),
   DEEPGRAM_PROJECT_KEY: z.string().min(1).optional(),
+
+  // Polish-prompt prod → dev mirror. Both are env-specific by design —
+  // only set on prod, never on dev (the receiver doesn't need them).
+  // See docs/polish-prompt-mirror.md for the one-time setup.
+  //
+  //   * DEV_MIRROR_BACKEND_URL — Worker var in wrangler.toml's
+  //     [env.production.vars]; the dev Worker's base URL. The sender
+  //     POSTs to ${DEV_MIRROR_BACKEND_URL}/api/admin/polish-prompts/mirror-receive.
+  //   * DEV_MIRROR_TOKEN       — Worker secret on prod; an ssat_ token
+  //     minted on /admin/tokens of the DEV environment with scope
+  //     prompts:write. Set via `wrangler secret put DEV_MIRROR_TOKEN
+  //     --env production`. Never lives in plain config.
+  //
+  // Both optional so dev and local-dev builds parse the schema cleanly.
+  // The /api/admin/polish-prompts/mirror endpoint surfaces a 412
+  // "preconditions not met" if either is missing when invoked, with
+  // pointers to the doc.
+  DEV_MIRROR_BACKEND_URL: z.string().url().optional(),
+  DEV_MIRROR_TOKEN: z.string().min(1).optional(),
 });
 
 export const env = {
