@@ -259,6 +259,20 @@ export const vocabularyEntries = sqliteTable(
     toText: text("to_text").notNull(),
     count: integer("count").notNull().default(1),
     isProperNoun: bool("is_proper_noun").notNull().default(false),
+    // Whether this entry should reach STT or stay client-side only.
+    //   * "local" — stored + shown in the Vocabulary UI, but NEVER sent
+    //     to the upstream STT provider. Default for auto-ingested
+    //     entries from inline transcript edits, where we don't yet
+    //     know if the user wants the rule applied globally.
+    //   * "stt"   — sent to the provider as a keyterm bias + as a
+    //     replace=find:replacement rule. Promoted to here either by
+    //     explicit user action in Settings or by the reactive LLM
+    //     classifier (migration 0021 backfilled this conservatively).
+    // See migration 0021 for the rationale + backfill heuristic.
+    appliesTo: text("applies_to")
+      .$type<"local" | "stt">()
+      .notNull()
+      .default("local"),
     lastSeen: timestampMs("last_seen").notNull().$defaultFn(() => new Date()),
     createdAt: timestampMs("created_at").notNull().$defaultFn(() => new Date()),
     updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
@@ -266,6 +280,11 @@ export const vocabularyEntries = sqliteTable(
   },
   (t) => ({
     userUpdatedIdx: index("vocab_user_updated_idx").on(t.userId, t.updatedAt),
+    appliesToIdx: index("vocab_applies_to_idx").on(
+      t.userId,
+      t.appliesTo,
+      t.updatedAt
+    ),
     unique: uniqueIndex("vocab_unique").on(t.userId, t.fromText, t.toText),
   })
 );

@@ -375,6 +375,17 @@ final class SpeakistAPIClient {
         let to: String
         let count: Int?
         let isProperNoun: Bool?
+        /// Which surfaces this vocab entry affects. See server's
+        /// /api/vocabulary route + migration 0021 for the full
+        /// rationale; in short:
+        ///   - "local" → stored + shown in Settings, never sent to STT
+        ///   - "stt"   → sent to the upstream STT provider as keyterm
+        ///               bias + replace=find:replacement rule
+        /// Optional on the wire so older Mac builds (no field) keep
+        /// syncing; absence means "server default" which is "local"
+        /// for new rows and the value migration 0021 set for legacy
+        /// rows.
+        let appliesTo: String?
         let lastSeen: String?
         let updatedAt: String?
         let deleted: Bool?
@@ -382,6 +393,7 @@ final class SpeakistAPIClient {
         enum CodingKeys: String, CodingKey {
             case from, to, count
             case isProperNoun = "is_proper_noun"
+            case appliesTo = "applies_to"
             case lastSeen = "last_seen"
             case updatedAt = "updated_at"
             case deleted
@@ -652,6 +664,7 @@ private extension SpeakistAPIClient.VocabEntryWire {
         var d: [String: Any] = ["from": from, "to": to]
         if let count { d["count"] = count }
         if let isProperNoun { d["is_proper_noun"] = isProperNoun }
+        if let appliesTo { d["applies_to"] = appliesTo }
         if let lastSeen { d["last_seen"] = lastSeen }
         if let deleted { d["deleted"] = deleted }
         return d

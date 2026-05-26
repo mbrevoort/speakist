@@ -645,6 +645,12 @@ struct VocabularySettingsView: View {
                     let f = newFrom.trimmingCharacters(in: .whitespacesAndNewlines)
                     let t = newTo.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !f.isEmpty, !t.isEmpty else { return }
+                    // Manual additions are by definition deliberate
+                    // user actions, so they default to `.stt` (sent to
+                    // the upstream STT provider). Auto-ingested entries
+                    // from inline transcript edits default to `.local`
+                    // — see CorrectionAppliesTo and migration v2 for
+                    // the full mental model.
                     store.upsert(CorrectionRow(
                         dbID: nil,
                         fromText: f,
@@ -652,7 +658,8 @@ struct VocabularySettingsView: View {
                         count: 1,
                         lastSeen: Date(),
                         isProperNoun: DiffEngine.isProperNounLike(t),
-                        userManaged: true))
+                        userManaged: true,
+                        appliesTo: .stt))
                     newFrom = ""; newTo = ""
                 }
                 .keyboardShortcut(.defaultAction)

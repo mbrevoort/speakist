@@ -25,6 +25,16 @@ interface WireEntry {
   to: string;
   count: number;
   is_proper_noun: boolean;
+  /** Which paste paths this entry affects. See schema.ts for the full
+   *  rationale; in short:
+   *    - "local" → stored + visible in the Vocab UI, never reaches STT
+   *    - "stt"   → sent to the upstream STT provider as keyterm bias +
+   *                replace=find:replacement rule
+   *  Optional on the wire so older Mac clients (pre-appliesTo) can keep
+   *  syncing — they'll see the field on incoming entries and ignore it,
+   *  and their POSTs without the field will fall through to the
+   *  database default ("local"). */
+  applies_to?: "local" | "stt";
   last_seen: string; // ISO
   updated_at: string; // ISO
   deleted: boolean;
@@ -62,6 +72,7 @@ export async function GET(req: Request): Promise<Response> {
     to: r.toText,
     count: r.count,
     is_proper_noun: r.isProperNoun,
+    applies_to: r.appliesTo,
     last_seen: r.lastSeen.toISOString(),
     updated_at: r.updatedAt.toISOString(),
     deleted: !!r.deletedAt,
@@ -83,6 +94,11 @@ const upsertSchema = z.object({
         to: z.string().trim().min(1).max(500),
         count: z.number().int().min(0).optional(),
         is_proper_noun: z.boolean().optional(),
+        // Optional so older Mac clients (no appliesTo field) still
+        // upsert successfully — their entries fall through to the DB
+        // column default ("local"), which is the new safe default
+        // for auto-ingested corrections.
+        applies_to: z.enum(["local", "stt"]).optional(),
         last_seen: z.string().datetime().optional(),
         deleted: z.boolean().optional(),
       })
@@ -134,6 +150,11 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // UPSERT via INSERT OR REPLACE semantics; Drizzle has `onConflictDoUpdate`.
+    // Note `applies_to` on insert defaults to "local" (the DB default
+    // matches our auto-ingestion intent). On update, only overwrite
+    // when the client explicitly sent a value — letting an older
+    // client's POST without the field stomp the existing classification
+    // would be a regression.
     await db
       .insert(vocabularyEntries)
       .values({
@@ -142,6 +163,7 @@ export async function POST(req: Request): Promise<Response> {
         toText: e.to,
         count: e.count ?? 1,
         isProperNoun: e.is_proper_noun ?? false,
+        appliesTo: e.applies_to ?? "local",
         lastSeen,
       })
       .onConflictDoUpdate({
@@ -153,6 +175,7 @@ export async function POST(req: Request): Promise<Response> {
         set: {
           count: e.count ?? undefined,
           isProperNoun: e.is_proper_noun ?? undefined,
+          appliesTo: e.applies_to ?? undefined,
           lastSeen,
           updatedAt: now,
           deletedAt: null, // re-adding a previously-deleted entry un-tombstones

@@ -2,6 +2,27 @@ import Foundation
 import GRDB
 import Combine
 
+/// Whether a learned correction reaches the upstream STT provider or
+/// stays client-side only. Mirrors the `applies_to` column on the
+/// server's vocabulary_entries table (see web/drizzle/migrations/0021).
+///
+///   * `.local` — stored + visible in the Vocabulary UI, but NEVER
+///     sent to the STT provider. This is the new safe default for
+///     auto-ingested entries from inline transcript edits. Without
+///     this gate, every word-level edit became a global rewrite rule
+///     ("as" → "given") applied to every future dictation.
+///
+///   * `.stt`   — sent to the STT provider as a keyterm bias and as a
+///     replace=find:replacement rule. Promoted from `.local` either
+///     by the user explicitly in Settings or by the reactive LLM
+///     classifier (count ≥ 2 + "looks like a real vocab item"). This
+///     is the value migration 0021 backfilled for legacy entries that
+///     passed a tight safety screen.
+enum CorrectionAppliesTo: String, Codable, Equatable {
+    case local
+    case stt
+}
+
 struct CorrectionRow: Identifiable, Equatable, Hashable {
     var dbID: Int64?
     var fromText: String
@@ -10,6 +31,7 @@ struct CorrectionRow: Identifiable, Equatable, Hashable {
     var lastSeen: Date
     var isProperNoun: Bool
     var userManaged: Bool
+    var appliesTo: CorrectionAppliesTo
 
     var id: String {
         if let dbID { return "db:\(dbID)" }
@@ -56,9 +78,18 @@ final class CorrectionStore: ObservableObject {
                     let trimmedTo = pair.to.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmedFrom.isEmpty, !trimmedTo.isEmpty else { continue }
                     guard trimmedFrom.lowercased() != trimmedTo.lowercased() else { continue }
+                    // New auto-ingested entries start as `local` —
+                    // stored + visible in Settings, but NOT sent to
+                    // STT. The classifier (follow-up) promotes them
+                    // to `stt` when count ≥ 2 and the LLM agrees
+                    // it's vocab-worthy. The ON CONFLICT clause
+                    // increments count + last_seen on a recurring
+                    // correction; it does NOT downgrade applies_to,
+                    // so a row already promoted to `stt` keeps that
+                    // status when re-ingested.
                     try db.execute(literal: """
-                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed)
-                        VALUES (\(trimmedFrom), \(trimmedTo), 1, \(now.timeIntervalSince1970), \(pair.isProperNounLike ? 1 : 0), 0)
+                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to)
+                        VALUES (\(trimmedFrom), \(trimmedTo), 1, \(now.timeIntervalSince1970), \(pair.isProperNounLike ? 1 : 0), 0, 'local')
                         ON CONFLICT(from_text, to_text) DO UPDATE SET
                           count = count + 1,
                           last_seen = \(now.timeIntervalSince1970)
@@ -86,18 +117,20 @@ final class CorrectionStore: ObservableObject {
                             count = \(row.count),
                             last_seen = \(row.lastSeen.timeIntervalSince1970),
                             is_proper_noun = \(row.isProperNoun ? 1 : 0),
-                            user_managed = \(row.userManaged ? 1 : 0)
+                            user_managed = \(row.userManaged ? 1 : 0),
+                            applies_to = \(row.appliesTo.rawValue)
                         WHERE id = \(id)
                     """)
                 } else {
                     try db.execute(literal: """
-                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed)
-                        VALUES (\(row.fromText), \(row.toText), \(row.count), \(row.lastSeen.timeIntervalSince1970), \(row.isProperNoun ? 1 : 0), \(row.userManaged ? 1 : 0))
+                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to)
+                        VALUES (\(row.fromText), \(row.toText), \(row.count), \(row.lastSeen.timeIntervalSince1970), \(row.isProperNoun ? 1 : 0), \(row.userManaged ? 1 : 0), \(row.appliesTo.rawValue))
                         ON CONFLICT(from_text, to_text) DO UPDATE SET
                           count = \(row.count),
                           last_seen = \(row.lastSeen.timeIntervalSince1970),
                           is_proper_noun = \(row.isProperNoun ? 1 : 0),
-                          user_managed = \(row.userManaged ? 1 : 0)
+                          user_managed = \(row.userManaged ? 1 : 0),
+                          applies_to = \(row.appliesTo.rawValue)
                     """)
                 }
             }
@@ -163,18 +196,26 @@ final class CorrectionStore: ObservableObject {
                     let count = entry.count ?? 1
                     let isProperNoun = entry.isProperNoun ?? false
                     let lastSeen = parseTime(entry.lastSeen)
+                    // Trust the server's applies_to over the local
+                    // value — the server is the source of truth and
+                    // is where classifier promotion lives. When the
+                    // wire entry omits applies_to (older server, or
+                    // a partial update), default to `local` so the
+                    // safe-by-default invariant holds.
+                    let appliesTo = entry.appliesTo ?? "local"
 
                     // Treat server-sourced rows as user_managed so they
                     // survive any future eviction/aging logic. The web
                     // editor is by definition a deliberate user action.
                     try db.execute(literal: """
-                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed)
-                        VALUES (\(from), \(to), \(count), \(lastSeen), \(isProperNoun ? 1 : 0), 1)
+                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to)
+                        VALUES (\(from), \(to), \(count), \(lastSeen), \(isProperNoun ? 1 : 0), 1, \(appliesTo))
                         ON CONFLICT(from_text, to_text) DO UPDATE SET
                           count = \(count),
                           last_seen = \(lastSeen),
                           is_proper_noun = \(isProperNoun ? 1 : 0),
-                          user_managed = 1
+                          user_managed = 1,
+                          applies_to = \(appliesTo)
                     """)
                 }
             }
@@ -247,6 +288,10 @@ final class CorrectionStore: ObservableObject {
             to: toText,
             count: nil,
             isProperNoun: nil,
+            // Tombstone — server uses (from, to) as the key and the
+            // `deleted: true` marker to soft-delete; applies_to is
+            // irrelevant for a delete and stays nil.
+            appliesTo: nil,
             lastSeen: nil,
             updatedAt: nil,
             deleted: true
@@ -291,6 +336,7 @@ final class CorrectionStore: ObservableObject {
             to: row.toText,
             count: row.count,
             isProperNoun: row.isProperNoun,
+            appliesTo: row.appliesTo.rawValue,
             lastSeen: ISO8601DateFormatter().string(from: row.lastSeen),
             updatedAt: nil,
             deleted: nil
@@ -301,23 +347,38 @@ final class CorrectionStore: ObservableObject {
         "\(from)|\(to)"
     }
 
-    /// Top-ranked proper-noun-like corrections for STT custom vocab.
+    /// Top-ranked corrections for STT custom-vocab bias. Filtered to
+    /// `applies_to = stt` so that local-only entries (the new default
+    /// for auto-ingested edits) never reach the upstream STT provider.
+    /// The previous behavior — every is_proper_noun row reached STT
+    /// regardless of intent — turned out to misclassify common-word
+    /// swaps as "proper nouns" and globally rewrite unrelated dictation.
     func keyterms(limit: Int) -> [String] {
-        all.filter(\.isProperNoun)
+        all.filter { $0.appliesTo == .stt && $0.isProperNoun }
             .sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) })
             .prefix(limit)
             .map(\.toText)
     }
 
-    /// All corrections formatted for Deepgram's `replace=find:replacement`
-    /// param. The find side is lowercased because Deepgram matches it case-
-    /// insensitively; the replacement preserves the user's intended casing.
-    /// De-duplicated on the lowercased find so we don't send conflicting
-    /// pairs that Deepgram would resolve unpredictably.
+    /// Corrections formatted for Deepgram's `replace=find:replacement`
+    /// param. The find side is lowercased because Deepgram matches it
+    /// case-insensitively; the replacement preserves the user's
+    /// intended casing. De-duplicated on the lowercased find so we
+    /// don't send conflicting pairs that Deepgram would resolve
+    /// unpredictably.
+    ///
+    /// Filtered to `applies_to = stt` (same gate as keyterms, see
+    /// above). Without this filter the bench captured "as → given",
+    /// "a → an", "this → is a" being sent to Deepgram on every
+    /// transcribe call — auto-ingested from inline transcript edits
+    /// the user never intended as global rewrite rules.
     func replaceRules(limit: Int) -> [ReplaceRule] {
         var seen = Set<String>()
         var out: [ReplaceRule] = []
-        for row in all.sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) }) {
+        let candidates = all
+            .filter { $0.appliesTo == .stt }
+            .sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) })
+        for row in candidates {
             let find = row.fromText.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let replacement = row.toText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !find.isEmpty, !replacement.isEmpty else { continue }
@@ -337,12 +398,20 @@ final class CorrectionStore: ObservableObject {
         do {
             let rows = try dbQueue.read { db -> [CorrectionRow] in
                 let cursor = try Row.fetchCursor(db, sql: """
-                    SELECT id, from_text, to_text, count, last_seen, is_proper_noun, user_managed
+                    SELECT id, from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to
                     FROM corrections
                     ORDER BY count DESC, last_seen DESC
                 """)
                 var results: [CorrectionRow] = []
                 while let row = try cursor.next() {
+                    // Unknown future enum value (e.g. server adds a
+                    // third applies_to mode before the Mac knows about
+                    // it) falls back to .local — the safe default that
+                    // never reaches STT. Better to under-promote than
+                    // to misinterpret as `.stt` and ship something
+                    // unintended to the upstream provider.
+                    let appliesToRaw: String = row["applies_to"] ?? "local"
+                    let appliesTo = CorrectionAppliesTo(rawValue: appliesToRaw) ?? .local
                     results.append(CorrectionRow(
                         dbID: row["id"],
                         fromText: row["from_text"] ?? "",
@@ -350,7 +419,8 @@ final class CorrectionStore: ObservableObject {
                         count: row["count"] ?? 0,
                         lastSeen: Date(timeIntervalSince1970: row["last_seen"] ?? 0),
                         isProperNoun: (row["is_proper_noun"] as Int? ?? 0) == 1,
-                        userManaged: (row["user_managed"] as Int? ?? 0) == 1))
+                        userManaged: (row["user_managed"] as Int? ?? 0) == 1,
+                        appliesTo: appliesTo))
                 }
                 return results
             }
@@ -378,6 +448,55 @@ final class CorrectionStore: ObservableObject {
             try db.execute(sql: """
                 CREATE INDEX IF NOT EXISTS idx_corrections_rank
                 ON corrections(count DESC, last_seen DESC);
+            """)
+        }
+        // v2 — add `applies_to` so corrections can be local-only
+        // (stored, shown in UI, not sent to STT) vs sent to STT.
+        // Mirrors the server-side migration 0021 column + backfill.
+        // The local default protects users from accidentally global-
+        // rewriting common words via auto-ingestion from inline
+        // transcript edits. See `CorrectionAppliesTo` in this file
+        // for the full mental model.
+        migrator.registerMigration("v2_applies_to") { db in
+            try db.execute(sql: """
+                ALTER TABLE corrections
+                ADD COLUMN applies_to TEXT NOT NULL DEFAULT 'local';
+            """)
+            // Backfill: legacy entries that pass the tight safety
+            // screen get promoted to 'stt' so users with safe
+            // existing entries (real proper nouns) keep their vocab
+            // active in transcription. Everything else falls back
+            // to 'local' so dangerous globals (as → given, a → an,
+            // this → is a) stop reaching STT immediately on next
+            // dictation. Server-side syncFromServer will then
+            // overwrite each row's applies_to with the server's
+            // canonical value, but this local-side backfill keeps
+            // the Mac safe during the brief window between launch
+            // and the first /api/vocabulary GET.
+            //
+            // Keep the blocklist in sync with the server migration
+            // (0021_vocabulary_applies_to.sql) — same set of words.
+            try db.execute(sql: """
+                UPDATE corrections
+                SET applies_to = 'stt'
+                WHERE is_proper_noun = 1
+                  AND LENGTH(from_text) >= 3
+                  AND LOWER(from_text) NOT IN (
+                    'the','and','but','for','with','that','this','these','those',
+                    'they','them','their','there','then','than',
+                    'have','has','had','was','were','are','been','being',
+                    'will','would','should','could','can','may','might','must',
+                    'into','onto','upon','from','about','over','under','between',
+                    'when','where','while','because','although','though',
+                    'not','yes','okay','such','some','any','all','both','each',
+                    'how','why','who','what','which','whose','whom',
+                    'you','your','yours','our','ours','mine','her','his','hers',
+                    'one','two','three','four','five'
+                  );
+            """)
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_corrections_applies_to
+                ON corrections(applies_to, count DESC, last_seen DESC);
             """)
         }
         try migrator.migrate(queue)
