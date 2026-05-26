@@ -632,12 +632,17 @@ struct VocabularySettingsView: View {
                 }
                 TableColumn("Count") { row in Text("\(row.count)") }
                     .width(min: 50, max: 70)
-                TableColumn("Proper noun") { row in
-                    Toggle("", isOn: Binding(
-                        get: { row.isProperNoun },
-                        set: { var copy = row; copy.isProperNoun = $0; store.upsert(copy) }))
-                }
-                .width(min: 90, max: 110)
+                // Proper-noun toggle is intentionally NOT shown here.
+                // The underlying isProperNoun flag still drives whether
+                // an entry is sent to Deepgram as an acoustic keyterm
+                // bias (in addition to the always-applied find/replace
+                // rule), but the value is set automatically by
+                // DiffEngine.isProperNounLike() on insert — "contains
+                // an uppercase letter or digit" — which is the right
+                // call for every realistic case the classifier
+                // promotes. Surfacing the toggle was an internal-
+                // mechanics leak that didn't help users decide
+                // anything they cared about.
                 TableColumn("") { row in
                     Button {
                         store.delete(row)
