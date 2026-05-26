@@ -17,8 +17,15 @@
 # observable behavior of polish trigger this. UI changes, web pages,
 # or unrelated Worker routes don't.
 #
-# Cost: ~$0.003/run (17 cases × 1 iter × ~3K input tokens × $0.05/M).
+# Cost: ~$0.005/run (23 cases × 1 iter × ~3K input tokens × $0.05/M).
 # Weekly cron + occasional PR triggers ≈ <$0.50/year.
+#
+# Runtime: dominated by Groq's free-tier 6000-TPM throttle against our
+# ~3K-token system prompt — effectively ~2 calls/minute before the
+# bench's per-case 4-retry backoff (4s, 6s, 9s, 13.5s) kicks in. PR
+# and cron paths run at -n 1 (fast + deterministic since polish runs
+# at temp=0); workflow_dispatch lets a maintainer bump to -n 3 if
+# they're investigating intermittent provider variance.
 
 name: Polish regression
 
@@ -37,9 +44,9 @@ on:
   workflow_dispatch:
     inputs:
       iterations:
-        description: "Iterations per fixture (1 fast, 3 catches flakes)"
+        description: "Iterations per fixture (1 fast — same as PR/cron default; 3 catches provider-variance flakes)"
         required: false
-        default: "3"
+        default: "1"
       model:
         description: "Override model id (defaults to polish.ts POLISH_MODEL)"
         required: false
@@ -54,7 +61,12 @@ jobs:
   bench:
     name: Polish bench
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 20-min ceiling: 23-fixture × 1-iter run with Groq free-tier
+    # 6000-TPM throttle observed at ~5 minutes; the extra headroom
+    # covers fixture growth, sustained 429 windows, and `-n 3`
+    # workflow_dispatch deep-dives. Bump if the suite grows past
+    # ~40 fixtures.
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -96,7 +108,14 @@ jobs:
           BENCH_MODEL: ${{ github.event.inputs.model }}
         run: |
           set -euo pipefail
-          ITER="${BENCH_ITERATIONS:-3}"
+          # Default to 1 iteration — polish runs at temperature=0, so
+          # output is deterministic and one pass is enough for a
+          # pass/fail signal. The previous default of 3 paired badly
+          # with the Groq free-tier TPM throttle: with N=23 fixtures
+          # the 3× multiplier pushed runtime past the job timeout.
+          # workflow_dispatch can override via BENCH_ITERATIONS when a
+          # maintainer wants to investigate intermittent flakes.
+          ITER="${BENCH_ITERATIONS:-1}"
           if [ -n "${BENCH_MODEL:-}" ]; then
             pnpm exec tsx scripts/bench-polish.ts -n "$ITER" --model "$BENCH_MODEL"
           else
