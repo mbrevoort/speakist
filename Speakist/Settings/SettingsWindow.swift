@@ -619,6 +619,19 @@ struct VocabularySettingsView: View {
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
+            // Count + Proper-noun columns are intentionally not shown.
+            // Both still drive behavior internally — count gates
+            // classifier promotion at ≥ 2 and supplies sort order;
+            // isProperNoun decides whether the entry rides as a
+            // Deepgram acoustic keyterm bias on top of the always-
+            // applied find/replace — but neither is something the
+            // user needs to manage. Surfacing them was internal-
+            // mechanics noise: it suggested actions the user shouldn't
+            // have to take. The values are set automatically on
+            // insert (DiffEngine.isProperNounLike for the flag;
+            // ON CONFLICT increment for the count) and the visible
+            // table shows just what the user manages: the pair, and
+            // whether they want it.
             Table(visibleEntries) {
                 TableColumn("From") { row in
                     TextField("", text: Binding(
@@ -630,19 +643,6 @@ struct VocabularySettingsView: View {
                         get: { row.toText },
                         set: { var copy = row; copy.toText = $0; store.upsert(copy) }))
                 }
-                TableColumn("Count") { row in Text("\(row.count)") }
-                    .width(min: 50, max: 70)
-                // Proper-noun toggle is intentionally NOT shown here.
-                // The underlying isProperNoun flag still drives whether
-                // an entry is sent to Deepgram as an acoustic keyterm
-                // bias (in addition to the always-applied find/replace
-                // rule), but the value is set automatically by
-                // DiffEngine.isProperNounLike() on insert — "contains
-                // an uppercase letter or digit" — which is the right
-                // call for every realistic case the classifier
-                // promotes. Surfacing the toggle was an internal-
-                // mechanics leak that didn't help users decide
-                // anything they cared about.
                 TableColumn("") { row in
                     Button {
                         store.delete(row)
