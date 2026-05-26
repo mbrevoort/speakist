@@ -101,52 +101,12 @@ export async function setSystemGroqKey(formData: FormData): Promise<ActionResult
   });
 }
 
-// --- polish prompts (super-admin override of mode defaults) --------------
-//
-// `mode` selects which app_settings column to write. The string is bounded
-// to 8000 chars (longer than any reasonable system prompt — including
-// a generous chain-of-thought header — so accidents like pasting a
-// transcript get rejected). Empty/whitespace-only stores NULL, which
-// means "use the baked-in default in lib/transcription/polish.ts".
-
-const polishPromptSchema = z.object({
-  mode: z.enum(["intuitive", "prescriptive"]),
-  prompt: z.string().max(8000),
-});
-
-export async function setPolishPrompt(formData: FormData): Promise<ActionResult> {
-  try {
-    await requireSuperAdmin();
-    const parsed = polishPromptSchema.safeParse({
-      mode: formData.get("mode"),
-      prompt: formData.get("prompt") ?? "",
-    });
-    if (!parsed.success) return { ok: false, error: "Bad input." };
-
-    const trimmed = parsed.data.prompt.trim();
-    const value = trimmed.length > 0 ? trimmed : null;
-
-    const column =
-      parsed.data.mode === "intuitive"
-        ? { polishIntuitivePrompt: value }
-        : { polishPrescriptivePrompt: value };
-
-    const db = getDb();
-    await db.update(appSettings).set(column).where(eq(appSettings.id, 1));
-
-    revalidatePath("/admin/system");
-    return {
-      ok: true,
-      message:
-        value === null
-          ? `${parsed.data.mode === "intuitive" ? "Intuitive" : "Prescriptive"} prompt reset to baked-in default.`
-          : `${parsed.data.mode === "intuitive" ? "Intuitive" : "Prescriptive"} prompt saved.`,
-    };
-  } catch (err) {
-    console.error("setPolishPrompt failed:", err);
-    return { ok: false, error: "Couldn't save." };
-  }
-}
+// Polish-prompt editing moved out of /admin/system in PR 2 of the
+// active-learning-loop rollout — see /admin/polish-prompts/actions.ts
+// (saveNewPolishPromptVersion / rollbackPolishPromptVersion). The
+// app_settings.polish_*_prompt columns are no longer written by
+// anything; they remain as a deprecated read-only fallback in
+// lib/transcription/polish.ts:resolvePromptForMode for one release.
 
 // --- allow_public_org_creation toggle -------------------------------------
 

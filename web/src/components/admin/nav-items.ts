@@ -9,6 +9,7 @@ import {
   Home,
   KeyRound,
   Server,
+  Sparkles,
   Users,
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { label: "Users", href: "/admin/users", icon: Users },
   { label: "Pricing", href: "/admin/pricing", icon: DollarSign },
   { label: "Feedback", href: "/admin/feedback", icon: Flag },
+  { label: "Polish prompts", href: "/admin/polish-prompts", icon: Sparkles },
   { label: "Tokens", href: "/admin/tokens", icon: KeyRound },
   { label: "System", href: "/admin/system", icon: Server },
 ];

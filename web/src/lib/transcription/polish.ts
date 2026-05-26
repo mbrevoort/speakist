@@ -31,6 +31,7 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
+import { getActivePrompt } from "@/lib/polish-prompts";
 import { resolveProviderKey, type ProviderKeyEnv } from "./secrets";
 
 export type PolishMode = "intuitive" | "prescriptive";
@@ -299,15 +300,40 @@ export function bakedInPromptForMode(mode: PolishMode): string {
 /**
  * Resolve the system prompt actually used at polish time.
  *
- * Looks up `app_settings.polish_<mode>_prompt`; if NULL or empty,
- * returns the baked-in constant. Non-NULL means a super admin saved an
- * override at /admin/system and that override wins.
+ * Three-tier fallback:
+ *   1. `polish_prompt_versions` (active row for `mode`) — the source of
+ *      truth as of migration 0022. Every prompt update — admin edit,
+ *      agent proposal, rollback, cross-env mirror — writes a new row
+ *      here. The partial unique index `idx_ppv_active` guarantees at
+ *      most one active row per mode.
+ *   2. `app_settings.polish_<mode>_prompt` — DEPRECATED. Kept for one
+ *      release as a fallback so prod can't accidentally start serving
+ *      the baked-in baseline if the versions-table read fails or the
+ *      table is somehow empty.
+ *   3. `bakedInPromptForMode(mode)` — the distilled baseline shipped
+ *      in the repo (PR 5). For a brand-new deployment this is what
+ *      gets served until an admin (or the active-learning agent)
+ *      creates the first version.
  *
- * Falls back to baked-in on any DB error so a transient read failure
- * never breaks transcription. The cost is one extra row read per polish
- * call — cheap relative to the upstream LLM round-trip.
+ * Any DB error short-circuits to the next tier rather than throwing —
+ * a transient read failure must never break transcription. The cost
+ * is one extra row read per polish call, cheap relative to the
+ * upstream LLM round-trip.
  */
 export async function resolvePromptForMode(mode: PolishMode): Promise<string> {
+  // Tier 1 — versions table.
+  try {
+    const active = await getActivePrompt(mode);
+    if (active && active.body.trim().length > 0) return active.body;
+  } catch (err) {
+    console.warn(
+      "[polish] versions-table read failed; falling through to app_settings:",
+      err
+    );
+  }
+
+  // Tier 2 — deprecated app_settings columns. Will be dropped after one
+  // release cycle; do not add new callers.
   try {
     const db = getDb();
     const [row] = await db
@@ -318,11 +344,17 @@ export async function resolvePromptForMode(mode: PolishMode): Promise<string> {
       .from(appSettings)
       .where(eq(appSettings.id, 1))
       .limit(1);
-    const override = mode === "intuitive" ? row?.intuitive : row?.prescriptive;
-    if (override && override.trim().length > 0) return override;
+    const legacy =
+      mode === "intuitive" ? row?.intuitive : row?.prescriptive;
+    if (legacy && legacy.trim().length > 0) return legacy;
   } catch (err) {
-    console.warn("[polish] resolvePromptForMode DB read failed; falling back to baked-in:", err);
+    console.warn(
+      "[polish] app_settings fallback read failed; using baked-in:",
+      err
+    );
   }
+
+  // Tier 3 — baked-in baseline (distilled in PR 5).
   return bakedInPromptForMode(mode);
 }
 

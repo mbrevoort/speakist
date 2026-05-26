@@ -1,19 +1,21 @@
 // Admin → system settings. Platform-wide knobs:
 //   * Public signup toggle
 //   * System Groq + Deepgram keys (encrypted at rest)
-//   * Polish mode prompts (intuitive + prescriptive) — overrides for the
-//     baked-in defaults; NULL falls back to the constants in
-//     lib/transcription/polish.ts.
+//   * Slack notification destinations (new_user / topup / feedback)
+//
+// Polish-prompt editing moved to /admin/polish-prompts in PR 2 of the
+// active-learning-loop rollout — every edit is now a versioned row
+// with rollback and history, not a single string per mode.
 
 import { eq } from "drizzle-orm";
+import Link from "next/link";
+import { Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { requireSuperAdmin } from "@/lib/authz";
 import { getDb } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
-import { bakedInPromptForMode } from "@/lib/transcription/polish";
 import {
   AllowPublicOrgToggle,
-  PolishPromptEditor,
   SlackWebhookCard,
   SystemDeepgramKey,
   SystemGroqKey,
@@ -28,8 +30,6 @@ export default async function AdminSystemPage() {
     .select({
       deepgramEncrypted: appSettings.systemDeepgramKeyEncrypted,
       groqEncrypted: appSettings.systemGroqKeyEncrypted,
-      polishIntuitive: appSettings.polishIntuitivePrompt,
-      polishPrescriptive: appSettings.polishPrescriptivePrompt,
       allowPublicOrgCreation: appSettings.allowPublicOrgCreation,
       slackNewUserUrl: appSettings.slackNewUserWebhookUrlEncrypted,
       slackNewUserEnabled: appSettings.slackNewUserWebhookEnabled,
@@ -109,19 +109,22 @@ export default async function AdminSystemPage() {
       </section>
 
       <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
-        <h2 className="text-lg font-semibold tracking-tight">Polish — Intuitive prompt</h2>
+        <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+          <Sparkles className="h-4 w-4" /> Polish prompts
+        </h2>
         <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-          System prompt used when a user has Polish enabled and selects
-          the <em>Intuitive</em> mode. Empty (or whitespace-only) saves
-          NULL, which falls back to the baked-in default below — useful
-          for reverting after experimentation.
+          Editing moved to its own page. Every change is now a
+          versioned row with bench scores, rollback, and Slack
+          notifications on update — the storage half of the active
+          learning loop that the polish-fixture agent iterates against.
         </p>
         <div className="mt-5">
-          <PolishPromptEditor
-            mode="intuitive"
-            current={row?.polishIntuitive ?? null}
-            bakedInDefault={bakedInPromptForMode("intuitive")}
-          />
+          <Link
+            href="/admin/polish-prompts"
+            className="inline-flex items-center rounded-xl border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-muted"
+          >
+            Open Polish prompts →
+          </Link>
         </div>
       </section>
 
@@ -169,22 +172,6 @@ export default async function AdminSystemPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-border/70 bg-background p-6 sm:p-8">
-        <h2 className="text-lg font-semibold tracking-tight">Polish — Prescriptive prompt</h2>
-        <p className="mt-1 text-sm text-muted-foreground max-w-2xl">
-          System prompt used when a user has Polish enabled and selects
-          the <em>Prescriptive</em> mode. Conservative by design — only
-          punctuation, capitalization, and clear grammar fixes; never
-          touches meaning. Empty saves NULL → baked-in fallback.
-        </p>
-        <div className="mt-5">
-          <PolishPromptEditor
-            mode="prescriptive"
-            current={row?.polishPrescriptive ?? null}
-            bakedInDefault={bakedInPromptForMode("prescriptive")}
-          />
-        </div>
-      </section>
     </div>
   );
 }
