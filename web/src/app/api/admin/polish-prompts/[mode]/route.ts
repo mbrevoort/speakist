@@ -9,15 +9,12 @@
 
 import { AuthzError, requireSuperAdminFromRequest } from "@/lib/authz";
 import {
+  ALL_MODES,
   listVersions,
   type PolishPromptMode,
   type PromptVersion,
 } from "@/lib/polish-prompts";
-
-const ALLOWED_MODES: readonly PolishPromptMode[] = [
-  "intuitive",
-  "prescriptive",
-];
+import { truncate } from "@/lib/utils";
 
 export async function GET(
   req: Request,
@@ -33,7 +30,7 @@ export async function GET(
   }
 
   const { mode: rawMode } = await params;
-  if (!ALLOWED_MODES.includes(rawMode as PolishPromptMode)) {
+  if (!ALL_MODES.includes(rawMode as PolishPromptMode)) {
     return Response.json(
       { error: `unknown mode: ${rawMode}` },
       { status: 400 }
@@ -82,7 +79,3 @@ function projectForListing(v: PromptVersion) {
   };
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}

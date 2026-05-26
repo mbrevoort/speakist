@@ -17,6 +17,7 @@ import {
 } from "@/lib/feedback";
 import type { ServiceScope } from "@/lib/service-tokens";
 import { base64Encode } from "@/lib/base64";
+import { truncate } from "@/lib/utils";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export interface McpToolDefinition {
@@ -372,7 +373,3 @@ export class McpError extends Error {
   }
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}

@@ -23,10 +23,9 @@ import {
   createVersion,
   rollbackToVersion,
 } from "@/lib/polish-prompts";
+import type { ActionResult } from "@/lib/server-actions";
 
-export type ActionResult =
-  | { ok: true; message?: string }
-  | { ok: false; error: string };
+export type { ActionResult };
 
 // Upper bound on body length is intentionally generous (8000 chars).
 // The current real prompts are ~5KB; we want headroom for the agent

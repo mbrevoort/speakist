@@ -135,18 +135,11 @@ describe("createVersion", () => {
     ).rejects.toThrow(/rollback/i);
   });
 
-  it("rejects passing both createdByUserId and createdByTokenId", async () => {
-    const u = await makeUser({ isSuperAdmin: true });
-    await expect(
-      createVersion({
-        mode: "intuitive",
-        body: "some body",
-        source: "admin",
-        createdByUserId: u.id,
-        createdByTokenId: "fake-token-id",
-      })
-    ).rejects.toThrow(/not both/i);
-  });
+  // Previously: a runtime test rejected passing BOTH createdByUserId
+  // AND createdByTokenId. CreateVersionArgs is now a discriminated
+  // union (`Provenance`) — passing both is a compile error at the
+  // call site, so the runtime guard is gone and this test would no
+  // longer typecheck. The type-system constraint is the test.
 
   it("rejects bench_score outside [0,1]", async () => {
     const u = await makeUser({ isSuperAdmin: true });

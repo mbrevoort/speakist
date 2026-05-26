@@ -38,7 +38,7 @@
 //   with the new `prompt_update` destination on lib/slack.ts. Until
 //   then the placeholder is a no-op so PR 1 is self-contained.
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import {
   polishPromptVersions,
@@ -69,7 +69,13 @@ export interface PromptVersion {
   createdByTokenId: string | null;
 }
 
-const ALL_MODES: readonly PolishPromptMode[] = ["intuitive", "prescriptive"];
+/** Canonical list of polish modes. Exported so API route handlers and
+ *  MCP tools can validate hand-typed input against the same source of
+ *  truth the domain layer uses, instead of redeclaring the array. */
+export const ALL_MODES: readonly PolishPromptMode[] = [
+  "intuitive",
+  "prescriptive",
+];
 
 /** Cheap sanity guard for hand-typed input (route handlers, MCP
  *  tools). Zod schemas in those callers do the real validation; this
@@ -200,21 +206,32 @@ export async function listVersions(
   assertMode(mode);
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const db = getDb();
+  const whereExpr = opts.since
+    ? and(
+        eq(polishPromptVersions.mode, mode),
+        gt(polishPromptVersions.createdAt, opts.since)
+      )
+    : eq(polishPromptVersions.mode, mode);
   const rows = await db
     .select()
     .from(polishPromptVersions)
-    .where(eq(polishPromptVersions.mode, mode))
+    .where(whereExpr)
     .orderBy(desc(polishPromptVersions.createdAt))
     .limit(limit);
-  const filtered = opts.since
-    ? rows.filter((r) => r.createdAt > opts.since!)
-    : rows;
-  return filtered.map(hydrate);
+  return rows.map(hydrate);
 }
 
 // ---- Writes ---------------------------------------------------------------
 
-export interface CreateVersionArgs {
+/** Exactly-one-of provenance: every version is attributed either to a
+ *  super admin (admin UI) or to a service token (MCP agent). Encoded
+ *  as a discriminated union so the compiler rejects both-or-neither
+ *  at the call site instead of relying on a runtime guard. */
+type Provenance =
+  | { createdByUserId: string; createdByTokenId?: never }
+  | { createdByTokenId: string; createdByUserId?: never };
+
+export type CreateVersionArgs = {
   mode: PolishPromptMode;
   /** New prompt body. Rejected if empty / whitespace-only. */
   body: string;
@@ -224,13 +241,21 @@ export interface CreateVersionArgs {
    *  `rollbackToVersion` instead so the FK + notes prefix are set
    *  correctly. */
   source: Exclude<PolishPromptSource, "rollback">;
-  /** Set for admin UI edits. Mutually exclusive with createdByTokenId. */
-  createdByUserId?: string;
-  /** Set for MCP service-token writes. Mutually exclusive with
-   *  createdByUserId. */
-  createdByTokenId?: string;
   benchScore?: number;
   benchResults?: unknown;
+} & Provenance;
+
+export interface RollbackArgs {
+  mode: PolishPromptMode;
+  /** ID of the version to restore. Its body is copied into a new row. */
+  targetVersionId: string;
+  /** Optional caller-supplied notes. Combined with the auto-generated
+   *  "Rolled back from vN" prefix. */
+  notes?: string;
+  /** Admin user performing the rollback. Required — rollback is not
+   *  exposed via MCP, so the token-driven path is intentionally
+   *  unrepresentable here. */
+  createdByUserId: string;
 }
 
 /** Bounds for the bench score; rejected as a programming error if
@@ -241,59 +266,38 @@ function assertBenchScore(score: number): void {
   }
 }
 
-/**
- * Create a new version and atomically promote it to active.
- *
- * Steps (each a separate D1 statement; D1 doesn't expose multi-statement
- * transactions through drizzle):
- *   1. Compute next version via MAX(version)+1 (read).
- *   2. Deactivate any current active row for the mode (UPDATE).
- *   3. Insert the new row with is_active = 1 (INSERT).
- *
- * If step 3 fails (most likely on a (mode, version) race), the table
- * is left with no active row for that mode for the brief failure
- * window. The resolver's fallback chain handles that case; the caller
- * gets a thrown error and should retry.
- *
- * Returns the freshly-created PromptVersion.
- */
-export async function createVersion(
-  args: CreateVersionArgs
-): Promise<PromptVersion> {
-  assertMode(args.mode);
-  if (args.source === ("rollback" as PolishPromptSource)) {
-    throw new Error(
-      "createVersion does not accept source='rollback'; use rollbackToVersion instead"
-    );
-  }
-  const body = args.body?.trim();
-  if (!body) {
-    throw new Error("body is empty after trim — rejecting to protect prod");
-  }
-  if (args.createdByUserId && args.createdByTokenId) {
-    throw new Error(
-      "createVersion: pass either createdByUserId OR createdByTokenId, not both"
-    );
-  }
-  if (args.benchScore !== undefined) {
-    assertBenchScore(args.benchScore);
-  }
-
+/** Shared core for createVersion + rollbackToVersion. Reads
+ *  MAX(version)+1, deactivates the current active row, inserts the
+ *  new one with `.returning()` so we never need a post-insert SELECT.
+ *  The (mode, version) unique index is the safety net for the
+ *  read-then-write race window between the MAX read and the INSERT —
+ *  we translate that specific failure into a retryable user-facing
+ *  message so the admin UI doesn't surface a raw SqliteError. */
+async function insertActiveVersion(args: {
+  mode: PolishPromptMode;
+  body: string;
+  notes: string | null;
+  source: PolishPromptSource;
+  rolledBackFromVersionId: string | null;
+  benchScore: number | null;
+  benchResultsJson: string | null;
+  createdByUserId: string | null;
+  createdByTokenId: string | null;
+}): Promise<PromptVersion> {
   const db = getDb();
 
-  // Step 1 — next version number. The unique (mode, version) index
-  // is the safety net for the read-then-write race; we read here so
-  // the common path doesn't throw.
   const [maxRow] = await db
-    .select({ max: sql<number>`COALESCE(MAX(${polishPromptVersions.version}), 0)` })
+    .select({
+      max: sql<number>`COALESCE(MAX(${polishPromptVersions.version}), 0)`,
+    })
     .from(polishPromptVersions)
     .where(eq(polishPromptVersions.mode, args.mode))
     .limit(1);
   const nextVersion = (maxRow?.max ?? 0) + 1;
 
-  // Step 2 — deactivate any current active row. Filtered on
-  // is_active = 1 so the partial unique index doesn't get tripped
-  // by a concurrent insert: at most one row matches.
+  // Deactivate the current active row, if any. Filtered on
+  // is_active = 1 so the partial unique index can't be tripped by
+  // a concurrent insert: at most one row matches.
   await db
     .update(polishPromptVersions)
     .set({ isActive: false })
@@ -304,61 +308,99 @@ export async function createVersion(
       )
     );
 
-  // Step 3 — insert the new active row.
-  const id = crypto.randomUUID();
-  await db.insert(polishPromptVersions).values({
-    id,
-    mode: args.mode,
-    version: nextVersion,
-    body,
-    notes: args.notes?.trim() ?? null,
-    source: args.source,
-    isActive: true,
-    rolledBackFromVersionId: null,
-    benchScore: args.benchScore ?? null,
-    benchResultsJson:
-      args.benchResults !== undefined ? JSON.stringify(args.benchResults) : null,
-    createdByUserId: args.createdByUserId ?? null,
-    createdByTokenId: args.createdByTokenId ?? null,
-  });
-
-  // TODO(PR 3): notifyPromptUpdate({ mode, newVersion: nextVersion, source: args.source, ... }).
-  // Wired up in the same PR that adds the `prompt_update` Slack destination.
-
-  const fresh = await getPromptById(id);
-  if (!fresh) {
-    // Defensive — the row was just written, so this is impossible
-    // unless D1 lost the write. Throw rather than return a half-state.
-    throw new Error(
-      `createVersion: row ${id} not found immediately after insert`
-    );
+  let inserted: typeof polishPromptVersions.$inferSelect | undefined;
+  try {
+    [inserted] = await db
+      .insert(polishPromptVersions)
+      .values({
+        id: crypto.randomUUID(),
+        mode: args.mode,
+        version: nextVersion,
+        body: args.body,
+        notes: args.notes,
+        source: args.source,
+        isActive: true,
+        rolledBackFromVersionId: args.rolledBackFromVersionId,
+        benchScore: args.benchScore,
+        benchResultsJson: args.benchResultsJson,
+        createdByUserId: args.createdByUserId,
+        createdByTokenId: args.createdByTokenId,
+      })
+      .returning();
+  } catch (err) {
+    // Most likely cause: another writer landed (mode, nextVersion)
+    // between our MAX read and this INSERT. Surface a clear retry
+    // message instead of the raw SqliteError text.
+    if (
+      err instanceof Error &&
+      /UNIQUE constraint failed/i.test(err.message)
+    ) {
+      throw new Error(
+        "Another prompt version was created concurrently. Refresh and try again."
+      );
+    }
+    throw err;
   }
-  return fresh;
-}
+  if (!inserted) {
+    // D1 returning() should always yield exactly one row on a
+    // successful single-row insert. Throw rather than return a
+    // half-state if something upstream changed that contract.
+    throw new Error("insertActiveVersion: insert returned no rows");
+  }
 
-export interface RollbackArgs {
-  mode: PolishPromptMode;
-  /** ID of the version to restore. Its body is copied into a new row. */
-  targetVersionId: string;
-  /** Optional caller-supplied notes. Will be combined with the auto-
-   *  generated "Rolled back from vN" prefix. */
-  notes?: string;
-  /** Admin user performing the rollback. Required — rollback is not
-   *  exposed via MCP in PR 3, so a token-driven path is intentionally
-   *  rejected at the domain layer. */
-  createdByUserId: string;
+  // TODO(PR 3): notifyPromptUpdate(...) once the prompt_update Slack
+  // destination lands. Fire-and-forget after this return so a Slack
+  // failure can't block the DB commit.
+
+  return hydrate(inserted);
 }
 
 /**
- * Forward-only rollback. Looks up `targetVersionId`, copies its body
- * into a brand-new version with `source = 'rollback'` and
- * `rolledBackFromVersionId = target.id`, then promotes that new
- * version to active. The previous active row is deactivated as a
- * side effect of createVersion's invariants.
- *
- * The notes field is auto-prefixed with "Rolled back from v{N}" so
- * the admin UI timeline reads naturally. If the caller supplies
- * additional notes they're appended after a separator.
+ * Create a new version and atomically promote it to active. The
+ * caller's `source` must be one of admin/agent/seed/mirror;
+ * `rollback` goes through `rollbackToVersion` so the FK and notes
+ * prefix get set correctly.
+ */
+export async function createVersion(
+  args: CreateVersionArgs
+): Promise<PromptVersion> {
+  assertMode(args.mode);
+  if ((args.source as PolishPromptSource) === "rollback") {
+    throw new Error(
+      "createVersion does not accept source='rollback'; use rollbackToVersion instead"
+    );
+  }
+  const body = args.body?.trim();
+  if (!body) {
+    throw new Error("body is empty after trim — rejecting to protect prod");
+  }
+  if (args.benchScore !== undefined) {
+    assertBenchScore(args.benchScore);
+  }
+
+  return insertActiveVersion({
+    mode: args.mode,
+    body,
+    notes: args.notes?.trim() ?? null,
+    source: args.source,
+    rolledBackFromVersionId: null,
+    benchScore: args.benchScore ?? null,
+    benchResultsJson:
+      args.benchResults !== undefined
+        ? JSON.stringify(args.benchResults)
+        : null,
+    createdByUserId: args.createdByUserId ?? null,
+    createdByTokenId: args.createdByTokenId ?? null,
+  });
+}
+
+/**
+ * Forward-only rollback. Copies `targetVersionId`'s body into a new
+ * version with `source = 'rollback'` and
+ * `rolledBackFromVersionId = target.id`, then promotes it to active.
+ * The notes field is auto-prefixed with "Rolled back from v{N}".
+ * Bench score does NOT carry over — the new row records the rollback
+ * action, not a re-bench of the old prompt.
  */
 export async function rollbackToVersion(
   args: RollbackArgs
@@ -384,7 +426,6 @@ export async function rollbackToVersion(
     );
   }
 
-  // Compose the notes: machine-readable prefix + optional human note.
   const prefix = `Rolled back from v${target.version}`;
   const targetNotePart = target.notes ? `: ${target.notes}` : "";
   const callerNote = args.notes?.trim();
@@ -392,56 +433,15 @@ export async function rollbackToVersion(
     ? `${prefix}${targetNotePart}\n---\n${callerNote}`
     : `${prefix}${targetNotePart}`;
 
-  const db = getDb();
-
-  // Same shape as createVersion (next-version read, deactivate,
-  // insert), but with source = 'rollback' and the FK set. We can't
-  // call createVersion directly because it explicitly rejects
-  // source='rollback' to keep the typing honest at the public
-  // surface.
-  const [maxRow] = await db
-    .select({ max: sql<number>`COALESCE(MAX(${polishPromptVersions.version}), 0)` })
-    .from(polishPromptVersions)
-    .where(eq(polishPromptVersions.mode, args.mode))
-    .limit(1);
-  const nextVersion = (maxRow?.max ?? 0) + 1;
-
-  await db
-    .update(polishPromptVersions)
-    .set({ isActive: false })
-    .where(
-      and(
-        eq(polishPromptVersions.mode, args.mode),
-        eq(polishPromptVersions.isActive, true)
-      )
-    );
-
-  const id = crypto.randomUUID();
-  await db.insert(polishPromptVersions).values({
-    id,
+  return insertActiveVersion({
     mode: args.mode,
-    version: nextVersion,
     body: target.body,
     notes,
     source: "rollback",
-    isActive: true,
     rolledBackFromVersionId: target.id,
-    // Bench score does NOT carry over — the rollback is the action
-    // being recorded, not a re-bench of the old prompt. Admin UI
-    // can show the target's bench_score alongside if useful.
     benchScore: null,
     benchResultsJson: null,
     createdByUserId: args.createdByUserId,
     createdByTokenId: null,
   });
-
-  // TODO(PR 3): notifyPromptUpdate({ mode, newVersion: nextVersion, source: 'rollback', ... }).
-
-  const fresh = await getPromptById(id);
-  if (!fresh) {
-    throw new Error(
-      `rollbackToVersion: row ${id} not found immediately after insert`
-    );
-  }
-  return fresh;
 }

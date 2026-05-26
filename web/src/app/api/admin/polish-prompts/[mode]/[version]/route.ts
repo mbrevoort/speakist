@@ -8,14 +8,10 @@
 
 import { AuthzError, requireSuperAdminFromRequest } from "@/lib/authz";
 import {
+  ALL_MODES,
   getPromptByVersion,
   type PolishPromptMode,
 } from "@/lib/polish-prompts";
-
-const ALLOWED_MODES: readonly PolishPromptMode[] = [
-  "intuitive",
-  "prescriptive",
-];
 
 export async function GET(
   req: Request,
@@ -33,7 +29,7 @@ export async function GET(
   }
 
   const { mode: rawMode, version: rawVersion } = await params;
-  if (!ALLOWED_MODES.includes(rawMode as PolishPromptMode)) {
+  if (!ALL_MODES.includes(rawMode as PolishPromptMode)) {
     return Response.json(
       { error: `unknown mode: ${rawMode}` },
       { status: 400 }

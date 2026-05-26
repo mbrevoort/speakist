@@ -11,8 +11,9 @@ import { getDb } from "@/lib/db";
 import { appSettings } from "@/lib/db/schema";
 import { requireSuperAdmin } from "@/lib/authz";
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
+import type { ActionResult } from "@/lib/server-actions";
 
-export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
+export type { ActionResult };
 
 // --- System provider keys -------------------------------------------------
 //
