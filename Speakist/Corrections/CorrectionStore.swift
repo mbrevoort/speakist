@@ -50,6 +50,22 @@ final class CorrectionStore: ObservableObject {
     /// network-agnostic at the file level. Nil = no push (local-only).
     private var apiClient: SpeakistAPIClient?
 
+    /// In-memory "already tried this session" set for the reactive
+    /// classifier. Keyed by the (from, to) pair. Prevents the same
+    /// row from being re-classified multiple times during one app
+    /// session — without this, every ingest() that touches a row at
+    /// count ≥ 2 would re-call the classifier.
+    ///
+    /// Deliberately in-memory only (not persisted). Across launches
+    /// we DO want to re-attempt classification for rows that are
+    /// still local + count ≥ 2: the classifier is deterministic at
+    /// temp=0 + strict structured outputs, so a repeat call returns
+    /// the same verdict — but if the previous call hit a transient
+    /// network error or rate limit, the next launch gets a clean
+    /// retry. The wasted cost (~5-20 classifier calls per launch
+    /// for a typical user's local-only set) is well under a cent.
+    private var classifierAttempted: Set<String> = []
+
     func bind(api: SpeakistAPIClient) {
         self.apiClient = api
     }
@@ -100,9 +116,95 @@ final class CorrectionStore: ObservableObject {
             // Mirror the touched rows up to the server so the web view
             // shows what the Mac just learned.
             pushTouchedPairs(pairs)
+            // After ingest, any row that just crossed count ≥ 2 and
+            // is still applies_to=local is eligible for the reactive
+            // classifier. Fire-and-forget so the user's save path
+            // doesn't pay for the LLM round-trip.
+            promotePromotables()
         } catch {
             Logger.shared.error("ingest corrections failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Find local-only rows with count ≥ 2 that we haven't classified
+    /// yet this session and dispatch them to the classifier. Each
+    /// callback runs on its own Task; we don't block the caller.
+    ///
+    /// Also called from `syncFromServer` so a fresh launch picks up
+    /// any rows that were left local-only on a previous session
+    /// (offline, classifier rate-limited, etc.) — the in-memory
+    /// `classifierAttempted` set is empty at launch so everything
+    /// gets a clean re-try.
+    private func promotePromotables() {
+        guard apiClient != nil else { return }
+        for row in all where row.appliesTo == .local && row.count >= 2 {
+            let key = wireKey(from: row.fromText, to: row.toText)
+            guard !classifierAttempted.contains(key) else { continue }
+            classifierAttempted.insert(key)
+            attemptPromotion(row)
+        }
+    }
+
+    /// Run a single (from, to) pair through the server's classifier
+    /// endpoint. If the classifier returns add=true, flip the local
+    /// row's applies_to to .stt + push the change to the server.
+    /// All errors are swallowed (best-effort) — the row stays local,
+    /// which is the safe default.
+    private func attemptPromotion(_ row: CorrectionRow) {
+        guard let api = apiClient else { return }
+        Task { [weak self, fromText = row.fromText, toText = row.toText] in
+            do {
+                let result = try await api.classifyVocabPair(
+                    find: fromText,
+                    replacement: toText
+                )
+                guard result.applied else {
+                    // Classifier itself didn't run cleanly (no Groq
+                    // key, timeout, etc). Leave the row local. The
+                    // next ingest on the same key won't re-attempt
+                    // (in-memory dedup), but a fresh launch will.
+                    Logger.shared.info(
+                        "classifier skipped \(fromText)→\(toText): \(result.errorReason ?? "no_detail")"
+                    )
+                    return
+                }
+                Logger.shared.info(
+                    "classifier verdict for \(fromText)→\(toText): " +
+                    "add=\(result.add) category=\(result.category)"
+                )
+                guard result.add else { return }
+                await self?.applyPromotion(fromText: fromText, toText: toText)
+            } catch SpeakistAPIClient.Error.notSignedIn {
+                // Silent — the row stays local. Promotion will be
+                // re-attempted next launch when the user signs in.
+            } catch {
+                Logger.shared.warn(
+                    "classifier call failed for \(fromText)→\(toText): \(String(describing: error))"
+                )
+            }
+        }
+    }
+
+    /// Promote a local row to applies_to=.stt and push the change up
+    /// to the server. Looks the row up fresh from `all` so we don't
+    /// race with concurrent mutations.
+    private func applyPromotion(fromText: String, toText: String) {
+        guard
+            var row = all.first(where: {
+                $0.fromText == fromText && $0.toText == toText
+            }),
+            row.appliesTo == .local
+        else {
+            // Either the row was deleted between classifier-call and
+            // -response, or it was already promoted by something else
+            // (the user manually edited it in Settings, a server sync
+            // landed first). Either way, nothing to do.
+            return
+        }
+        row.appliesTo = .stt
+        // upsert pushes to the server too, so the web view sees the
+        // promotion and other clients pick it up on next sync.
+        upsert(row)
     }
 
     func upsert(_ row: CorrectionRow) {
@@ -254,6 +356,12 @@ final class CorrectionStore: ObservableObject {
             if !toPush.isEmpty {
                 _ = try? await api.pushVocabulary(entries: toPush)
             }
+            // After we've reconciled with the server, re-check for
+            // any local rows that should now be promoted. Catches
+            // rows that were left local-only on a previous session
+            // (e.g., user dictated offline, or the classifier was
+            // rate-limited and we gave up after the in-memory cap).
+            promotePromotables()
         } catch SpeakistAPIClient.Error.notSignedIn {
             // Silent — nothing to sync.
         } catch {

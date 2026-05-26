@@ -433,6 +433,43 @@ final class SpeakistAPIClient {
         )
     }
 
+    /// Response from POST /api/vocabulary/classify. The server runs the
+    /// LLM classifier against a (find, replacement) pair and returns
+    /// whether the pair should be promoted from `local` to `stt`.
+    /// `applied == false` means the classifier itself failed to run
+    /// (no key, timeout, bad model output) — caller should treat as
+    /// "skip" and leave the entry local-only.
+    struct VocabClassifyResponse: Decodable {
+        let add: Bool
+        let category: String
+        let reason: String
+        let applied: Bool
+        let errorReason: String?
+        let latencyMs: Int
+        let model: String
+
+        enum CodingKeys: String, CodingKey {
+            case add, category, reason, applied
+            case errorReason = "error_reason"
+            case latencyMs = "latency_ms"
+            case model
+        }
+    }
+
+    /// Ask the server whether a learned (find, replacement) correction
+    /// should be promoted from local-only to STT-vocab. Reactive gate
+    /// called from CorrectionStore when a row's count hits ≥ 2.
+    func classifyVocabPair(find: String, replacement: String, context: String? = nil) async throws -> VocabClassifyResponse {
+        var body: [String: Any] = ["find": find, "replacement": replacement]
+        if let context, !context.isEmpty { body["context"] = context }
+        return try await perform(
+            path: "/api/vocabulary/classify",
+            method: "POST",
+            body: body,
+            auth: true
+        )
+    }
+
     // MARK: - Feedback ("Report bad transcription")
 
     /// Categorization the user picks (or doesn't) when reporting a
