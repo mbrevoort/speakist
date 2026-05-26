@@ -141,9 +141,27 @@ final class CorrectionStore: ObservableObject {
         }
     }
 
-    /// Find local-only rows with count ≥ 2 that we haven't classified
-    /// yet this session and dispatch them to the classifier. Each
-    /// callback runs on its own Task; we don't block the caller.
+    /// Find every local-only row and dispatch it to the classifier.
+    /// Each callback runs on its own Task; we don't block the
+    /// caller.
+    ///
+    /// There is intentionally NO count threshold. The classifier is
+    /// the gate: it decides whether an auto-ingested correction
+    /// looks like a real vocab item or a one-off contextual edit.
+    /// Earlier iterations of this code required `count >= 2` (the
+    /// user had to make the same correction twice before anything
+    /// happened) as belt-and-suspenders against classifier
+    /// misjudgment — but the bench established 100% precision on
+    /// skip cases (common-word swaps, grammar fixes, function
+    /// words, self-corrections, punctuation), so the count
+    /// threshold was just hiding the user's most reasonable
+    /// expectation: "I corrected this once, it should be in vocab
+    /// now (or correctly recognized as not-vocab and silently
+    /// dropped)."
+    ///
+    /// In-memory dedup via `classifierAttempted` still prevents
+    /// re-classifying the same (from, to) pair within a single
+    /// session.
     ///
     /// Also called from `syncFromServer` so a fresh launch picks up
     /// any rows that were left local-only on a previous session
@@ -152,7 +170,7 @@ final class CorrectionStore: ObservableObject {
     /// gets a clean re-try.
     private func promotePromotables() {
         guard apiClient != nil else { return }
-        for row in all where row.appliesTo == .local && row.count >= 2 {
+        for row in all where row.appliesTo == .local {
             let key = wireKey(from: row.fromText, to: row.toText)
             guard !classifierAttempted.contains(key) else { continue }
             classifierAttempted.insert(key)
