@@ -24,7 +24,8 @@
     "test:run": "vitest run",
     "bench:polish": "tsx scripts/bench-polish.ts",
     "bench:stt": "tsx scripts/bench-stt.ts",
-    "bench:stt:sync": "tsx scripts/bench-stt-sync.ts"
+    "bench:stt:sync": "tsx scripts/bench-stt-sync.ts",
+    "bench:classifier": "tsx scripts/bench-classifier.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
