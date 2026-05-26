@@ -82,6 +82,21 @@ final class CorrectionStore: ObservableObject {
         }
     }
 
+    /// Test-only entry point. Opens an in-memory SQLite database
+    /// (GRDB's no-path initializer) so unit tests don't pick up the
+    /// developer's real corrections.sqlite from Application Support.
+    /// Without this, running the test suite on a dev machine that
+    /// has actively used Speakist surfaces real rows + their
+    /// migrated `applies_to` state, which makes "fresh-state"
+    /// assertions flake. The production `bootstrap()` path is
+    /// unchanged.
+    func bootstrapInMemoryForTesting() throws {
+        let queue = try DatabaseQueue()
+        try migrate(queue)
+        self.dbQueue = queue
+        reload()
+    }
+
     // MARK: - Public API
 
     func ingest(pairs: [CorrectionPair]) {
