@@ -154,7 +154,7 @@ describe("MCP protocol", () => {
     };
     expect(r.protocolVersion).toBeDefined();
     expect(r.capabilities.tools).toBeDefined();
-    expect(r.serverInfo.name).toBe("speakist-feedback");
+    expect(r.serverInfo.name).toBe("speakist");
   });
 
   it("ping returns an empty result", async () => {

@@ -66,6 +66,17 @@ export function formatWords(words: number): string {
   return `${rounded.toLocaleString("en-US")} words`;
 }
 
+/**
+ * Truncate a string to at most `max` characters, appending an ellipsis
+ * (counted within the budget) when it had to cut. Returns the input
+ * unchanged when it already fits. Used for compact previews — admin
+ * UIs, MCP listing payloads, Slack message blocks.
+ */
+export function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
 /** Generate a short human-typable device auth code like "7F3Q-X2K9". */
 export function generateDeviceUserCode(): string {
   // Unambiguous alphabet — no 0/O/1/I/L to avoid misreads on paper.

@@ -42,6 +42,11 @@ interface CliArgs {
   iterations: number;
   only?: string;
   mode?: "intuitive" | "prescriptive";
+  /** Filter to fixtures of one tier. Default 'all'. `baseline` is
+   *  what the shipped default-polish-prompts.ts should pass;
+   *  `advanced` is the regression bench for the iterated active
+   *  row in polish_prompt_versions. */
+  tier?: "baseline" | "advanced" | "all";
   systemPromptFileIntuitive?: string;
   systemPromptFilePrescriptive?: string;
 }
@@ -66,6 +71,13 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--mode":
         args.mode = argv[++i] as "intuitive" | "prescriptive";
+        break;
+      case "--tier":
+        args.tier = argv[++i] as "baseline" | "advanced" | "all";
+        if (!["baseline", "advanced", "all"].includes(args.tier!)) {
+          console.error(`--tier must be baseline | advanced | all`);
+          process.exit(2);
+        }
         break;
       case "--system-prompt-file-intuitive":
         args.systemPromptFileIntuitive = argv[++i];
@@ -97,6 +109,11 @@ Flags:
                                 provider variance and surfaces flaky cases
   --only <name>                 Run only one fixture by its 'name' field
   --mode <intuitive|prescriptive>  Run only fixtures of this mode
+  --tier <baseline|advanced|all>   Filter by tier; default 'all'. 'baseline'
+                                   is the subset the shipped distilled defaults
+                                   should pass; 'advanced' is the regression
+                                   bench for the iterated active row in
+                                   polish_prompt_versions.
   --system-prompt-file-intuitive <path>     Override the intuitive system prompt
   --system-prompt-file-prescriptive <path>  Override the prescriptive system prompt
 
@@ -132,10 +149,17 @@ async function main(): Promise<void> {
     ? readFileSync(args.systemPromptFilePrescriptive, "utf-8")
     : bakedInPromptForMode("prescriptive");
 
-  // Filter fixture list by --only / --mode.
+  // Filter fixture list by --only / --mode / --tier. Default tier
+  // is 'all' so existing invocations keep their behavior; the
+  // baseline/advanced split is opt-in.
+  const tier = args.tier ?? "all";
   const fixtures = POLISH_FIXTURES.filter((f) => {
     if (args.only && f.name !== args.only) return false;
     if (args.mode && f.mode !== args.mode) return false;
+    if (tier !== "all") {
+      const fixtureTier = f.tier ?? "advanced";
+      if (fixtureTier !== tier) return false;
+    }
     return true;
   });
   if (fixtures.length === 0) {

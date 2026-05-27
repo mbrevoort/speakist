@@ -17,6 +17,7 @@
 // helper in src/lib/authz.ts that enforces ownership/membership rules. Do not
 // touch `db` directly from route handlers — only via the authz wrappers.
 
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -475,9 +476,12 @@ export const appSettings = sqliteTable("app_settings", {
   // so this key is actually load-bearing — without it the transcribe
   // path 500s for every org that hasn't set its own override.
   systemGroqKeyEncrypted: text("system_groq_key_encrypted"),
-  // Super-admin overrides for the two polish-mode system prompts.
-  // NULL → use the baked-in default in `lib/transcription/polish.ts`.
-  // Edited only at /admin/system; end users never see the prompt text.
+  // DEPRECATED — superseded by `polish_prompt_versions` (migration 0022).
+  // The resolver in `lib/transcription/polish.ts` still reads these as a
+  // fallback when no active row exists in the versions table, but new
+  // writes go through `lib/polish-prompts.ts:createVersion`. These two
+  // columns will be dropped in a follow-up migration after one release
+  // cycle. Do not add new callers.
   polishIntuitivePrompt: text("polish_intuitive_prompt"),
   polishPrescriptivePrompt: text("polish_prescriptive_prompt"),
   // When false, provisionNewUser stops auto-creating a workspace for
@@ -497,6 +501,12 @@ export const appSettings = sqliteTable("app_settings", {
   slackTopupWebhookEnabled: bool("slack_topup_webhook_enabled").notNull().default(false),
   slackFeedbackWebhookUrlEncrypted: text("slack_feedback_webhook_url_encrypted"),
   slackFeedbackWebhookEnabled: bool("slack_feedback_webhook_enabled").notNull().default(false),
+  // Migration 0023 — fires on every polish-prompt version write
+  // (admin edit, agent proposal, rollback, prod→dev mirror).
+  // Separate destination from feedback because volume + audience
+  // differ. See lib/slack.ts:notifyPromptUpdate.
+  slackPromptUpdateWebhookUrlEncrypted: text("slack_prompt_update_webhook_url_encrypted"),
+  slackPromptUpdateWebhookEnabled: bool("slack_prompt_update_webhook_enabled").notNull().default(false),
   updatedAt: timestampMs("updated_at").notNull().$defaultFn(() => new Date()),
 });
 
@@ -695,6 +705,90 @@ export const serviceTokens = sqliteTable(
   })
 );
 
+// ---------------------------------------------------------------------------
+// Polish prompt versions
+//
+// Versioned storage for the two polish-mode prompts (intuitive +
+// prescriptive). Replaces the single-column overrides at
+// app_settings.polish_*_prompt — see migration 0022 for the column-by-
+// column rationale and the active-learning-loop framing.
+//
+// Invariants enforced by the schema (and re-enforced by the domain layer
+// in lib/polish-prompts.ts):
+//   * `(mode, version)` unique — version counter is monotonic per mode.
+//   * Exactly zero-or-one `is_active = 1` row per mode, via the partial
+//     unique index `idx_ppv_active`. The resolver depends on this; the
+//     domain layer's createVersion + rollbackToVersion preserve it by
+//     deactivating the prior active row before inserting the new one.
+//   * `rolled_back_from_version_id` is non-null iff `source = 'rollback'`
+//     (enforced at the domain layer; the DB just has the FK).
+//
+// Writes go exclusively through lib/polish-prompts.ts:
+//   getActivePrompt / getPromptByVersion / getPromptById / listVersions
+//   createVersion / rollbackToVersion
+// No route handler or server action calls db.insert(...) on this table
+// directly — those bypasses skip the active-row maintenance and the
+// upcoming Slack notification (PR 3).
+// ---------------------------------------------------------------------------
+
+export type PolishPromptMode = "intuitive" | "prescriptive";
+export type PolishPromptSource =
+  | "seed"
+  | "admin"
+  | "agent"
+  | "rollback"
+  | "mirror";
+
+export const polishPromptVersions = sqliteTable(
+  "polish_prompt_versions",
+  {
+    id: text("id").primaryKey().$defaultFn(uuid),
+    mode: text("mode", { enum: ["intuitive", "prescriptive"] })
+      .$type<PolishPromptMode>()
+      .notNull(),
+    // Monotonic per `mode`, starts at 1. createVersion picks
+    // MAX(version)+1 inside the same insert; the unique index below
+    // bounces concurrent racers.
+    version: integer("version").notNull(),
+    body: text("body").notNull(),
+    notes: text("notes"),
+    source: text("source", {
+      enum: ["seed", "admin", "agent", "rollback", "mirror"],
+    })
+      .$type<PolishPromptSource>()
+      .notNull(),
+    isActive: bool("is_active").notNull().default(false),
+    // Self-FK. Declared without the Drizzle `.references()` helper to
+    // sidestep the temporal-dead-zone issue when a column on a table
+    // references its own primary key inside the same `sqliteTable`
+    // call. The FK is still present and enforced at the SQL layer
+    // (see migration 0022); only the type-level reference is omitted.
+    rolledBackFromVersionId: text("rolled_back_from_version_id"),
+    benchScore: real("bench_score"),
+    benchResultsJson: text("bench_results_json"),
+    createdAt: timestampMs("created_at")
+      .notNull()
+      .$defaultFn(() => new Date()),
+    createdByUserId: text("created_by_user_id").references(() => users.id),
+    createdByTokenId: text("created_by_token_id").references(
+      () => serviceTokens.id
+    ),
+  },
+  (t) => ({
+    modeVersionUnique: uniqueIndex("idx_ppv_mode_version").on(
+      t.mode,
+      t.version
+    ),
+    // Partial unique — at most one active row per mode. Drizzle 0.45+
+    // emits this as `... WHERE is_active = 1` which matches the raw
+    // SQL in migration 0022.
+    activeUnique: uniqueIndex("idx_ppv_active")
+      .on(t.mode)
+      .where(sql`is_active = 1`),
+    modeCreatedIdx: index("idx_ppv_mode_created").on(t.mode, t.createdAt),
+  })
+);
+
 // ---- Type exports for the rest of the app ---------------------------------
 
 export type User = typeof users.$inferSelect;
@@ -715,3 +809,5 @@ export type NewRelease = typeof releases.$inferInsert;
 export type TranscriptionFeedback = typeof transcriptionFeedback.$inferSelect;
 export type NewTranscriptionFeedback = typeof transcriptionFeedback.$inferInsert;
 export type ServiceToken = typeof serviceTokens.$inferSelect;
+export type PolishPromptVersion = typeof polishPromptVersions.$inferSelect;
+export type NewPolishPromptVersion = typeof polishPromptVersions.$inferInsert;

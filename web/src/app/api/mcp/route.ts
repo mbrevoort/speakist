@@ -101,17 +101,18 @@ export async function POST(req: Request): Promise<Response> {
   // honor — handle each request and concat the responses.
   if (Array.isArray(body)) {
     const responses = await Promise.all(
-      body.map((req) => handleSingle(req, tokenScopes))
+      body.map((req) => handleSingle(req, tokenScopes, verified.id))
     );
     return Response.json(responses);
   }
-  const response = await handleSingle(body, tokenScopes);
+  const response = await handleSingle(body, tokenScopes, verified.id);
   return Response.json(response);
 }
 
 async function handleSingle(
   req: JsonRpcRequest,
-  tokenScopes: Set<ServiceScope>
+  tokenScopes: Set<ServiceScope>,
+  tokenId: string
 ): Promise<JsonRpcSuccess | JsonRpcError> {
   const id = req.id ?? null;
   if (req.jsonrpc !== "2.0" || typeof req.method !== "string") {
@@ -128,11 +129,13 @@ async function handleSingle(
           tools: {},
         },
         serverInfo: {
-          name: "speakist-feedback",
+          name: "speakist",
           version: "1.0.0",
         },
         instructions:
-          "Use list_feedback to enumerate user-reported bad transcriptions, get_feedback for full detail, and mark_feedback_proposed once you've opened a PR against polish-fixtures.ts. Audio is rarely needed for polish-prompt iteration.",
+          "Two related surfaces.\n\n" +
+          "Feedback (the input to the active-learning loop): list_feedback enumerates user-reported bad transcriptions; get_feedback returns the full triplet (raw STT / what we delivered / what the user expected) plus the request-context snapshot; mark_feedback_proposed / mark_feedback_resolution move rows through the triage states. Audio is available via get_feedback_audio but rarely needed for polish-prompt iteration.\n\n" +
+          "Polish prompts (the output): get_active_polish_prompt returns the body /api/transcribe is currently serving; list_polish_prompt_versions + get_polish_prompt_version expose the history; propose_polish_prompt promotes a candidate body to active. Always run the local polish regression bench before proposing — include bench_score and bench_results in the call so humans can verify the quality bar. Always include `notes` explaining WHY (which feedback IDs prompted this, what changes).",
       });
 
     case "tools/list": {
@@ -176,7 +179,7 @@ async function handleSingle(
       }
       let content: McpContent[];
       try {
-        content = await tool.handler(params.arguments);
+        content = await tool.handler(params.arguments, { tokenId });
       } catch (err) {
         if (err instanceof McpError) {
           // Surface as a tools/call result with `isError: true` per

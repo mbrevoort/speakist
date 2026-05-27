@@ -64,6 +64,39 @@ Audio is sent to our backend, transcribed, and the result is returned.
 **Neither the audio nor the transcript is ever saved or written to disk
 in the cloud — only on your device.**
 
+## How polish prompts evolve
+
+After STT, Speakist runs a lightweight LLM polish pass — fixing
+punctuation, capitalization, and obvious mishearings. The system
+prompt driving that pass evolves through an **active learning loop**:
+
+1. Users can report transcriptions that could have been better
+   (anonymized, opt-in, audio sharing optional).
+2. A scheduled agent reads those reports over MCP, drafts a candidate
+   prompt revision, and benches it against a growing regression corpus
+   in [`web/src/lib/transcription/polish-fixtures.ts`](web/src/lib/transcription/polish-fixtures.ts).
+3. If the candidate moves the bench score in the right direction, it
+   gets promoted — versioned, rollback-able, and announced to Slack.
+   Every change is auditable from `/admin/polish-prompts`.
+
+The baseline prompts that ship in the repo
+([`web/src/lib/transcription/default-polish-prompts.ts`](web/src/lib/transcription/default-polish-prompts.ts))
+are the **seed** for a fresh deployment: they handle the load-bearing
+anti-response framing that keeps the polish LLM from treating dictation
+as a chat prompt. A running deployment iterates beyond them based on
+its own usage.
+
+To validate just the baseline (no DB access, no API keys other than
+Groq):
+
+```sh
+GROQ_API_KEY=… pnpm bench:polish --tier baseline
+```
+
+The full corpus (`--tier all`) is the regression bench for whatever
+the loop has converged on in `polish_prompt_versions` — expect
+advanced cases to fail against the baseline alone, by design.
+
 ## Pointing the Mac at a custom backend
 
 Default is `http://localhost:3000` (matches `pnpm dev` in `web/`). The

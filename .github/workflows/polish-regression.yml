@@ -1,6 +1,19 @@
 # Polish regression suite — exercises the Groq polish path against the
-# fixture set in `web/src/lib/transcription/polish-fixtures.ts` and
-# reports per-case + aggregate metrics.
+# `baseline`-tier fixtures in `web/src/lib/transcription/polish-fixtures.ts`
+# (anti-response framing + basic punctuation) and reports per-case +
+# aggregate metrics.
+#
+# Why baseline-only: the `advanced` tier targets behaviors that only
+# the active-learning loop's iterated prompts can satisfy reliably
+# (long-form structure, list conversion, conjunction merging). Those
+# prompts live in `polish_prompt_versions` (D1) on the running env,
+# not in source — CI doesn't have a way to fetch them. Running
+# advanced fixtures here would fail by design.
+#
+# The advanced-tier regression bench is the active-learning agent's
+# job: it benches candidates against the full corpus before calling
+# `propose_polish_prompt`. See `lib/polish-prompts.ts` and the MCP
+# tool surface in `lib/mcp/tools.ts`.
 #
 # Why a separate workflow (vs folding into pr.yml):
 #   * Hits a real third-party API (Groq) — costs $$$ and can be
@@ -116,8 +129,12 @@ jobs:
           # workflow_dispatch can override via BENCH_ITERATIONS when a
           # maintainer wants to investigate intermittent flakes.
           ITER="${BENCH_ITERATIONS:-1}"
+          # --tier baseline: only run fixtures the shipped distilled
+          # defaults are expected to pass. Advanced-tier fixtures
+          # target the iterated prompts in polish_prompt_versions and
+          # belong to the agent's bench, not CI's.
           if [ -n "${BENCH_MODEL:-}" ]; then
-            pnpm exec tsx scripts/bench-polish.ts -n "$ITER" --model "$BENCH_MODEL"
+            pnpm exec tsx scripts/bench-polish.ts -n "$ITER" --tier baseline --model "$BENCH_MODEL"
           else
-            pnpm exec tsx scripts/bench-polish.ts -n "$ITER"
+            pnpm exec tsx scripts/bench-polish.ts -n "$ITER" --tier baseline
           fi

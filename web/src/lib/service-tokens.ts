@@ -25,6 +25,14 @@ import { hashToken } from "@/lib/hash";
 export const SERVICE_SCOPES = [
   "feedback:read",
   "feedback:triage",
+  // Polish-prompt versioning. `prompts:read` covers the three
+  // read-only MCP tools (get_active, list, get_version);
+  // `prompts:write` is required for `propose_polish_prompt` which
+  // creates a new active version with source='agent'. Rollback is
+  // admin-UI-only and intentionally not exposed via MCP — the agent
+  // shouldn't be able to undo a human decision.
+  "prompts:read",
+  "prompts:write",
 ] as const;
 export type ServiceScope = (typeof SERVICE_SCOPES)[number];
 

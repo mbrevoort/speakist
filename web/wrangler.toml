@@ -153,6 +153,12 @@ RELEASE_R2_BUCKET = "speakist-releases-prod"
 IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/jsMN1vWs"
 RESEND_FROM_EMAIL = "noreply@speakist.ai"
 SUPER_ADMIN_EMAIL = "mike@brevoort.com"
+# Polish-prompt mirror: the dev Worker's base URL. The companion
+# secret DEV_MIRROR_TOKEN is set via `wrangler secret put
+# DEV_MIRROR_TOKEN --env production` — see
+# docs/polish-prompt-mirror.md. Both must be set for the
+# /admin/polish-prompts "Mirror → dev" button to enable.
+DEV_MIRROR_BACKEND_URL = "https://speakist-dev.brevoortstudio.com"
 
 [[env.production.d1_databases]]
 binding = "DB"

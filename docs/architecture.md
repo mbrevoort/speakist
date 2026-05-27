@@ -38,6 +38,7 @@ is the inverse — how the wires are run.
 | Payments | Stripe (Checkout + Customer Portal + webhooks) |
 | Upstream STT | Groq Whisper (default) and DeepGram, switchable per-org by super admin |
 | Polish LLM | Groq `llama-3.1-8b-instant` |
+| Polish prompt store | `polish_prompt_versions` (D1) — versioned, rollback-able, edited via `/admin/polish-prompts` or proposed via the MCP `propose_polish_prompt` tool. Seed bodies in [`web/src/lib/transcription/default-polish-prompts.ts`](../web/src/lib/transcription/default-polish-prompts.ts). |
 
 Deliberately avoided: third-party networking SDKs (`URLSession`/`fetch`
 suffice), telemetry, Core Data, multiple-region hosting, RLS-style DB
