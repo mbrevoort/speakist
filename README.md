@@ -1,8 +1,31 @@
 # Speakist
 
-Push-to-talk dictation. Hold a shortcut, speak, release — transcribed text
-appears at your cursor in any app. Mac and iOS, with a small Cloudflare
-backend for sign-in and billing.
+**Push-to-talk dictation that's faster than typing.** Hold a shortcut,
+speak, release — transcribed text appears at your cursor in any app.
+Mac and iOS.
+
+**→ Try it at [speakist.ai](https://speakist.ai)** — $5 of free credit
+on signup, no card required. That's a few thousand words to see if
+it fits the way you think.
+
+---
+
+This repo is the source code for [speakist.ai](https://speakist.ai).
+It's open because Speakist records your voice, and trust matters more
+than convenience. Anyone can verify what we actually do with your
+audio — `grep` the code for any database or storage write and you'll
+find one explicitly opt-in feedback path and nothing else. The
+privacy promise ("audio is never persisted server-side") is
+enforceable, not just claimed.
+
+If you came here to **use** the app: [speakist.ai](https://speakist.ai)
+is the place. The hosted version handles transcription + billing so
+you don't have to.
+
+If you came here to **read** the code: scroll on. Architecture and
+setup live under [`docs/`](docs/). The active learning loop driving
+prompt iteration is described under "How polish prompts evolve"
+further down.
 
 ## What's in this repo
 
