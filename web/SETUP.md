@@ -92,8 +92,10 @@ Should print ~13 tables.
 pnpm db:seed:local
 ```
 
-Creates the super-admin user (`mike@brevoort.com`), a demo "Brevoort Studio"
-org, and a $5 signup-bonus ledger row.
+Creates the super-admin user (`admin@example.com` — edit
+`scripts/seed.sql` first if you want a different one, or just sign
+in below and UPDATE the email afterwards), a demo "Acme" org, and a
+$5 signup-bonus ledger row.
 
 ## 7. Create `.env.local`
 
@@ -120,7 +122,8 @@ Open http://localhost:3000 — you should see the Phase-1 placeholder.
 
 To test magic-link sign-in:
 1. Visit http://localhost:3000/api/auth/signin
-2. Enter `mike@brevoort.com`
+2. Enter `admin@example.com` (or whichever email you put in
+   `seed.sql`)
 3. Look at your `pnpm dev` console — the magic link is printed there
 4. Click it; you're signed in with super-admin privileges
 

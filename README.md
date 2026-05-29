@@ -45,6 +45,36 @@ and the `SpeakistKeyboard` extension. Sign in once on the device and
 both the containing app and the keyboard extension share the same
 backend session via the App Group.
 
+## Forking this repo
+
+Speakist runs out of the box for the original deployment. If you're
+spinning up your own, here are the places that hard-code identifiers
+you'll want to override:
+
+- **Apple Developer Team ID** — export `SPEAKIST_APPLE_TEAM_ID=...`
+  before `make project` (the Makefile threads it into `project.yml`
+  via `${env:...}` and into the release scripts via a shell default).
+  The two static `scripts/exportOptions*.plist` files have a one-time
+  edit pointed out by a `FORKING:` comment.
+- **Backend deployment** — `web/wrangler.toml` references specific
+  Cloudflare D1 database IDs, R2 buckets, custom domains, and the
+  super-admin email for the original deployment. Replace with your
+  own values per `web/DEPLOYING.md`.
+- **Super admin email** — `web/scripts/seed.sql` inserts an
+  `admin@example.com` placeholder. Edit it to your real email before
+  the first `pnpm db:seed:*` so the magic-link sign-in matches.
+- **Apple Identity** — `PRODUCT_BUNDLE_IDENTIFIER` values in
+  `project.yml` (`com.brevoort-studio.speakist*`) are tied to the
+  original Apple Developer account. Pick your own bundle prefix and
+  search-and-replace.
+- **Brand strings** — copy across the apps and the marketing pages
+  still says "Speakist." Rename freely; the active learning loop +
+  the infrastructure are the parts that matter.
+
+Everything else (provider keys, Slack webhooks, Resend, Stripe, etc.)
+goes through the admin UI or `wrangler secret put` — no code edits
+needed.
+
 ## First-run
 
 1. Speakist lives in your menu bar (Mac) / on the Home Screen (iOS) —
@@ -130,4 +160,10 @@ checklist.
 
 ## License
 
-Proprietary.
+[Apache License 2.0](LICENSE). The patent grant + retaliation clause
+gives downstream users and contributors real protection in a space
+where LLM patent assertions are increasingly common; the rest of the
+license is the same permissive baseline as MIT.
+
+Contributions are welcome — by submitting them, you agree to the
+terms of the Apache 2.0 license (no separate CLA).

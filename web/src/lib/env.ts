@@ -55,9 +55,11 @@ const serverSchema = publicSchema.extend({
   APP_ENCRYPTION_KEY: z.string().min(32).optional(),
 
   // Worker var (wrangler.toml [env.X.vars]) — bootstrap super-admin.
-  // Same value on dev and prod today; the schema default catches
-  // local `next dev` runs that haven't set it.
-  SUPER_ADMIN_EMAIL: z.string().email().default("mike@brevoort.com"),
+  // Each deployed env sets this to the operator's real email; the
+  // schema default is a placeholder so local `next dev` runs that
+  // haven't set SUPER_ADMIN_EMAIL still parse cleanly. Forks should
+  // override this in their own wrangler.toml + .env.local.
+  SUPER_ADMIN_EMAIL: z.string().email().default("admin@example.com"),
 
   // Resend — required for magic-link emails. Optional in dev (falls back to
   // logging the link to console — see src/lib/auth.ts).

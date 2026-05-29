@@ -33,7 +33,11 @@ settings:
     CODE_SIGN_STYLE: Automatic
     CURRENT_PROJECT_VERSION: "13"
     MARKETING_VERSION: "0.1.10"
-    DEVELOPMENT_TEAM: Q5T8FJNX57
+    # Apple Developer Team ID. Sourced from the SPEAKIST_APPLE_TEAM_ID
+    # env var (defaulted in Makefile to the original team for this
+    # repo). Forks override by exporting their own value before
+    # running `make project` / `xcodegen generate`.
+    DEVELOPMENT_TEAM: ${SPEAKIST_APPLE_TEAM_ID}
 
 packages:
   KeyboardShortcuts:
