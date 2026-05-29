@@ -3,13 +3,14 @@
 // Phases 4 & onwards will wire up to real pages.
 
 import Link from "next/link";
+import { Github } from "lucide-react";
 import { Wordmark } from "@/components/brand/logo";
 
 export function Footer() {
   return (
     <footer className="border-t border-border/60 bg-white/30">
       <div className="container max-w-6xl py-12">
-        <div className="grid sm:grid-cols-[1fr_auto_auto_auto] gap-8 sm:gap-16">
+        <div className="grid sm:grid-cols-[1fr_auto_auto_auto_auto] gap-8 sm:gap-12">
           <div className="max-w-sm">
             <Wordmark />
             <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
@@ -22,6 +23,15 @@ export function Footer() {
               </a>
               .
             </p>
+            <a
+              href="https://github.com/mbrevoort/speakist"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 hover:text-foreground"
+            >
+              <Github className="size-4" />
+              Open source on GitHub
+            </a>
           </div>
 
           <FooterCol title="Product">
@@ -33,6 +43,18 @@ export function Footer() {
           <FooterCol title="Account">
             <FooterLink href="/auth/signin?intent=signin">Sign in</FooterLink>
             <FooterLink href="/auth/signin?intent=signup">Get started</FooterLink>
+          </FooterCol>
+
+          <FooterCol title="Source">
+            <FooterExternalLink href="https://github.com/mbrevoort/speakist">
+              GitHub
+            </FooterExternalLink>
+            <FooterExternalLink href="https://github.com/mbrevoort/speakist/blob/main/LICENSE">
+              License
+            </FooterExternalLink>
+            <FooterExternalLink href="https://github.com/mbrevoort/speakist/blob/main/SECURITY.md">
+              Security
+            </FooterExternalLink>
           </FooterCol>
 
           <FooterCol title="Legal">
@@ -70,6 +92,27 @@ function FooterLink({ href, children }: { href: string; children: React.ReactNod
       >
         {children}
       </Link>
+    </li>
+  );
+}
+
+function FooterExternalLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {children}
+      </a>
     </li>
   );
 }
