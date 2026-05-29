@@ -3,8 +3,14 @@
 // visitor brings: "I already have built-in dictation" / "subscription
 // tools are pricey" / "all these tools are bloated with AI chat features"
 // / "I don't want my voice in someone's data lake."
+//
+// The privacy card carries the open-source CTA — it's the natural
+// place to convert "trust us" into "verify us" by linking the GitHub
+// repo. Don't pull the OSS angle into its own card or a separate
+// section; it lives or dies on whether the privacy promise feels
+// enforceable, and that's a privacy-card concern.
 
-import { CircleDollarSign, Lock, Sparkles, Zap } from "lucide-react";
+import { CircleDollarSign, Github, Lock, Sparkles, Zap } from "lucide-react";
 
 export function ValueProps() {
   return (
@@ -45,6 +51,17 @@ export function ValueProps() {
             icon={<Lock className="size-5" />}
             title="Your voice stays on your device."
             body="Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved in the cloud — only on your device."
+            footer={
+              <a
+                href="https://github.com/mbrevoort/speakist"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-peach-deep hover:underline underline-offset-4"
+              >
+                <Github className="size-4" />
+                Verify it — read the source
+              </a>
+            }
           />
         </div>
       </div>
@@ -56,18 +73,21 @@ function Card({
   icon,
   title,
   body,
+  footer,
 }: {
   icon: React.ReactNode;
   title: string;
   body: string;
+  footer?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-background p-6 hover:shadow-md hover:border-peach/40 transition-all">
+    <div className="rounded-2xl border border-border bg-background p-6 hover:shadow-md hover:border-peach/40 transition-all flex flex-col">
       <div className="inline-flex items-center justify-center h-9 w-9 rounded-xl bg-peach/10 text-peach-deep">
         {icon}
       </div>
       <h3 className="mt-5 font-semibold text-base">{title}</h3>
       <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{body}</p>
+      {footer && <div className="mt-4">{footer}</div>}
     </div>
   );
 }
