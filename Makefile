@@ -4,6 +4,24 @@ CHANNEL ?= stable
 NOTES ?=
 BUILD_DIR := build
 
+# Apple Developer Team ID used for code signing the Mac + iOS targets.
+# Default value is the team this repo was originally built under;
+# forks must override it to sign with their own developer account.
+# Two ways:
+#   * Export the env var before invoking make / xcodegen / release.sh:
+#       export SPEAKIST_APPLE_TEAM_ID=YOUR_TEAM_ID
+#   * Or invoke make with it inline:
+#       make project SPEAKIST_APPLE_TEAM_ID=YOUR_TEAM_ID
+#
+# project.yml reads this via ${env:SPEAKIST_APPLE_TEAM_ID}; release.sh
+# and release-*-ci.sh fall back to the same default when unset.
+# The exportOptions plists are static XML — fork-edit them
+# (scripts/exportOptions.plist, scripts/exportOptions-ios.plist) once
+# to match your team ID; xcodebuild doesn't substitute env vars in
+# plist values.
+SPEAKIST_APPLE_TEAM_ID ?= Q5T8FJNX57
+export SPEAKIST_APPLE_TEAM_ID
+
 .PHONY: project clean build run test archive release icons
 
 project:

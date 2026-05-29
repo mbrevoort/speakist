@@ -10,7 +10,10 @@
     <key>method</key>
     <string>app-store-connect</string>
 
-    <!-- Matches DEVELOPMENT_TEAM in project.yml. -->
+    <!-- FORKING: Replace this value with your Apple Developer Team
+         ID. Must match SPEAKIST_APPLE_TEAM_ID (see Makefile). plist
+         values aren't env-substituted by xcodebuild, so this stays
+         static in the repo — edit it once when you set up signing. -->
     <key>teamID</key>
     <string>Q5T8FJNX57</string>
 

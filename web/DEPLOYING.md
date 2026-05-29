@@ -91,11 +91,12 @@ Same seed we used locally, pointed at remote:
 pnpm db:seed:dev
 ```
 
-This creates `mike@brevoort.com` as super admin, `Brevoort Studio` as the
-seed org, and grants the $5 signup bonus.
+This creates `admin@example.com` as super admin, `Acme` as the seed
+org, and grants the $5 signup bonus.
 
-(If you want a different super-admin email, edit `scripts/seed.sql`
-before running — the email is hard-coded there so it's idempotent.)
+Edit `scripts/seed.sql` BEFORE running so the email matches the one
+you'll sign in with — the email is hard-coded there so the seed is
+idempotent and safe to re-run.
 
 ---
 
@@ -145,9 +146,10 @@ pnpm exec wrangler secret put STRIPE_SECRET_KEY --env dev
 pnpm exec wrangler secret put DEEPGRAM_PROJECT_ID --env dev
 # value: the UUID from Deepgram → Project Settings
 
-# Super admin email (defaults to mike@brevoort.com if unset)
+# Super admin email — match what you set in scripts/seed.sql.
+# Defaults to admin@example.com placeholder when unset.
 pnpm exec wrangler secret put SUPER_ADMIN_EMAIL --env dev
-# value: mike@brevoort.com
+# value: <your-admin-email>
 ```
 
 List what's set (without values) to sanity check:
@@ -266,9 +268,10 @@ Provider API keys are stored in D1 encrypted by `APP_ENCRYPTION_KEY`,
 not in env vars — that way they're rotatable through the UI without a
 redeploy and per-org overrides can layer on top. Configure:
 
-1. Visit `https://speakist-dev.brevoortstudio.com/auth/signin`
-2. Sign in as `mike@brevoort.com` — the magic link will land in your
-   Resend inbox (or in dev console if Resend isn't wired up).
+1. Visit your dev deployment's `/auth/signin`.
+2. Sign in as the email you put in `scripts/seed.sql` — the magic
+   link will land in your Resend inbox (or in dev console if Resend
+   isn't wired up).
 3. After signin, go to `/admin/system`.
 4. **System Groq key** → **Set key** → paste your Groq API key
    (`gsk_…` from <https://console.groq.com/keys>) → Save. **This is
@@ -282,13 +285,19 @@ If saving a key complains about `APP_ENCRYPTION_KEY`, the secret from
 step 3 didn't make it onto the Worker. Re-run `wrangler secret put
 APP_ENCRYPTION_KEY --env dev` and redeploy.
 
-### Polish prompt overrides (optional)
+### Polish prompts (optional)
 
-Same `/admin/system` page exposes editor cards for the two polish-mode
-prompts (Intuitive + Prescriptive). Both default to NULL (= use the
-baked-in constants in `web/src/lib/transcription/polish.ts`). Edit
-when you want to tighten the prompt against an observed regression
-without shipping a code change.
+`/admin/polish-prompts` is the editor for the two polish-mode prompts
+(Intuitive + Prescriptive). Each edit creates a new versioned row in
+`polish_prompt_versions`, with rollback, bench-score history, and a
+Slack notification per change. Fresh deployments fall back to the
+distilled baselines in
+[`src/lib/transcription/default-polish-prompts.ts`](./src/lib/transcription/default-polish-prompts.ts)
+until the first version is saved.
+
+For agent-driven iteration of these prompts (via the MCP
+`propose_polish_prompt` tool), see
+[`../docs/feedback-agent.md`](../docs/feedback-agent.md).
 
 ---
 
@@ -312,11 +321,13 @@ from `/dashboard/members` still work; auto-join-domain (set in
 On the dev URL (`https://speakist-dev.brevoortstudio.com`):
 
 - [ ] Landing page renders; pricing block shows the correct per-1000-word rate
-- [ ] Sign out. Try signing up with a fresh email (not mike@brevoort.com).
-      Should land on "Awaiting invitation" — proving the toggle works.
-- [ ] Sign back in as mike@brevoort.com. Go to `/dashboard/members`, invite
-      that fresh email. Accept the invitation in another browser. New user
-      lands in your org as a member.
+- [ ] Sign out. Try signing up with a fresh email (different from
+      your super-admin one). Should land on "Awaiting invitation" —
+      proving the toggle works.
+- [ ] Sign back in as your super-admin email. Go to
+      `/dashboard/members`, invite that fresh email. Accept the
+      invitation in another browser. New user lands in your org as a
+      member.
 - [ ] Go to `/dashboard/billing`. Click the $10 top-up tile. Use Stripe's
       test card `4242 4242 4242 4242` / any future expiry / any CVC. Stripe
       Checkout completes → you return to the dashboard → the ledger shows

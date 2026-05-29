@@ -201,7 +201,7 @@ jobs:
   mac:
     name: Build + ship Mac DMG (${{ needs.context.outputs.channel }})
     needs: context
-    # Self-hosted runner on mike-homebase. Same setup as the dev
+    # Self-hosted Apple Silicon runner. Same setup as the dev
     # pipeline — no GitHub-hosted fallback. If the host is offline at
     # release time you'll need to bring it back up before re-running
     # the workflow (or temporarily flip back to macos-26).

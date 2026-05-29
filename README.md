@@ -1,8 +1,29 @@
+<p align="center">
+  <img src="design/Speakist.svg" alt="Speakist" width="120" height="120">
+</p>
+
 # Speakist
 
-Push-to-talk dictation. Hold a shortcut, speak, release — transcribed text
-appears at your cursor in any app. Mac and iOS, with a small Cloudflare
-backend for sign-in and billing.
+**Push-to-talk dictation that's faster than typing.** Hold a shortcut,
+speak, release — transcribed text appears at your cursor in any app.
+Mac and iOS.
+
+**→ Try it at [speakist.ai](https://speakist.ai)** — $5 of free credit
+on signup, no card required. That's a few thousand words to see if
+it fits the way you think.
+
+---
+
+This repo is the source code for [speakist.ai](https://speakist.ai).
+It's open because Speakist records your voice, and trust matters more
+than convenience.
+
+If you came here to **use** the app: [speakist.ai](https://speakist.ai)
+is the place. The hosted version handles transcription + billing so
+you don't have to.
+
+If you came here to **read** the code: scroll on. Architecture and
+setup live under [`docs/`](docs/).
 
 ## What's in this repo
 
@@ -44,6 +65,36 @@ schemes for `SpeakistiOS` (Debug/Local), `SpeakistiOS Dev` (TestFlight),
 and the `SpeakistKeyboard` extension. Sign in once on the device and
 both the containing app and the keyboard extension share the same
 backend session via the App Group.
+
+## Forking this repo
+
+Speakist runs out of the box for the original deployment. If you're
+spinning up your own, here are the places that hard-code identifiers
+you'll want to override:
+
+- **Apple Developer Team ID** — export `SPEAKIST_APPLE_TEAM_ID=...`
+  before `make project` (the Makefile threads it into `project.yml`
+  via `${env:...}` and into the release scripts via a shell default).
+  The two static `scripts/exportOptions*.plist` files have a one-time
+  edit pointed out by a `FORKING:` comment.
+- **Backend deployment** — `web/wrangler.toml` references specific
+  Cloudflare D1 database IDs, R2 buckets, custom domains, and the
+  super-admin email for the original deployment. Replace with your
+  own values per `web/DEPLOYING.md`.
+- **Super admin email** — `web/scripts/seed.sql` inserts an
+  `admin@example.com` placeholder. Edit it to your real email before
+  the first `pnpm db:seed:*` so the magic-link sign-in matches.
+- **Apple Identity** — `PRODUCT_BUNDLE_IDENTIFIER` values in
+  `project.yml` (`com.brevoort-studio.speakist*`) are tied to the
+  original Apple Developer account. Pick your own bundle prefix and
+  search-and-replace.
+- **Brand strings** — copy across the apps and the marketing pages
+  still says "Speakist." Rename freely; the active learning loop +
+  the infrastructure are the parts that matter.
+
+Everything else (provider keys, Slack webhooks, Resend, Stripe, etc.)
+goes through the admin UI or `wrangler secret put` — no code edits
+needed.
 
 ## First-run
 
@@ -130,4 +181,10 @@ checklist.
 
 ## License
 
-Proprietary.
+[Apache License 2.0](LICENSE). The patent grant + retaliation clause
+gives downstream users and contributors real protection in a space
+where LLM patent assertions are increasingly common; the rest of the
+license is the same permissive baseline as MIT.
+
+Contributions are welcome — by submitting them, you agree to the
+terms of the Apache 2.0 license (no separate CLA).

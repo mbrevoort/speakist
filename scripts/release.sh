@@ -34,7 +34,9 @@
 #   dev      https://speakist-dev.brevoortstudio.com/appcast-dev.xml  https://speakist-dev.brevoortstudio.com  speakist-releases-dev    https://downloads-dev.brevoortstudio.com
 #
 # Prerequisites (one-time per machine):
-#   * Xcode + Developer ID Application cert in Keychain for team Q5T8FJNX57
+#   * Xcode + Developer ID Application cert in Keychain for the team
+#     in SPEAKIST_APPLE_TEAM_ID (defaulted in Makefile; export your own
+#     when forking)
 #   * brew install xcodegen jq  (hdiutil ships with macOS)
 #   * Sparkle tools: https://github.com/sparkle-project/Sparkle/releases
 #     copy bin/ to ~/Library/Developer/Sparkle/bin (or set SPARKLE_TOOLS)
@@ -148,7 +150,11 @@ PROJECT_NAME="Speakist"
 # produce e.g. "Speakist Dev.app" / "Speakist.app" / "Speakist Beta.app".
 APP_BUNDLE_NAME="$DISPLAY_NAME"
 
-TEAM_ID="Q5T8FJNX57"
+# Apple Developer Team ID. Sourced from SPEAKIST_APPLE_TEAM_ID (set
+# by the Makefile with a fallback default); forks override by
+# exporting their own value before invoking `make release` /
+# release.sh.
+TEAM_ID="${SPEAKIST_APPLE_TEAM_ID:-Q5T8FJNX57}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-SPEAKIST_NOTARY}"
 SPARKLE_TOOLS="${SPARKLE_TOOLS:-$HOME/Library/Developer/Sparkle/bin}"
 BUILD_DIR="build"

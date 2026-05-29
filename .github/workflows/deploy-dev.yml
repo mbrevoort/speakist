@@ -159,8 +159,8 @@ jobs:
     name: Build + ship Mac dev DMG
     needs: changes
     if: ${{ needs.changes.outputs.mac == 'true' || github.event_name == 'workflow_dispatch' }}
-    # Self-hosted runner on mike-homebase. No GitHub-hosted fallback —
-    # if the laptop is offline the dev DMG just doesn't ship until the
+    # Self-hosted Apple Silicon runner. No GitHub-hosted fallback —
+    # if the host is offline the dev DMG just doesn't ship until the
     # runner comes back. PR validation still goes through hosted
     # runners (see pr.yml) so a missing dev runner never gates merges.
     runs-on: [self-hosted, macOS, ARM64]
