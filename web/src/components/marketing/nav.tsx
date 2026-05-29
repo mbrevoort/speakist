@@ -13,6 +13,7 @@
 // clicking "Get started" doesn't land on "Welcome back".
 
 import Link from "next/link";
+import { Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Wordmark } from "@/components/brand/logo";
 import { getAuth } from "@/lib/auth";
@@ -39,6 +40,15 @@ export async function Nav() {
           <Link href="/faq" className="px-3 py-2 hover:text-foreground transition-colors">
             FAQ
           </Link>
+          <a
+            href="https://github.com/mbrevoort/speakist"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 hover:text-foreground transition-colors"
+          >
+            <Github className="size-4" />
+            Source
+          </a>
         </nav>
 
         <div className="flex items-center gap-2">
