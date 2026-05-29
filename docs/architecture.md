@@ -11,9 +11,9 @@ Cloudflare Worker. The product lives in three places:
 | Backend | `web/` | Auth (magic-link + device-code), per-org pricing, transcribe proxy, polish, billing. Next.js → Cloudflare Workers via OpenNext, D1 for storage, R2 for DMG hosting. |
 | Cross-target Swift | `Shared/` | A handful of files used by all three Apple targets — channel resolution, App Group bridge, history entry, etc. |
 
-See [speakist-prd.md](speakist-prd.md) for the product spec; that doc
-captures intent and is intentionally light on implementation. This doc
-is the inverse — how the wires are run.
+This doc covers how the wires are run. The [`web/README.md`](../web/README.md)
+covers the design principles behind the backend; [`README.md`](../README.md)
+covers the product surface.
 
 ---
 
@@ -24,7 +24,7 @@ is the inverse — how the wires are run.
 | Apple targets | Swift 5.10, SwiftUI (+ AppKit / UIKit bridges), Xcode 16+ |
 | Min OS | macOS 14 (Sonoma), iOS 17 |
 | Build | XcodeGen-generated `Speakist.xcodeproj` from [`project.yml`](../project.yml) |
-| Code signing | Developer ID Application for Mac DMGs; Apple Distribution for iOS App Store / TestFlight (team `Q5T8FJNX57`) |
+| Code signing | Developer ID Application for Mac DMGs; Apple Distribution for iOS App Store / TestFlight. Team ID baked into `project.yml` via the `SPEAKIST_APPLE_TEAM_ID` env var — see [`../README.md#forking-this-repo`](../README.md#forking-this-repo). |
 | Mac persistence | SQLite via [GRDB.swift](https://github.com/groue/GRDB.swift) |
 | Mac shortcuts | [sindresorhus/KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) |
 | Mac auto-update | [Sparkle 2](https://github.com/sparkle-project/Sparkle) |
@@ -283,9 +283,15 @@ A second LLM pass that runs after STT. Two server-side modes:
 
 Each user picks `polish_mode` per their `users` row (UI on Mac
 Settings → Polish, iOS Home → Polish, web `/dashboard/settings`).
-The actual prompt strings live in `app_settings.polish_<mode>_prompt`,
-overridable at `/admin/system` by super admins; NULL falls back to
-the baked-in constants in `web/src/lib/transcription/polish.ts`.
+The active prompt strings live in `polish_prompt_versions` (D1),
+versioned + rollback-able, edited at `/admin/polish-prompts` or
+proposed via the MCP `propose_polish_prompt` tool. The resolver
+falls through three tiers: versions table → deprecated
+`app_settings.polish_*_prompt` (kept one release for safety) →
+baked-in baseline in
+[`default-polish-prompts.ts`](../web/src/lib/transcription/default-polish-prompts.ts).
+The active learning loop driving prompt iteration is documented in
+[feedback-agent.md](feedback-agent.md).
 
 `runPolish` has two defensive backstops:
 
@@ -397,5 +403,3 @@ when CI is unavailable.
 - Mac App Store. Sandbox blocks the synthetic ⌘V CGEvent.
 - Windows / Linux / Android.
 
-See §11 of [speakist-prd.md](speakist-prd.md) for the canonical
-out-of-scope list and rationale.

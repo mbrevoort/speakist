@@ -10,8 +10,9 @@ runs at $0 with no users on file and stays cheap at scale.
 - **Account signup, org creation, invitations, multi-org switching**
 - **Credits + Stripe billing + usage dashboards**
 - **Super admin** for org management, comp-ing accounts, setting
-  pricing, configuring system Groq + DeepGram keys, editing the polish
-  prompts (intuitive + prescriptive)
+  pricing, configuring system Groq + DeepGram keys, and managing the
+  versioned polish prompts (with rollback, bench-score history, and
+  Slack notifications on every change)
 - **Mac + iOS sign-in backend** — device-code flow with at-sign-in
   workspace selection for multi-org users
 - **`/api/transcribe`** — proxy to upstream STT providers (Groq
@@ -58,8 +59,12 @@ runs at $0 with no users on file and stays cheap at scale.
   language; the server picks (provider, model) from the org's allowed-
   models list and the language. Clients never specify a provider.
 - **Polish prompts are super-admin-only.** End users choose a mode
-  (intuitive or prescriptive); the actual prompt strings live in
-  `app_settings` and are edited at `/admin/system`.
+  (intuitive or prescriptive); the active prompt body lives in
+  versioned rows at `polish_prompt_versions` (D1), managed at
+  `/admin/polish-prompts`. Baselines for fresh deployments live in
+  [`src/lib/transcription/default-polish-prompts.ts`](./src/lib/transcription/default-polish-prompts.ts);
+  a deployed instance iterates beyond them via the active learning
+  loop documented in [`../docs/feedback-agent.md`](../docs/feedback-agent.md).
 - **Dev and prod are fully separate.** Different D1 databases,
   different Workers, different secrets, different Stripe modes.
 
@@ -82,7 +87,9 @@ web/
 │   │   │   ├── orgs/[id]/              Per-org overrides (provider keys, allowed models)
 │   │   │   ├── users/                  User search, comp toggle
 │   │   │   ├── pricing/                Per-word rate, signup bonus
-│   │   │   └── system/                 System Groq/DeepGram keys, polish prompts, public-signup toggle
+│   │   │   ├── system/                 System Groq/DeepGram keys, Slack webhooks, public-signup toggle
+│   │   │   ├── polish-prompts/         Versioned polish prompts (active, history, rollback, mirror)
+│   │   │   └── tokens/                 Service tokens for MCP / agent access
 │   │   └── api/
 │   │       ├── auth/[...nextauth]/     Auth.js routes
 │   │       ├── auth/device/            Device-code start/poll

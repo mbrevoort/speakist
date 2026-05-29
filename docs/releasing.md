@@ -106,11 +106,12 @@ client-side. We use separate URLs because:
 
 ### 1.1 Apple Developer ID certificate
 
-You need a **Developer ID Application** cert installed in the login Keychain
-for team `Q5T8FJNX57`. If you can already run `make archive` without
-signing errors, you're set. If not: Apple Developer → Certificates → create
-a new Developer ID Application cert, download the `.cer`, double-click to
-install.
+You need a **Developer ID Application** cert installed in the login
+Keychain for the team in `SPEAKIST_APPLE_TEAM_ID` (see Makefile;
+forks override). If you can already run `make archive` without
+signing errors, you're set. If not: Apple Developer → Certificates
+→ create a new Developer ID Application cert, download the `.cer`,
+double-click to install.
 
 ### 1.2 Command-line tools
 
@@ -171,8 +172,8 @@ Commit that change.
 
 ```bash
 xcrun notarytool store-credentials SPEAKIST_NOTARY \
-  --apple-id mike@brevoort.com \
-  --team-id Q5T8FJNX57 \
+  --apple-id <your-apple-id-email> \
+  --team-id "$SPEAKIST_APPLE_TEAM_ID" \
   --password APP_SPECIFIC_PASSWORD
 ```
 

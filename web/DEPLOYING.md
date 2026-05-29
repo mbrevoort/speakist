@@ -285,13 +285,19 @@ If saving a key complains about `APP_ENCRYPTION_KEY`, the secret from
 step 3 didn't make it onto the Worker. Re-run `wrangler secret put
 APP_ENCRYPTION_KEY --env dev` and redeploy.
 
-### Polish prompt overrides (optional)
+### Polish prompts (optional)
 
-Same `/admin/system` page exposes editor cards for the two polish-mode
-prompts (Intuitive + Prescriptive). Both default to NULL (= use the
-baked-in constants in `web/src/lib/transcription/polish.ts`). Edit
-when you want to tighten the prompt against an observed regression
-without shipping a code change.
+`/admin/polish-prompts` is the editor for the two polish-mode prompts
+(Intuitive + Prescriptive). Each edit creates a new versioned row in
+`polish_prompt_versions`, with rollback, bench-score history, and a
+Slack notification per change. Fresh deployments fall back to the
+distilled baselines in
+[`src/lib/transcription/default-polish-prompts.ts`](./src/lib/transcription/default-polish-prompts.ts)
+until the first version is saved.
+
+For agent-driven iteration of these prompts (via the MCP
+`propose_polish_prompt` tool), see
+[`../docs/feedback-agent.md`](../docs/feedback-agent.md).
 
 ---
 
