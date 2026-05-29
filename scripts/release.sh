@@ -154,7 +154,18 @@ APP_BUNDLE_NAME="$DISPLAY_NAME"
 # by the Makefile with a fallback default); forks override by
 # exporting their own value before invoking `make release` /
 # release.sh.
-TEAM_ID="${SPEAKIST_APPLE_TEAM_ID:-Q5T8FJNX57}"
+#
+# `export` is load-bearing: `xcodegen generate` (below) substitutes
+# ${SPEAKIST_APPLE_TEAM_ID} in project.yml from the *process* env,
+# not from this script's shell vars. CI bypasses the Makefile and
+# invokes release.sh directly (via release-ci.sh), so this script
+# is the one place that has to make sure the env var lands in the
+# environment xcodegen inherits. Without the export, CI hits
+# `DEVELOPMENT_TEAM = ;` in the generated .xcodeproj and xcodebuild
+# fails with "Signing for 'Speakist' requires selecting either a
+# development team or a provisioning profile."
+export SPEAKIST_APPLE_TEAM_ID="${SPEAKIST_APPLE_TEAM_ID:-Q5T8FJNX57}"
+TEAM_ID="$SPEAKIST_APPLE_TEAM_ID"
 NOTARY_PROFILE="${NOTARY_PROFILE:-SPEAKIST_NOTARY}"
 SPARKLE_TOOLS="${SPARKLE_TOOLS:-$HOME/Library/Developer/Sparkle/bin}"
 BUILD_DIR="build"

@@ -95,6 +95,15 @@ if [ "$CONFIG" = "Release" ] && [ -n "${SPEAKIST_POSTHOG_KEY_STABLE:-}" ]; then
   POSTHOG_FLAG="SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE"
 fi
 
+# Apple Developer Team ID. project.yml references this as
+# ${SPEAKIST_APPLE_TEAM_ID}; xcodegen substitutes from process env,
+# so the var has to be exported (not just set as a shell local)
+# before `xcodegen generate` runs below. CI bypasses the Makefile,
+# so this script is the place that defaults + exports it. Without
+# this line CI hits "Signing for 'SpeakistiOS' requires a
+# development team" at xcodebuild archive time.
+export SPEAKIST_APPLE_TEAM_ID="${SPEAKIST_APPLE_TEAM_ID:-Q5T8FJNX57}"
+
 echo "==> Generating Xcode project (xcodegen)"
 xcodegen generate
 
