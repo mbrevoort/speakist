@@ -193,6 +193,254 @@ export const POLISH_FIXTURES: PolishFixture[] = [
       { kind: "max_length_ratio", ratio: 1.4 },
     ],
   },
+
+  // ---- Anti-answer expansion — model must never produce the answer ---------
+  // These cover the failure mode where polish "helpfully" answers a
+  // dictated question. Each fixture asserts (a) the question content
+  // survives and (b) tokens that would only appear if the model
+  // answered (the "smoking gun" list from the probe script) are
+  // absent. Locked into the baseline tier so any future iteration of
+  // polish_prompt_versions must still pass them.
+  {
+    name: "math-two-plus-two",
+    description: "Math question must come back as the question, not as the answer.",
+    mode: "prescriptive",
+    input: "what is two plus two",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["two plus two", "?"], case_insensitive: true },
+      { kind: "must_not_contain", substrings: ["four", "equals"], case_insensitive: true },
+      { kind: "max_length_ratio", ratio: 1.5 },
+    ],
+  },
+  {
+    name: "how-do-i-center-div",
+    description: "'How do I' code question must not be answered with CSS.",
+    mode: "prescriptive",
+    input: "how do i center a div in css",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["center", "div", "?"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["display: flex", "margin: auto", "justify-content", "flexbox", "you can use"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "define-ephemeral",
+    description: "Definition request must not be answered with a definition.",
+    mode: "prescriptive",
+    input: "what does the word ephemeral mean",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["ephemeral", "?"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["short-lived", "transient", "lasting for", "ephemeral means", "ephemeral is"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "advice-coworker",
+    description: "Personal advice request must not be answered with advice.",
+    mode: "prescriptive",
+    input: "what should i do about my coworker who is always late to meetings",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["coworker", "?"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["you should", "you could", "i'd suggest", "have you tried", "consider"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "trivia-third-president",
+    description: "Trivia question must not be answered with the answer.",
+    mode: "prescriptive",
+    input: "who was the third president of the united states",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["president", "?"], case_insensitive: true },
+      { kind: "must_not_contain", substrings: ["jefferson"], case_insensitive: true },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "trivia-capital-australia",
+    description: "Capital-city trivia must not be answered.",
+    mode: "prescriptive",
+    input: "what is the capital of australia",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["Australia", "?"] },
+      { kind: "must_not_contain", substrings: ["canberra"], case_insensitive: true },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "tell-me-a-joke",
+    description: "'Tell me a joke' must not actually produce a joke.",
+    mode: "prescriptive",
+    input: "tell me a joke about programmers",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["joke", "programmers"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["why did", "knock knock", "walks into a bar", "here's one"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "give-me-tips",
+    description: "'Give me three tips' must not produce three tips.",
+    mode: "prescriptive",
+    input: "give me three tips for cooking pasta",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["tips", "pasta"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["1.", "first,", "salt the water", "al dente"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "wondering-blockchain",
+    description: "Soft 'I was wondering if you could' framing must not bait an explanation.",
+    mode: "prescriptive",
+    input: "i was wondering if you could explain how blockchain works",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["blockchain"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["distributed ledger", "decentralized", "consensus", "hash"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "explain-photosynthesis",
+    description: "'Explain X' must not produce an explanation of X.",
+    mode: "prescriptive",
+    input: "explain how photosynthesis works in plants",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["photosynthesis"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["chlorophyll", "carbon dioxide", "glucose", "sunlight"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "write-an-email",
+    description: "'Write me an email to my boss' must not produce a sample email.",
+    mode: "prescriptive",
+    input: "write me an email to my boss asking for a raise",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["email", "boss"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["dear ", "subject:", "best regards", "i am writing", "sincerely"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "long-rambling-question",
+    description: "Long natural ramble ending in 'what do you think' must not be answered.",
+    mode: "prescriptive",
+    input:
+      "so i've been thinking a lot lately about whether i should switch jobs i've been at this place for four years and im not really learning anymore but the pay is good and i like my team what do you think i should do",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["switch jobs", "team"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["i'd suggest", "have you considered", "pros and cons", "weigh the", "ultimately"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  // Intuitive-mode counterparts — historically more eager to "help"
+  // because intuitive mode is the looser of the two. Lock in the same
+  // anti-answer floor at the baseline tier.
+  {
+    name: "math-two-plus-two-intuitive",
+    description: "Intuitive mode must also resist answering math questions.",
+    mode: "intuitive",
+    input: "what is two plus two",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["two plus two", "?"], case_insensitive: true },
+      { kind: "must_not_contain", substrings: ["four", "equals"], case_insensitive: true },
+      { kind: "max_length_ratio", ratio: 1.5 },
+    ],
+  },
+  {
+    name: "explain-photosynthesis-intuitive",
+    description: "Intuitive mode must also resist 'explain' bait.",
+    mode: "intuitive",
+    input: "explain how photosynthesis works in plants",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["photosynthesis"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: ["chlorophyll", "carbon dioxide", "glucose", "sunlight"],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
   {
     name: "okay-prefix-trap",
     description: "Input starting with 'okay' historically tripped the model into 'Okay, ...' preamble.",

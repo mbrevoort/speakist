@@ -175,7 +175,7 @@ const POLISH_CLOSE = "<<<<<";
 /**
  * Reject the polish output and fall back to raw text when the model has
  * clearly produced something other than a formatted version of the input.
- * Two complementary signals:
+ * Three complementary signals:
  *   1. Output length > 2x input length. Polish + self-correction can
  *      shrink the output (corrections drop content) but it physically
  *      should never make it dramatically longer. 2x is a generous
@@ -184,6 +184,12 @@ const POLISH_CLOSE = "<<<<<";
  *   2. Output starts with an assistant-preamble phrase that the prompt
  *      explicitly forbids. Caught even with temperature=0 occasionally,
  *      and is always a bug when seen.
+ *   3. Output contains substantive content words not present in the input —
+ *      a structural signal that the model "answered" the dictation rather
+ *      than formatting it. Prompt-independent backstop so that even if a
+ *      future polish_prompt_versions row drifts away from the anti-answer
+ *      framing, the user still receives their raw transcript instead of
+ *      a hallucinated answer.
  *
  * Returns null when output looks valid; an error reason string when it
  * should be rejected.
@@ -230,7 +236,114 @@ function rejectionReason(input: string, output: string): string | null {
       return `assistant_preamble: starts with "${prefix}"`;
     }
   }
+
+  const novelReason = novelContentReason(input, output);
+  if (novelReason) return novelReason;
+
   return null;
+}
+
+/**
+ * Detect when the polish output has introduced substantive content not
+ * present in the input — the structural signature of the model answering
+ * the dictation instead of just formatting it.
+ *
+ * The check normalizes case + drops apostrophes (so "I'm" and "im"
+ * tokenize identically), tokenizes on word characters, and counts content
+ * words present in the output but not in the input. "Content words"
+ * excludes:
+ *   * stopwords / connectives (and, or, but, so, the, is, …)
+ *   * pure-digit tokens (handles list markers "1." "2." and time
+ *     formats like 3:30 / 2pm)
+ *   * short tokens under 3 characters (mostly grammar particles)
+ *
+ * Rejection threshold pair:
+ *   * `novel >= 2` AND novel/output > 15% — catches the answer-with-
+ *     explanation cases ("What is the capital of Australia? Canberra,
+ *     the capital of Australia.").
+ *   * `novel >= 1` AND output content-word count <= 6 — catches the
+ *     single-word answer slip ("What is two plus two? Four.") where
+ *     the lone novel token is the entire payload of the bug.
+ *
+ * Both thresholds tolerate the legitimate additions intuitive mode
+ * makes (conjunction fusion, numbered-list markers, paragraph breaks):
+ * connectives are stopword-filtered and list markers are digit-filtered,
+ * so neither contributes to the novel count.
+ *
+ * Known false-positive: short homophone corrections like "i went their"
+ * → "I went there." trigger the short-output rule. Both modes' prompts
+ * forbid homophone fixes, so this should not happen in practice; when
+ * it does, polish falls back to the raw transcript and the user gets
+ * "i went their" — annoying but not destructive.
+ *
+ * Returns an error reason when the output should be rejected; null
+ * otherwise.
+ */
+function novelContentReason(input: string, output: string): string | null {
+  const inWords = contentWords(input);
+  const outWords = contentWords(output);
+  if (outWords.length === 0) return null;
+  const inSet = new Set(inWords);
+  const novel: string[] = [];
+  for (const w of outWords) {
+    if (inSet.has(w)) continue;
+    novel.push(w);
+  }
+  if (novel.length === 0) return null;
+  const ratio = novel.length / outWords.length;
+  // Single-novel-token rule for short outputs — catches "Four." after
+  // "What is two plus two?" where the lone novel word is the bug.
+  if (novel.length >= 1 && outWords.length <= 6) {
+    const sample = novel.slice(0, 3).join(", ");
+    return `novel_content_short: ${novel.length}/${outWords.length} novel in short output — e.g. [${sample}]`;
+  }
+  if (novel.length >= 2 && ratio > 0.15) {
+    const sample = novel.slice(0, 3).join(", ");
+    return `novel_content: ${novel.length}/${outWords.length} (${Math.round(ratio * 100)}%) — e.g. [${sample}]`;
+  }
+  return null;
+}
+
+const POLISH_STOPWORDS = new Set<string>([
+  "a", "an", "the", "this", "that", "these", "those",
+  "is", "am", "are", "was", "were", "be", "been", "being",
+  "do", "does", "did", "done", "doing",
+  "have", "has", "had", "having",
+  "will", "would", "shall", "should", "can", "could", "may", "might", "must",
+  "and", "or", "but", "so", "if", "yet", "for", "because", "since", "while", "then", "also", "as",
+  "of", "to", "in", "on", "at", "by", "with", "from", "into", "onto", "out", "off", "up", "down", "over", "under", "about", "across", "through",
+  "i", "im", "me", "my", "mine", "myself",
+  "you", "your", "yours", "yourself",
+  "we", "us", "our", "ours",
+  "they", "them", "their", "theirs",
+  "he", "him", "his", "she", "her", "hers", "it", "its",
+  // Intentionally NOT in stopwords: yes, no, yeah, sure — these are
+  // exactly the tokens the model adds when answering a yes/no question
+  // ("Is the sky blue? Yes.") and must count as novel content if they
+  // appear in the output but not the input.
+  "not",
+  "um", "uh", "oh", "ah", "ya", "ok",
+  "ill", "youll", "well", "theyll", "hell", "shell", "itll",
+  "ive", "youve", "weve", "theyve",
+  "id", "youd", "wed", "theyd",
+  "dont", "doesnt", "didnt", "wont", "wouldnt", "shouldnt", "cant", "couldnt", "isnt", "arent", "wasnt", "werent", "havent", "hasnt", "hadnt",
+]);
+
+function contentWords(s: string): string[] {
+  // Drop apostrophes so "I'm" and "im" tokenize identically; same for
+  // "you'll" / "youll", "don't" / "dont", etc. POLISH_STOPWORDS lists
+  // both forms collapsed to no-apostrophe.
+  const lower = s.toLowerCase().replace(/[''`]/g, "'").replace(/'/g, "");
+  // Tokenize on word characters; \w covers letters + digits + underscore.
+  const tokens = lower.match(/[a-z0-9]+/g) ?? [];
+  const out: string[] = [];
+  for (const t of tokens) {
+    if (t.length < 3) continue;
+    if (POLISH_STOPWORDS.has(t)) continue;
+    if (/^\d+$/.test(t)) continue;
+    out.push(t);
+  }
+  return out;
 }
 
 export interface PolishResult {
@@ -484,6 +597,10 @@ export async function polishWithApiKey(
     latencyMs: Date.now() - startedAt,
   };
 }
+
+/** Re-exported for unit tests of the structural anti-answer backstop.
+ *  Not part of the runtime API; do not import outside `__tests__/`. */
+export const __testing = { rejectionReason, novelContentReason, contentWords };
 
 /** Remove the prefill / stop sentinels if the model echoed them back. */
 function stripPolishSentinels(s: string): string {
