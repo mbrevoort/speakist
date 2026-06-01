@@ -39,16 +39,7 @@ export function Footer() {
               </a>
               .
             </p>
-            <a
-              href="https://github.com/mbrevoort/speakist"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 hover:text-foreground"
-            >
-              <Github className="size-4" />
-              Open source on GitHub
-            </a>
-            <div className="mt-4 flex items-center gap-3">
+            <div className="mt-4 flex items-center gap-4">
               <a
                 href="https://x.com/speakistai"
                 target="_blank"
@@ -66,6 +57,15 @@ export function Footer() {
                 className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 <Linkedin className="size-4" />
+              </a>
+              <a
+                href="https://github.com/mbrevoort/speakist"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground/80 hover:text-foreground"
+              >
+                <Github className="size-4" />
+                Open source on GitHub
               </a>
             </div>
           </div>
