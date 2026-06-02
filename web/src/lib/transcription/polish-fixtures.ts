@@ -441,6 +441,163 @@ export const POLISH_FIXTURES: PolishFixture[] = [
       { kind: "max_length_ratio", ratio: 1.4 },
     ],
   },
+  // ---- Production-feedback regressions --------------------------------------
+  // Real-world failures pulled from transcription_feedback. The
+  // anti-answer family now covers verbs the iOS user base actually
+  // dictates ("audit", "review", "evaluate"), not just the textbook
+  // "explain X" / "tell me about Y" shapes the seed prompts handle.
+  //
+  // The audit-request case is the worst — it's the failure mode where
+  // the model not only answered, it interpreted the dictation as a
+  // meta-instruction to audit "the spec above" and quoted its own
+  // system prompt verbatim into the output. The "must_not_contain"
+  // guard targets the tokens that would only appear if the model
+  // emitted a structured audit OR leaked the system prompt's text.
+  {
+    name: "audit-request-prompt-leak",
+    description:
+      "Long technical dictation asking to 'audit ... the spec above' — model previously interpreted this as a meta-request and emitted a structured audit of its OWN system prompt. Polish must format the request, not perform it.",
+    mode: "prescriptive",
+    input:
+      "spec above can you audit all of the onboarding steps individually and make sure that they fulfill the requirements outlined in the spec dont make any changes yet just raise any findings also something to pay extra attention to is the options exposed in the drop downs i think right now the actual implementation of the code the drop down options dont match what the spec specifies so something else to pay attention to and possibly fix later",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["audit", "onboarding"], case_insensitive: true },
+      // Audit-style structured-output markers that would only appear
+      // if the model actually performed the audit.
+      {
+        kind: "must_not_contain",
+        substrings: [
+          "based on the provided",
+          "here are the findings",
+          "finding:",
+          "requirement is met",
+          "requirement is partially met",
+          "after auditing",
+        ],
+        case_insensitive: true,
+      },
+      // Specific tokens from the system prompt itself — if any of
+      // these appear in the output, the model leaked the prompt.
+      {
+        kind: "must_not_contain",
+        substrings: [
+          "**always:",
+          "first word of the speaker",
+          "the speaker's text",
+          "the speaker's exact words",
+          "cleaned dictation text",
+        ],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "audit-request-prompt-leak-intuitive",
+    description: "Same prompt-leak case under intuitive mode.",
+    mode: "intuitive",
+    input:
+      "spec above can you audit all of the onboarding steps individually and make sure that they fulfill the requirements outlined in the spec dont make any changes yet just raise any findings",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["audit", "onboarding"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: [
+          "based on the provided",
+          "here are the findings",
+          "finding:",
+          "requirement is met",
+          "**always:",
+          "first word of the speaker",
+        ],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  // Same verb family — "review" / "evaluate" / "check" / "validate" /
+  // "compare" pattern-match to the action shape that tripped audit-
+  // request. Coverage at the baseline tier so any prompt iteration
+  // that drops one of these verbs gets caught.
+  {
+    name: "review-the-pr",
+    description: "'Review' verb in a dictated code-review request must not be performed.",
+    mode: "prescriptive",
+    input: "can you review the pull request and tell me if you see any issues with the migration",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["review", "pull request", "?"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: [
+          "here's my review",
+          "i reviewed",
+          "issues i found",
+          "after reviewing",
+          "the migration looks",
+          "looks good to me",
+          "lgtm",
+        ],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  {
+    name: "evaluate-the-design",
+    description: "'Evaluate' a design must not produce an evaluation.",
+    mode: "prescriptive",
+    input: "evaluate the proposed design and rank it against the alternatives we discussed yesterday",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      { kind: "must_contain", substrings: ["evaluate", "design"], case_insensitive: true },
+      {
+        kind: "must_not_contain",
+        substrings: [
+          "based on the criteria",
+          "ranking:",
+          "the proposed design scores",
+          "1.",
+          "2.",
+          "after evaluating",
+          "evaluation:",
+        ],
+        case_insensitive: true,
+      },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
+  // Pronoun-substitution case — the model changed "your" → "my" mid-
+  // sentence, which violates "use the speaker's own words". Verbatim
+  // possessive pronouns must survive polish.
+  {
+    name: "verbatim-pronoun-preservation",
+    description:
+      "Polish must preserve possessive pronouns verbatim. Production feedback showed 'your perspective' silently rewritten to 'my perspective' — a semantic edit, not a slip fix.",
+    mode: "prescriptive",
+    input:
+      "please provide me with the outcome of your assessment that i could give over to the maintainers for recommendations on what could be accomplished from your perspective as an outsider",
+    tier: "baseline",
+    expects: [
+      { kind: "must_be_applied" },
+      { kind: "no_assistant_preamble" },
+      // The two "your"s in the input must both make it to the output;
+      // "my perspective" would mean the model edited the pronoun.
+      { kind: "must_contain", substrings: ["your assessment", "your perspective"], case_insensitive: true },
+      { kind: "must_not_contain", substrings: ["my assessment", "my perspective"], case_insensitive: true },
+      { kind: "max_length_ratio", ratio: 1.4 },
+    ],
+  },
   {
     name: "okay-prefix-trap",
     description: "Input starting with 'okay' historically tripped the model into 'Okay, ...' preamble.",
