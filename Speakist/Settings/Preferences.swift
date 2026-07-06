@@ -28,6 +28,7 @@ final class Preferences: ObservableObject {
         static let maskProfanity = "maskProfanity"
         static let autoDetectLanguage = "autoDetectLanguage"
         static let playSounds = "playSounds"
+        static let pauseMediaWhileDictating = "pauseMediaWhileDictating"
         static let showHUD = "showHUD"
         static let keepAudio = "keepAudio"
         static let keepAudioCount = "keepAudioCount"
@@ -112,6 +113,7 @@ final class Preferences: ObservableObject {
             K.maskProfanity: false,
             K.autoDetectLanguage: false,
             K.playSounds: true,
+            K.pauseMediaWhileDictating: true,
             K.showHUD: true,
             K.keepAudio: true,
             K.keepAudioCount: 20,
@@ -206,6 +208,12 @@ final class Preferences: ObservableObject {
     var playSounds: Bool {
         get { defaults.bool(forKey: K.playSounds) }
         set { defaults.set(newValue, forKey: K.playSounds); objectWillChange.send() }
+    }
+
+    /// Pause Spotify while recording, resume on release (only if we paused it).
+    var pauseMediaWhileDictating: Bool {
+        get { defaults.bool(forKey: K.pauseMediaWhileDictating) }
+        set { defaults.set(newValue, forKey: K.pauseMediaWhileDictating); objectWillChange.send() }
     }
     var showHUD: Bool {
         get { defaults.bool(forKey: K.showHUD) }

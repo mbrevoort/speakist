@@ -27,7 +27,7 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor.</string>
+	<string>Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor, and pauses/resumes Spotify while you dictate.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Mike Brevoort. All rights reserved.</string>
 	<key>NSMicrophoneUsageDescription</key>

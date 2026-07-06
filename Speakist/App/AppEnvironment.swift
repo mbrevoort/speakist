@@ -17,6 +17,7 @@ final class AppEnvironment: ObservableObject {
     let focusedFieldProbe: FocusedFieldProbe
     let transcriptionService: TranscriptionService
     let hudController: HUDController
+    let mediaPauser: MediaPauser
     let notifier: Notifier
     let updater: UpdaterController
     let accountManager: SpeakistAccountManager
@@ -40,6 +41,7 @@ final class AppEnvironment: ObservableObject {
         self.cursorInserter = CursorInserter()
         self.focusedFieldProbe = FocusedFieldProbe()
         self.hudController = HUDController(preferences: prefs)
+        self.mediaPauser = MediaPauser()
         self.notifier = Notifier()
         self.updater = UpdaterController()
 
