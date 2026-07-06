@@ -285,6 +285,9 @@ final class ShortcutManager {
         // until the engine is live.
         env.hudController.showPreparing()
 
+        // Off-main and fire-and-forget — never delays engine start.
+        env.mediaPauser.pauseIfPlaying(enabled: env.preferences.pauseMediaWhileDictating)
+
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -292,6 +295,7 @@ final class ShortcutManager {
                 try await self.env.audioRecorder.start()
             } catch {
                 Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
+                self.env.mediaPauser.resumeIfPaused()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -321,6 +325,9 @@ final class ShortcutManager {
 
     private func finishRecording() {
         cancelMaxDurationTimer()
+        // Resume as soon as the mic stops — transcription continues while
+        // the music comes back. Covers every exit path below.
+        defer { env.mediaPauser.resumeIfPaused() }
         guard let result = env.audioRecorder.stop() else {
             env.hudController.hide()
             return

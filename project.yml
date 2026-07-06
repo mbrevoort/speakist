@@ -96,7 +96,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: "© 2026 Mike Brevoort. All rights reserved."
         NSMicrophoneUsageDescription: "Speakist listens when you hold your dictation shortcut and transcribes what you say."
-        NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor."
+        NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor, and pauses/resumes Spotify while you dictate."
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
         # Per-channel URLs. SpeakistDefaultAPIBaseURL and SUFeedURL read
@@ -131,6 +131,10 @@ targets:
         # returns false without showing the TCC prompt — users never see
         # "<AppName> wants to use the microphone" and can't grant access.
         com.apple.security.device.audio-input: true
+        # Lets MediaPauser send pause/play Apple Events to Spotify under
+        # hardened runtime; without it the send fails with
+        # errAEEventNotPermitted before the Automation prompt can appear.
+        com.apple.security.automation.apple-events: true
     settings:
       base:
         # PRODUCT_NAME drives the .app bundle filename on disk and the

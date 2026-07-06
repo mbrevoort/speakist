@@ -223,6 +223,12 @@ struct GeneralSettingsView: View {
                 Toggle("Show overlay UI while recording", isOn: Binding(
                     get: { prefs.showHUD },
                     set: { prefs.showHUD = $0 }))
+                Toggle("Pause music while dictating", isOn: Binding(
+                    get: { prefs.pauseMediaWhileDictating },
+                    set: { prefs.pauseMediaWhileDictating = $0 }))
+                Text("Pauses Spotify when you start dictating and resumes it when you finish. macOS asks once for permission to control Spotify.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
