@@ -36,7 +36,7 @@ covers the product surface.
 | Auth | Auth.js v5 (NextAuth) + magic-link + Drizzle adapter |
 | Email | Resend (dev falls back to console) |
 | Payments | Stripe (Checkout + Customer Portal + webhooks) |
-| Upstream STT | Groq Whisper (default) and DeepGram, switchable per-org by super admin |
+| Upstream STT | DeepGram Nova-3 (default) and Groq Whisper, switchable per-org by super admin |
 | Polish LLM | Groq `llama-3.1-8b-instant` |
 | Polish prompt store | `polish_prompt_versions` (D1) — versioned, rollback-able, edited via `/admin/polish-prompts` or proposed via the MCP `propose_polish_prompt` tool. Seed bodies in [`web/src/lib/transcription/default-polish-prompts.ts`](../web/src/lib/transcription/default-polish-prompts.ts). |
 
@@ -310,15 +310,16 @@ must never block the user from getting their transcript.
 `organizations.allowed_models_json` is a per-org whitelist of
 `provider/model` slugs. Behaviour in `lib/transcription/orgAccess.ts`:
 
-- NULL or empty → use the language-based default (`groq/whisper-
-  large-v3-turbo` for English, `groq/whisper-large-v3` otherwise).
-- Non-empty and the language default is in the list → use the
-  language default.
-- Non-empty and the language default is NOT in the list → use the
-  first allowed entry.
+- NULL or empty → use the global default (`deepgram/nova-3` for every
+  language; nova-3's multilingual model handles English and non-English
+  alike).
+- Non-empty and the default is in the list → use the default.
+- Non-empty and the default is NOT in the list → use the first allowed
+  entry.
 
-Pinning an org to e.g. `["deepgram/nova-3"]` is how a super admin
-gives one org a different STT engine without changing global defaults.
+Pinning an org to e.g. `["groq/whisper-large-v3-turbo"]` is how a super
+admin gives one org a different (e.g. cheaper) STT engine without
+changing global defaults.
 
 API key resolution (`lib/transcription/secrets.ts`) is in this order:
 

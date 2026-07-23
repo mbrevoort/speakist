@@ -28,6 +28,9 @@ web/.pnpm-store/
 web/.wrangler/
 web/.dev.vars
 web/.open-next/
+/.env
+/.env.local
+/.env.*.local
 web/.env
 web/.env.local
 web/.env.*.local

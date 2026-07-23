@@ -45,6 +45,7 @@ final class Preferences: ObservableObject {
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
         static let apiBaseURL = "apiBaseURL"
         static let useTranscribeProxy = "useTranscribeProxy"
+        static let useStreamingTranscription = "useStreamingTranscription"
         static let polishEnabled = "polishEnabled"
         static let polishMode = "polishMode"
         static let polishSystemPrompt = "polishSystemPrompt"
@@ -148,6 +149,14 @@ final class Preferences: ObservableObject {
             // If we see breakage in the dev channel, flipping this off
             // restores the known-good flow without waiting for a release.
             K.useTranscribeProxy: true,
+            // Real-time streaming transcription (Mac → Worker WebSocket →
+            // Deepgram live). Default OFF while it bakes; flip on to have
+            // audio stream as the user speaks instead of uploading the
+            // whole WAV on key-release. Only consulted when
+            // useTranscribeProxy is also true; on any streaming failure the
+            // Mac falls back to the batch upload automatically.
+            //   defaults write <bundleID> useStreamingTranscription 1
+            K.useStreamingTranscription: false,
             // Polish prefs are authoritative on the backend (source of
             // truth = /api/me/polish). These local values are a cache so
             // Settings can render instantly on launch without blocking on
@@ -281,6 +290,17 @@ final class Preferences: ObservableObject {
     var useTranscribeProxy: Bool {
         get { defaults.bool(forKey: K.useTranscribeProxy) }
         set { defaults.set(newValue, forKey: K.useTranscribeProxy); objectWillChange.send() }
+    }
+
+    /// Real-time streaming transcription flag — see
+    /// `K.useStreamingTranscription`. True = audio streams to the Worker
+    /// over a WebSocket as the user speaks (lower release-to-paste
+    /// latency); false = the whole WAV is uploaded on key-release. Only
+    /// meaningful when `useTranscribeProxy` is also on. User-overridable
+    /// via `defaults write <bundleID> useStreamingTranscription 1`.
+    var useStreamingTranscription: Bool {
+        get { defaults.bool(forKey: K.useStreamingTranscription) }
+        set { defaults.set(newValue, forKey: K.useStreamingTranscription); objectWillChange.send() }
     }
 
     // MARK: - Polish prefs (cached from /api/me)

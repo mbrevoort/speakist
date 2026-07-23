@@ -9,11 +9,10 @@
 //   5. Worker returns { text, audioSeconds, usageEventId, newBalanceMillicents }
 //
 // Routing rules (no client knobs):
-//   * English (X-Language ~ /^en/) → Groq Whisper Turbo
-//   * anything else → Groq Whisper Large (multilingual)
+//   * default (every language) → Deepgram nova-3
 //   * org's `allowed_models_json` whitelist overrides: if it's set and
-//     the language default isn't in it, the first allowed entry wins.
-//     Super admins use this to pin specific orgs to Deepgram.
+//     the default isn't in it, the first allowed entry wins. Super admins
+//     use this to pin specific orgs to e.g. Groq Whisper for cost.
 //
 // Request:
 //   POST /api/transcribe
@@ -52,16 +51,12 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { AuthzError, requireUserFromRequest } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
-import { debitForAudioTranscription } from "@/lib/credits";
-import { eq } from "drizzle-orm";
-import { getDb } from "@/lib/db";
-import { users } from "@/lib/db/schema";
 import { dispatch, TranscriptionDispatchError } from "@/lib/transcription";
 import { logTranscriptionEvent } from "@/lib/transcription/analytics";
-import { runPolish, POLISH_MODEL } from "@/lib/transcription/polish";
 import { resolveProviderForOrg } from "@/lib/transcription/orgAccess";
+import { finalizeTranscription, readPolishPrefs } from "@/lib/transcription/finalize";
 import { type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
-import { captureAIGeneration, captureServerEvent } from "@/lib/posthog/server";
+import { captureServerEvent } from "@/lib/posthog/server";
 
 /** Workers' default request-body cap is generous; we enforce a sensible
  *  one to keep audio from blowing past reasonable batch-transcription
@@ -85,11 +80,11 @@ export async function POST(req: Request): Promise<Response> {
 
   // Defaults for the analytics log so we always emit one event per request.
   // Routing is decided server-side now (was: client X-Provider-Hint
-  // headers), so we initialize to the most common default — English →
-  // Groq Whisper Turbo. Reassigned post-resolution before any real work.
+  // headers), so we initialize to the global default — Deepgram nova-3.
+  // Reassigned post-resolution before any real work.
   let orgId = "unknown";
-  let providerId: ProviderId = "groq";
-  let model = "whisper-large-v3-turbo";
+  let providerId: ProviderId = "deepgram";
+  let model = "nova-3";
   let audioMs = 0;
   let upstreamMc = 0;
   let retailMc = 0;
@@ -168,14 +163,12 @@ export async function POST(req: Request): Promise<Response> {
   // Server picks the (provider, model) — the Mac/iOS clients only send
   // the user's chosen language. Routing rules:
   //
-  //   1. Default by language: English → Groq Whisper Turbo (fastest);
-  //      anything else → Groq Whisper Large (multilingual). Auto-detect
-  //      counts as "anything else" since the actual language is unknown.
+  //   1. Global default: Deepgram nova-3 for every language (its
+  //      multilingual model; the adapter forwards language/detect params).
   //   2. Org's `allowed_models_json` whitelist (super admin → Org page)
   //      acts as both a guard and an override knob: if non-empty and the
-  //      language default isn't in it, we use the first allowed entry
-  //      instead. This is how a super admin pins a specific org to e.g.
-  //      DeepGram nova-3 even though the language-based default is Groq.
+  //      default isn't in it, we use the first allowed entry instead. This
+  //      is how a super admin pins a specific org to e.g. Groq Whisper.
   //
   // X-Provider-Hint / X-Model-Hint headers from older client builds are
   // intentionally ignored — clients no longer choose, the server does.
@@ -244,24 +237,7 @@ export async function POST(req: Request): Promise<Response> {
   // would otherwise be the dominant pre-polish step. We tolerate a
   // failed prefs read (skips polish) so transcription itself never
   // breaks because of the prefs query.
-  type PolishPrefs = { polishEnabled: boolean; polishMode: string | null };
-  const polishPrefsPromise: Promise<PolishPrefs | null> = (async () => {
-    try {
-      const db = getDb();
-      const [row] = await db
-        .select({
-          polishEnabled: users.polishEnabled,
-          polishMode: users.polishMode,
-        })
-        .from(users)
-        .where(eq(users.id, user.id))
-        .limit(1);
-      return (row as PolishPrefs | undefined) ?? null;
-    } catch (err) {
-      console.warn("[transcribe] polish prefs read failed:", err);
-      return null;
-    }
-  })();
+  const polishPrefsPromise = readPolishPrefs(user.id);
 
   let output;
   try {
@@ -289,167 +265,81 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   upstreamStatus = output.upstreamStatus;
-  audioMs = Math.round(output.audioSeconds * 1000);
-  // If the provider didn't report a duration (audioSeconds = 0), fall back
-  // to the Mac-provided hint so we still debit something proportional.
-  const audioSecondsForBilling =
-    output.audioSeconds > 0
-      ? output.audioSeconds
-      : input.audioMsHint
-      ? input.audioMsHint / 1000
-      : 0;
 
-  // ---- optional polish pass -----------------------------------------------
-  // Load the user's polish prefs (kicked off in parallel above so this
-  // await is mostly already-resolved). Polish runs synchronously so the
-  // returned `text` is already polished — UNLESS the client opts in to
-  // "fast mode" by sending `X-Polish-Skip: true`, in which case we
-  // return the raw transcript immediately and skip polish entirely.
-  // Cost is absorbed (not billed) in Phase 1 since per-transcription
-  // polish is ~$0.0001 vs ~$0.01 transcription.
-  let finalText = output.text;
-  let polishApplied = false;
-  let polishErrorReason: string | undefined;
-  const polishSkipRequested = boolHeader(req.headers.get("X-Polish-Skip"));
-  try {
-    const userPrefs = await polishPrefsPromise;
-    if (userPrefs?.polishEnabled && output.text.trim().length > 0 && !polishSkipRequested) {
-      const polish = await runPolish(
-        env as unknown as Parameters<typeof runPolish>[0],
-        org.id,
-        output.text,
-        (userPrefs.polishMode as "intuitive" | "prescriptive") ?? "prescriptive"
-      );
-      // Metadata-only log (no content) so operators can confirm in
-      // `pnpm dev` / tail logs that the right prompt variant ran +
-      // whether the model output changed length unexpectedly.
-      console.info(
-        `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
-          `mode=${userPrefs.polishMode} ` +
-          `inChars=${output.text.length} outChars=${polish.text.length} ` +
-          `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
-          `latencyMs=${polish.latencyMs}` +
-          (polish.errorReason ? ` reason=${polish.errorReason}` : "")
-      );
-      if (polish.applied) {
-        finalText = polish.text;
-        polishApplied = true;
-      } else {
-        polishErrorReason = polish.errorReason;
-      }
-      // PostHog LLM Analytics — surfaces in the LLM dashboard with
-      // model/provider/token/latency/cost rollups. Trace ID = the
-      // X-Transcription-Id so downstream correlation against the
-      // transcription_completed event is one filter away.
-      captureAIGeneration({
-        distinctId: user.id,
-        traceId: transcriptionClientId,
-        provider: "groq",
-        model: POLISH_MODEL,
-        inputTokens: polish.promptTokens,
-        outputTokens: polish.completionTokens,
-        latencySeconds: polish.latencyMs / 1000,
-        httpStatus: polish.applied ? 200 : 0,
-        isError: !polish.applied,
-        groups: { organization: org.id },
-        extra: {
-          polish_mode: userPrefs.polishMode,
-          polish_applied: polish.applied,
-          polish_error_reason: polish.errorReason,
-          input_chars: output.text.length,
-          output_chars: polish.text.length,
-        },
-      });
-    } else if (polishSkipRequested && userPrefs?.polishEnabled) {
-      polishErrorReason = "skipped_by_client";
-    }
-  } catch (err) {
-    // Polish errors never block transcription — fall through with raw text.
-    console.warn("[transcribe] polish threw:", err);
-    polishErrorReason = `threw: ${err instanceof Error ? err.message : String(err)}`;
-  }
-  mark("polish");
-
-  // ---- debit --------------------------------------------------------------
-  // processingMs = wall-clock from request start to this point. Captures
-  // upstream STT fetch + optional polish call + validation. Storing it
-  // gives the dashboard a real latency signal independent of audio length.
-  const processingMs = Date.now() - startedAt;
-  const debit = await debitForAudioTranscription({
+  // ---- polish + debit + cost (shared with the streaming path) -------------
+  // finalizeTranscription runs the optional polish pass, debits credits on
+  // the idempotent (org, transcription id) key, and computes cost. Polish
+  // is skipped when the client sends `X-Polish-Skip: true` (fast mode).
+  const polishSkipRequested = boolHeader(req.headers.get("X-Polish-Skip")) ?? false;
+  const result = await finalizeTranscription({
+    env: env as unknown as Parameters<typeof finalizeTranscription>[0]["env"],
     orgId: org.id,
     userId: user.id,
     transcriptionClientId,
     providerId,
     model,
-    audioSeconds: audioSecondsForBilling,
-    // Billed on the final (post-polish) word count so users see what they
-    // actually got, not a pre-edit estimate. Note: billing math is driven
-    // by audio duration × per-minute rate inside debitForAudioTranscription;
-    // wordCount is stored on the row purely for the dashboard display.
-    wordCount: wordCount(finalText),
-    polishApplied,
-    processingMs,
+    rawText: output.text,
+    audioSeconds: output.audioSeconds,
+    audioMsHint: input.audioMsHint,
+    polishPrefs: await polishPrefsPromise,
+    polishSkip: polishSkipRequested,
+    startedAt,
   });
-  mark("debit");
 
-  if (debit.kind === "duplicate") {
+  // Surface analytics fields captured inside finalize (0 on duplicate).
+  audioMs = result.audioMs;
+  upstreamMc = result.upstreamMc;
+  retailMc = result.retailMc;
+  timings.polish = result.timings.polish;
+  timings.debit = result.timings.debit;
+
+  if (result.debitKind === "insufficient") {
+    // Should be rare given the pre-check above, but possible if balance
+    // raced. Treat as 402 — the transcript is effectively lost.
+    return finish(
+      "insufficient_credit",
+      json({ error: "insufficient_credit", balanceMillicents: result.balanceMillicents }, 402)
+    );
+  }
+
+  if (result.debitKind === "duplicate") {
     // Idempotent replay — return the transcript we already have from this
     // call (not from the stored row; we never persist transcript text).
     return finish("ok", json({
-      text: finalText,
-      audioSeconds: output.audioSeconds,
+      text: result.finalText,
+      audioSeconds: result.audioSeconds,
       provider: providerId,
       model,
-      polishApplied,
-      polishErrorReason,
-      usageEventId: debit.usageEventId,
+      polishApplied: result.polishApplied,
+      polishErrorReason: result.polishErrorReason,
+      usageEventId: result.usageEventId,
       duplicate: true,
       timings: { ...timings, total: Date.now() - startedAt },
     }));
   }
-  if (debit.kind === "insufficient") {
-    // Should be rare given the pre-check above, but possible if balance
-    // raced. Treat as 402 — the transcript is effectively lost because we
-    // already pasted headers back; Mac won't see the text.
-    return finish(
-      "insufficient_credit",
-      json({ error: "insufficient_credit", balanceMillicents: debit.balanceMillicents }, 402)
-    );
-  }
-
-  // Compute analytics cost post-debit (pricing lookup already happened
-  // inside debitForAudioTranscription; recompute here keeps that function
-  // pure about its return shape). Cheap cached read.
-  const { getProviderPricing, computeCost } = await import("@/lib/transcription/pricing");
-  const pricing = await getProviderPricing(providerId, model);
-  if (pricing) {
-    const costs = computeCost(pricing, audioSecondsForBilling);
-    upstreamMc = costs.upstreamMc;
-    retailMc = costs.retailMc;
-  }
 
   return finish("ok", json({
-    text: finalText,
+    text: result.finalText,
     // Pre-polish STT output. Always populated, even when polish is
     // disabled or skipped (in which case rawText === text). Clients
     // persist this on the history row so a later "Report bad
     // transcription" submission carries the actual upstream STT
     // string, not the polished version — that's what the evaluation
     // pipeline needs to distinguish STT-side vs polish-side bugs.
-    rawText: output.text,
-    audioSeconds: output.audioSeconds,
+    rawText: result.rawText,
+    audioSeconds: result.audioSeconds,
     provider: providerId,
     model,
-    polishApplied,
+    polishApplied: result.polishApplied,
     // Set when polish ran but the result wasn't used — surfaces the
     // failure mode to the client so the Mac log shows e.g.
     // `rejected: output_too_long` or `assistant_preamble: starts with
     // "here is"`. Helps debug why polishApplied=false when the user
     // expected it to be true.
-    polishErrorReason,
-    usageEventId: debit.usageEventId,
-    newBalanceMillicents: debit.newBalanceMillicents,
-    autoTopupTriggered: debit.autoTopupTriggered,
+    polishErrorReason: result.polishErrorReason,
+    usageEventId: result.usageEventId,
+    newBalanceMillicents: result.newBalanceMillicents,
+    autoTopupTriggered: result.autoTopupTriggered,
     // Per-stage cumulative ms relative to request start. `auth` is the
     // user/org lookup, `body` adds reading the audio bytes off the wire,
     // `upstream` adds the STT provider round-trip, `polish` adds the
@@ -479,12 +369,6 @@ function splitCsv(v: string | null): string[] | undefined {
 function splitReplace(v: string | null): string[] | undefined {
   if (!v) return undefined;
   return v.split(";").map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
-function wordCount(s: string): number {
-  const trimmed = s.trim();
-  if (trimmed.length === 0) return 0;
-  return trimmed.split(/\s+/).length;
 }
 
 /** Map a dispatch error kind to an HTTP status code. */
