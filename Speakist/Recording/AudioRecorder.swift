@@ -43,6 +43,18 @@ final class AudioRecorder: ObservableObject {
     /// HUD's bar count so the controller doesn't need to resample.
     static let bandCount = 7
 
+    /// Optional live-PCM sink for streaming transcription. When set, every
+    /// tap emits its converted 16 kHz mono samples as little-endian Int16
+    /// (linear16) `Data` — the exact frame format Deepgram's live socket
+    /// expects. `nil` (the default) means no streaming; the WAV file is
+    /// still written either way so the batch path remains a fallback.
+    ///
+    /// Threading follows the same discipline as `converter`/`outputFile`:
+    /// set it on the main thread *before* `start()` installs the tap, and
+    /// clear it *after* `stop()` removes the tap. The tap reads it on Core
+    /// Audio's thread; with that ordering there's no concurrent access.
+    var onPCMChunk: ((Data) -> Void)?
+
     private let preferences: Preferences
     private let deviceMonitor: DeviceMonitor
 
@@ -447,6 +459,22 @@ final class AudioRecorder: ObservableObject {
             try outputFile.write(from: outBuffer)
         } catch {
             Logger.shared.warn("Audio write failed: \(error.localizedDescription)")
+        }
+
+        // Live-stream the same converted samples as linear16 PCM when a
+        // streaming session is attached. Cheap per-tap (~341 frames); the
+        // WAV write above still happens so batch fallback stays available.
+        if let sink = onPCMChunk, let samples = outBuffer.floatChannelData?[0] {
+            let n = Int(outBuffer.frameLength)
+            var pcm = Data(count: n * 2)
+            pcm.withUnsafeMutableBytes { raw in
+                let out = raw.bindMemory(to: Int16.self)
+                for i in 0..<n {
+                    let clamped = max(-1.0, min(1.0, samples[i]))
+                    out[i] = Int16(clamped * 32767.0).littleEndian
+                }
+            }
+            sink(pcm)
         }
 
         let rms = Self.rms(of: outBuffer)

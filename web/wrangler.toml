@@ -20,7 +20,10 @@
 name = "speakist-web"
 compatibility_date = "2026-04-19"
 compatibility_flags = ["nodejs_compat"]
-main = ".open-next/worker.js"
+# Custom entrypoint that wraps the OpenNext-generated `.open-next/worker.js`
+# so the real-time streaming route (`/api/transcribe/ws`) can do a WebSocket
+# upgrade that Next.js route handlers can't. See web/worker.ts.
+main = "worker.ts"
 
 # Keep the .workers.dev URL enabled on dev as a fallback when the custom
 # domain is misconfigured or down. Prod overrides to false so nobody hits

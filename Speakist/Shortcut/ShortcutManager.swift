@@ -288,10 +288,19 @@ final class ShortcutManager {
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Open the real-time streaming session (no-op when the feature
+            // is off) and route the recorder's live PCM into it. Set the
+            // sink BEFORE start() installs the tap, per AudioRecorder's
+            // threading contract.
+            if let stream = self.env.transcriptionService.beginStreamingSession() {
+                self.env.audioRecorder.onPCMChunk = { [stream] data in stream.sendPCM(data) }
+            }
             do {
                 try await self.env.audioRecorder.start()
             } catch {
                 Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
+                self.env.audioRecorder.onPCMChunk = nil
+                self.env.transcriptionService.endStreamingSession()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -321,7 +330,13 @@ final class ShortcutManager {
 
     private func finishRecording() {
         cancelMaxDurationTimer()
-        guard let result = env.audioRecorder.stop() else {
+        // stop() removes the tap; clear the PCM sink afterward so no stray
+        // callback outlives the recording (matches AudioRecorder's ordering
+        // contract: set before start, clear after stop).
+        let recordingResult = env.audioRecorder.stop()
+        env.audioRecorder.onPCMChunk = nil
+        guard let result = recordingResult else {
+            env.transcriptionService.endStreamingSession()
             env.hudController.hide()
             return
         }
@@ -329,6 +344,7 @@ final class ShortcutManager {
         let minMs = env.preferences.minDurationMs
         let durationMs = Int(result.durationSeconds * 1000)
         if durationMs < minMs {
+            env.transcriptionService.endStreamingSession()
             try? FileManager.default.removeItem(at: result.url)
             env.hudController.hide()
             Logger.shared.debug("Ignored sub-minimum recording (\(durationMs)ms < \(minMs)ms)")

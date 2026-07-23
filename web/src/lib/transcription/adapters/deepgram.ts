@@ -12,40 +12,67 @@ import type { ProviderAdapter, TranscriptionInput, TranscriptionOutput } from ".
 const DEEPGRAM_URL = "https://api.deepgram.com/v1/listen";
 const MODELS = ["nova-3", "nova-2"] as const;
 
-function buildRequest(input: TranscriptionInput, apiKey: string): Request {
-  const url = new URL(DEEPGRAM_URL);
-  const q = url.searchParams;
+/** The subset of a transcription request that maps to Deepgram query
+ *  params. Both the batch adapter (below) and the streaming proxy
+ *  (`../stream.ts`) build their URL from this so the two paths can't drift
+ *  on model/vocab/language handling. */
+export interface DeepgramParamOpts {
+  model: string;
+  dictation?: boolean;
+  fillerWords?: boolean;
+  measurements?: boolean;
+  profanityFilter?: boolean;
+  detectLanguage?: boolean;
+  language?: string;
+  keyterms?: string[];
+  replaceRules?: string[]; // "find:replacement" pairs
+}
 
-  q.set("model", input.model);
+/**
+ * Build the Deepgram `/v1/listen` query params shared by the batch REST
+ * call and the live WebSocket. Streaming-only params (encoding, sample
+ * rate, interim results) are added by the caller on top of these.
+ */
+export function buildDeepgramQuery(opts: DeepgramParamOpts): URLSearchParams {
+  const q = new URLSearchParams();
+
+  q.set("model", opts.model);
   q.set("smart_format", "true");
   q.set("punctuate", "true");
 
-  if (input.dictation) q.set("dictation", "true");
-  if (input.fillerWords) q.set("filler_words", "true");
-  if (input.measurements) q.set("measurements", "true");
-  if (input.profanityFilter) q.set("profanity_filter", "true");
+  if (opts.dictation) q.set("dictation", "true");
+  if (opts.fillerWords) q.set("filler_words", "true");
+  if (opts.measurements) q.set("measurements", "true");
+  if (opts.profanityFilter) q.set("profanity_filter", "true");
 
   // `language` and `detect_language` are mutually exclusive on Deepgram's
   // side — setting both returns 400.
-  if (input.detectLanguage) {
+  if (opts.detectLanguage) {
     q.set("detect_language", "true");
-  } else if (input.language && input.language.length > 0) {
-    q.set("language", input.language);
+  } else if (opts.language && opts.language.length > 0) {
+    q.set("language", opts.language);
   }
 
   // Custom vocab: `keyterm` on Nova-3, `keywords` on Nova-2. Repeatable.
-  const termParam = input.model === "nova-3" ? "keyterm" : "keywords";
-  for (const term of input.keyterms ?? []) {
+  const termParam = opts.model === "nova-3" ? "keyterm" : "keywords";
+  for (const term of opts.keyterms ?? []) {
     if (term.length > 0) q.append(termParam, term);
   }
 
   // `replace=find:replacement` pairs. Client is responsible for validation
   // (no colon in find/replacement). Cap at 200 per Deepgram's documented
   // limit; extras silently ignored.
-  const rules = (input.replaceRules ?? []).slice(0, 200);
+  const rules = (opts.replaceRules ?? []).slice(0, 200);
   for (const rule of rules) {
     if (rule.length > 0) q.append("replace", rule);
   }
+
+  return q;
+}
+
+function buildRequest(input: TranscriptionInput, apiKey: string): Request {
+  const url = new URL(DEEPGRAM_URL);
+  url.search = buildDeepgramQuery(input).toString();
 
   return new Request(url.toString(), {
     method: "POST",

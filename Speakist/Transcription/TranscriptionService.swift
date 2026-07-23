@@ -32,6 +32,11 @@ final class TranscriptionService {
     private let notifier: Notifier
     private let usage: UsageTracker
 
+    /// The streaming session opened at record-start (when
+    /// `useStreamingTranscription` is on), consumed by `buildClient` at
+    /// key-release. Nil when streaming is off or between recordings.
+    private var activeStream: StreamingTranscribeSession?
+
     init(preferences: Preferences,
          accountManager: SpeakistAccountManager,
          apiClient: SpeakistAPIClient,
@@ -56,7 +61,56 @@ final class TranscriptionService {
         self.usage = usage
     }
 
+    // MARK: - Streaming session lifecycle
+
+    /// Open a real-time streaming session for the recording that's about to
+    /// start. Returns the session (so the caller can wire the audio tap's
+    /// PCM sink to it) or nil when streaming isn't applicable — off by
+    /// pref, not on the proxy path, or not signed in. `buildClient` picks
+    /// it up at key-release; if it's never consumed, `endStreamingSession`
+    /// tears it down.
+    func beginStreamingSession() -> StreamingTranscribeSession? {
+        guard preferences.useTranscribeProxy,
+              preferences.useStreamingTranscription,
+              accountManager.isSignedIn,
+              let token = accountManager.bearerToken, !token.isEmpty else {
+            return nil
+        }
+        let session = StreamingTranscribeSession(
+            apiBaseURL: preferences.apiBaseURL,
+            bearerToken: token,
+            transcriptionClientId: UUID().uuidString,
+            language: preferences.language.isEmpty ? nil : preferences.language,
+            keyterms: VocabularyBuilder.keyterms(from: correctionStore),
+            replaceRules: VocabularyBuilder.replaceRules(from: correctionStore),
+            dictation: preferences.dictationMode,
+            fillerWords: preferences.includeFillerWords,
+            measurements: preferences.convertMeasurements,
+            profanityFilter: preferences.maskProfanity,
+            detectLanguage: preferences.autoDetectLanguage,
+            polishSkip: false)
+        session.open()
+        activeStream = session
+        return session
+    }
+
+    /// Cancel + drop an unconsumed streaming session (recording aborted or
+    /// discarded before transcription). No-op once `buildClient` has taken
+    /// ownership of it.
+    func endStreamingSession() {
+        activeStream?.cancel()
+        activeStream = nil
+    }
+
     func process(_ request: TranscriptionRequest) async {
+        // Safety net: if we return early (e.g. not signed in) without
+        // buildClient consuming the streaming session, don't leak the open
+        // socket. On the happy path buildClient has already niled this, so
+        // the cancel is a no-op.
+        defer {
+            activeStream?.cancel()
+            activeStream = nil
+        }
         hud.setTranscribing()
 
         // Per-stage cumulative ms relative to the user releasing the
@@ -378,7 +432,7 @@ final class TranscriptionService {
             // etc.) are still passed for all providers — the server's
             // per-provider adapter picks what it understands and ignores
             // the rest, so there's no harm sending them to Groq.
-            return SpeakistTranscribeClient(
+            let batch = SpeakistTranscribeClient(
                 apiBaseURL: preferences.apiBaseURL,
                 bearerToken: token,
                 transcriptionClientId: transcriptionClientId,
@@ -388,6 +442,17 @@ final class TranscriptionService {
                 profanityFilter: preferences.maskProfanity,
                 detectLanguage: preferences.autoDetectLanguage,
                 replaceRules: replaceRules)
+
+            // Streaming path: a session was opened at record-start and fed
+            // live PCM. Finalize it here; on any transport failure the
+            // wrapper falls back to `batch` uploading the WAV. Take
+            // ownership so the process()-level cleanup defer doesn't cancel
+            // a session we're about to use.
+            if let stream = activeStream {
+                activeStream = nil
+                return StreamingTranscribeClient(session: stream, fallback: batch)
+            }
+            return batch
         }
 
         // Legacy path — mint ephemeral key and call Deepgram directly.

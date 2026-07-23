@@ -4,12 +4,13 @@
 //
 //   1. `resolveProviderForOrg()` — figure out which (provider, model) to
 //      dispatch a request to, given the user's chosen language. Default
-//      routing is Groq-first: English → whisper-large-v3-turbo (fastest),
-//      anything else → whisper-large-v3 (multilingual). When an org has
-//      an allow-list, we either use the language-default (if it's in the
-//      list) or fall back to the first allowed entry. This is how a super
-//      admin pins an org to a specific (provider, model) pair: set the
-//      allow-list to a single entry.
+//      routing is Deepgram-first: every language routes to nova-3 (its
+//      multilingual model), which has consistently outperformed Whisper on
+//      latency and accuracy in our testing. When an org has an allow-list,
+//      we either use the language-default (if it's in the list) or fall
+//      back to the first allowed entry. This is how a super admin pins an
+//      org to a specific (provider, model) pair — e.g. back to Groq Whisper
+//      for cost reasons: set the allow-list to a single entry.
 //
 //   2. `checkOrgModelAccess()` — legacy gate for the old client-picked
 //      model path. Kept so any caller still passing a model can be
@@ -32,25 +33,20 @@ function parseSlug(slug: string): { providerId: ProviderId; model: string } | nu
 
 /**
  * Default (provider, model) for a request, before the allow-list is
- * applied. English-detected requests route to the fastest Whisper
- * variant; everything else goes to the multilingual Whisper Large.
+ * applied. Every language routes to Deepgram nova-3 — its multilingual
+ * model handles both English and non-English (the adapter forwards the
+ * `language` / `detect_language` params either way), and it's been our
+ * best performer on latency and accuracy.
  *
- * `detectLanguage = true` (the auto-detect toggle) is treated as
- * not-English so we use the multilingual model — picking Turbo would
- * give worse accuracy on French/Spanish/etc. clips that auto-detect
- * is meant to handle.
+ * `opts` is currently unused (nova-3 covers all languages), but the
+ * signature is kept so callers don't change and so a future per-language
+ * split (e.g. a cheaper model for English) is a one-line edit here.
  */
-export function languageDefault(opts: {
+export function languageDefault(_opts: {
   language?: string | null;
   detectLanguage?: boolean;
 }): { providerId: ProviderId; model: string } {
-  const isEnglish =
-    !opts.detectLanguage &&
-    typeof opts.language === "string" &&
-    /^en(-|$)/i.test(opts.language.trim());
-  return isEnglish
-    ? { providerId: "groq", model: "whisper-large-v3-turbo" }
-    : { providerId: "groq", model: "whisper-large-v3" };
+  return { providerId: "deepgram", model: "nova-3" };
 }
 
 export interface ResolvedProvider {
