@@ -277,6 +277,13 @@ final class ShortcutManager {
     // MARK: - Lifecycle
 
     private func beginRecording() {
+        // Pause any background media (Spotify/YouTube/etc.) right away —
+        // on key-down, in parallel with the engine warmup below — so it's
+        // quiet before the user starts speaking. No-op when the feature is
+        // off or nothing is playing. Resumed in finishRecording() (and the
+        // start-failure path below).
+        env.mediaController.pauseIfPlaying()
+
         // Show the HUD FIRST, before we touch the audio engine. The
         // .preparing state covers the 280–560ms window while
         // engine.start runs on a background task and the HAL warms
@@ -301,6 +308,9 @@ final class ShortcutManager {
                 Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
                 self.env.audioRecorder.onPCMChunk = nil
                 self.env.transcriptionService.endStreamingSession()
+                // Engine never came up → finishRecording() won't run, so
+                // resume media here (no-op if we didn't pause).
+                self.env.mediaController.resume()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -335,6 +345,12 @@ final class ShortcutManager {
         // contract: set before start, clear after stop).
         let recordingResult = env.audioRecorder.stop()
         env.audioRecorder.onPCMChunk = nil
+        // Recording is over — resume background media now (at key-release),
+        // regardless of what happens with the transcription afterward. No-op
+        // if we didn't pause. Covers every finish path: normal release,
+        // toggle stop, max-duration cutoff, finish-on-ready, and the
+        // sub-minimum / failed-stop discards below.
+        env.mediaController.resume()
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()

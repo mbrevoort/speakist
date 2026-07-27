@@ -46,6 +46,7 @@ final class Preferences: ObservableObject {
         static let apiBaseURL = "apiBaseURL"
         static let useTranscribeProxy = "useTranscribeProxy"
         static let useStreamingTranscription = "useStreamingTranscription"
+        static let pauseMediaDuringDictation = "pauseMediaDuringDictation"
         static let polishEnabled = "polishEnabled"
         static let polishMode = "polishMode"
         static let polishSystemPrompt = "polishSystemPrompt"
@@ -157,6 +158,9 @@ final class Preferences: ObservableObject {
             // Mac falls back to the batch upload automatically.
             //   defaults write <bundleID> useStreamingTranscription 1
             K.useStreamingTranscription: false,
+            // Auto-pause background media (Spotify/YouTube/etc.) while a
+            // dictation is recording, resume when it ends. On by default.
+            K.pauseMediaDuringDictation: true,
             // Polish prefs are authoritative on the backend (source of
             // truth = /api/me/polish). These local values are a cache so
             // Settings can render instantly on launch without blocking on
@@ -301,6 +305,15 @@ final class Preferences: ObservableObject {
     var useStreamingTranscription: Bool {
         get { defaults.bool(forKey: K.useStreamingTranscription) }
         set { defaults.set(newValue, forKey: K.useStreamingTranscription); objectWillChange.send() }
+    }
+
+    /// Automatically pause whatever media is playing (Spotify, Apple Music, a
+    /// YouTube tab, etc.) when a dictation recording starts, and resume it
+    /// when the recording ends. On by default. User-overridable via
+    /// `defaults write <bundleID> pauseMediaDuringDictation 0`.
+    var pauseMediaDuringDictation: Bool {
+        get { defaults.bool(forKey: K.pauseMediaDuringDictation) }
+        set { defaults.set(newValue, forKey: K.pauseMediaDuringDictation); objectWillChange.send() }
     }
 
     // MARK: - Polish prefs (cached from /api/me)
