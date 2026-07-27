@@ -63,9 +63,11 @@ final class MediaController {
     /// Post a system Play/Pause media-key press (down then up). `NX_KEYTYPE_PLAY`
     /// is 16; media keys are `NSSystemDefined` events with subtype 8.
     private func sendPlayPauseKey() {
-        for down in [true, false] {
-            let flags = NSEvent.ModifierFlags(rawValue: down ? 0xA00 : 0xB00)
-            let data1 = (kPlayKeyCode << 16) | ((down ? 0xA : 0xB) << 8)
+        // 0xA = key down, 0xB = key up (the NSEvent media-key convention); the
+        // same nibble drives both the modifier flags and data1's state field.
+        for keyState in [0xA, 0xB] {
+            let flags = NSEvent.ModifierFlags(rawValue: UInt(keyState << 8))
+            let data1 = (kPlayKeyCode << 16) | (keyState << 8)
             guard let event = NSEvent.otherEvent(
                 with: .systemDefined,
                 location: .zero,
@@ -117,38 +119,16 @@ final class MediaController {
             return nil
         }
 
+        // Check the cheap "is outputting" flag first; only spend the second
+        // round-trip to read a PID (to exclude ourselves) once output is live.
         let myPid = ProcessInfo.processInfo.processIdentifier
         for proc in procs {
-            if processPID(proc) == myPid { continue }
-            if processIsRunningOutput(proc) { return true }
+            guard (readScalar(proc, kAudioProcessPropertyIsRunningOutput, as: UInt32.self) ?? 0) != 0 else {
+                continue
+            }
+            if readScalar(proc, kAudioProcessPropertyPID, as: pid_t.self) != myPid { return true }
         }
         return false
-    }
-
-    @available(macOS 14.4, *)
-    private func processPID(_ proc: AudioObjectID) -> pid_t {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyPID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var pid: pid_t = -1
-        var size = UInt32(MemoryLayout<pid_t>.size)
-        _ = AudioObjectGetPropertyData(proc, &addr, 0, nil, &size, &pid)
-        return pid
-    }
-
-    @available(macOS 14.4, *)
-    private func processIsRunningOutput(_ proc: AudioObjectID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyIsRunningOutput,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var running: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(proc, &addr, 0, nil, &size, &running) == noErr else {
-            return false
-        }
-        return running != 0
     }
 
     /// Fallback: is the default output device active in *any* process. Coarser
@@ -157,24 +137,28 @@ final class MediaController {
     /// start sound, so it reflects background media only.
     private func defaultOutputDeviceIsRunning() -> Bool {
         let system = AudioObjectID(kAudioObjectSystemObject)
-        var devAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var deviceID = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(system, &devAddr, 0, nil, &size, &deviceID) == noErr,
+        guard let deviceID = readScalar(system, kAudioHardwarePropertyDefaultOutputDevice, as: AudioObjectID.self),
               deviceID != 0 else { return false }
+        return (readScalar(deviceID, kAudioDevicePropertyDeviceIsRunningSomewhere, as: UInt32.self) ?? 0) != 0
+    }
 
-        var runAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+    /// Read a fixed-size scalar CoreAudio property (global scope / main
+    /// element). Returns nil on any error so callers pick their own fallback.
+    /// Collapses the identical AudioObjectGetPropertyData ritual the callers
+    /// above would otherwise each repeat.
+    private func readScalar<T>(_ objectID: AudioObjectID,
+                               _ selector: AudioObjectPropertySelector,
+                               as _: T.Type) -> T? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        var running: UInt32 = 0
-        var rsize = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(deviceID, &runAddr, 0, nil, &rsize, &running) == noErr else {
-            return false
+        let value = UnsafeMutablePointer<T>.allocate(capacity: 1)
+        defer { value.deallocate() }
+        var size = UInt32(MemoryLayout<T>.size)
+        guard AudioObjectGetPropertyData(objectID, &addr, 0, nil, &size, value) == noErr else {
+            return nil
         }
-        return running != 0
+        return value.pointee
     }
 }
