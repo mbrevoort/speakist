@@ -277,13 +277,18 @@ final class ShortcutManager {
     // MARK: - Lifecycle
 
     private func beginRecording() {
-        // Show the HUD FIRST, before we touch the audio engine. The
-        // .preparing state covers the 280–560ms window while
-        // engine.start runs on a background task and the HAL warms
-        // up; the runloop is free during that window so the panel
-        // can actually paint at +5ms instead of being held off
-        // until the engine is live.
+        // Show the HUD FIRST, before we touch the audio engine or run the
+        // (synchronous) media check below. The .preparing state covers the
+        // 280–560ms window while engine.start runs on a background task and
+        // the HAL warms up; painting it first keeps the panel at +5ms
+        // instead of being held off until the engine is live.
         env.hudController.showPreparing()
+
+        // Pause any background media (Spotify/YouTube/etc.) — still on
+        // key-down, so it's quiet before the user starts speaking. No-op when
+        // the feature is off or nothing is playing. Resumed in
+        // finishRecording() (and the start-failure path below).
+        env.mediaController.pauseIfPlaying()
 
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
@@ -301,6 +306,9 @@ final class ShortcutManager {
                 Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
                 self.env.audioRecorder.onPCMChunk = nil
                 self.env.transcriptionService.endStreamingSession()
+                // Engine never came up → finishRecording() won't run, so
+                // resume media here (no-op if we didn't pause).
+                self.env.mediaController.resume()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -335,6 +343,14 @@ final class ShortcutManager {
         // contract: set before start, clear after stop).
         let recordingResult = env.audioRecorder.stop()
         env.audioRecorder.onPCMChunk = nil
+        // Recording is over — resume background media now (at key-release),
+        // regardless of what happens with the transcription afterward. No-op
+        // if we didn't pause. This is the choke point for ShortcutManager's
+        // end paths (normal release, toggle stop, max-duration cutoff,
+        // finish-on-ready, and the sub-minimum / failed-stop discards below);
+        // the engine-start-failure branch above and QuickDictate resume on
+        // their own paths.
+        env.mediaController.resume()
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()
