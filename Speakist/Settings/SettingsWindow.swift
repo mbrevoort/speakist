@@ -223,9 +223,9 @@ struct GeneralSettingsView: View {
                 Toggle("Show overlay UI while recording", isOn: Binding(
                     get: { prefs.showHUD },
                     set: { prefs.showHUD = $0 }))
-                Toggle("Pause background media while dictating", isOn: Binding(
-                    get: { prefs.pauseMediaDuringDictation },
-                    set: { prefs.pauseMediaDuringDictation = $0 }))
+                Toggle("Automatically lower the volume of other audio while dictating", isOn: Binding(
+                    get: { prefs.duckAudioDuringDictation },
+                    set: { prefs.duckAudioDuringDictation = $0 }))
             }
         }
         .formStyle(.grouped)
