@@ -152,13 +152,14 @@ final class Preferences: ObservableObject {
             // restores the known-good flow without waiting for a release.
             K.useTranscribeProxy: true,
             // Real-time streaming transcription (Mac → Worker WebSocket →
-            // Deepgram live). Default OFF while it bakes; flip on to have
-            // audio stream as the user speaks instead of uploading the
-            // whole WAV on key-release. Only consulted when
-            // useTranscribeProxy is also true; on any streaming failure the
-            // Mac falls back to the batch upload automatically.
-            //   defaults write <bundleID> useStreamingTranscription 1
-            K.useStreamingTranscription: false,
+            // Deepgram live). Default ON: audio streams as the user speaks,
+            // so by key-release the transcript is mostly ready — cutting
+            // the 250–600ms batch STT wait to just Deepgram's final flush.
+            // Only consulted when useTranscribeProxy is also true; on any
+            // streaming failure (older server, socket error) the Mac falls
+            // back to the batch upload automatically.
+            //   defaults write <bundleID> useStreamingTranscription 0
+            K.useStreamingTranscription: true,
             // Lower (duck) background audio while a dictation is recording,
             // restore it when the recording ends. On by default, ducking to
             // 2% (see audioDuckLevel).
@@ -303,8 +304,8 @@ final class Preferences: ObservableObject {
     /// `K.useStreamingTranscription`. True = audio streams to the Worker
     /// over a WebSocket as the user speaks (lower release-to-paste
     /// latency); false = the whole WAV is uploaded on key-release. Only
-    /// meaningful when `useTranscribeProxy` is also on. User-overridable
-    /// via `defaults write <bundleID> useStreamingTranscription 1`.
+    /// meaningful when `useTranscribeProxy` is also on. Default ON.
+    /// User-overridable via `defaults write <bundleID> useStreamingTranscription 0`.
     var useStreamingTranscription: Bool {
         get { defaults.bool(forKey: K.useStreamingTranscription) }
         set { defaults.set(newValue, forKey: K.useStreamingTranscription); objectWillChange.send() }
