@@ -22,12 +22,10 @@ import {
   leaveOrg,
   deleteOrg,
   setPolishEnabled,
-  setPolishMode,
   type ActionResult,
 } from "./actions";
 import { VocabularyCard, type VocabEntry } from "./vocabulary-card";
 
-type PolishMode = "intuitive" | "prescriptive";
 
 interface Props {
   orgName: string;
@@ -39,10 +37,9 @@ interface Props {
   canAdmin: boolean;
   isSoleOwner: boolean;
   role: "owner" | "admin" | "member";
-  /** Polish prefs are per-user; passed from the server so first paint
-   *  has the right values without a client-side fetch. */
+  /** Polish pref is per-user; passed from the server so first paint
+   *  has the right value without a client-side fetch. */
   polishEnabled: boolean;
-  polishMode: PolishMode;
   vocabEntries: VocabEntry[];
 }
 
@@ -55,7 +52,6 @@ export function SettingsClient({
   isSoleOwner,
   role,
   polishEnabled,
-  polishMode,
   vocabEntries,
 }: Props) {
   return (
@@ -64,7 +60,7 @@ export function SettingsClient({
         label="Personal"
         description="Settings that apply only to your account. Sync to your Mac and iPhone on next launch."
       >
-        <PolishCard enabled={polishEnabled} mode={polishMode} />
+        <PolishCard enabled={polishEnabled} />
         <VocabularyCard entries={vocabEntries} />
       </Group>
 
@@ -275,30 +271,21 @@ function LeaveButton({ disabled }: { disabled: boolean }) {
 
 // --- polish ---------------------------------------------------------------
 
-function PolishCard({
-  enabled: serverEnabled,
-  mode: serverMode,
-}: {
-  enabled: boolean;
-  mode: PolishMode;
-}) {
-  // Local mirrors of the server state so toggle / mode-change show
-  // optimistic feedback without re-rendering the whole page from the
-  // RSC tree.
+function PolishCard({ enabled: serverEnabled }: { enabled: boolean }) {
+  // Local mirror of the server state so the toggle shows optimistic
+  // feedback without re-rendering the whole page from the RSC tree.
+  // Polish is single-behavior now (the intuitive/prescriptive mode split
+  // was retired — the server always uses the intuitive prompt), so the
+  // only control is on/off.
   const [enabled, setEnabled] = useState(serverEnabled);
-  const [mode, setMode] = useState<PolishMode>(serverMode);
-
   const [toggleResult, setToggleResult] = useState<ActionResult | null>(null);
-  const [modeResult, setModeResult] = useState<ActionResult | null>(null);
   const [togglePending, startToggleTransition] = useTransition();
-  const [modePending, startModeTransition] = useTransition();
 
   // Re-sync from server on revalidatePath so a second save picks up the
   // fresh state instead of the locally-stomped one.
   useEffect(() => {
     setEnabled(serverEnabled);
-    setMode(serverMode);
-  }, [serverEnabled, serverMode]);
+  }, [serverEnabled]);
 
   function handleToggle(next: boolean) {
     if (next === enabled) return;
@@ -316,90 +303,38 @@ function PolishCard({
     });
   }
 
-  function handleModeChange(next: PolishMode) {
-    if (next === mode) return;
-    const fd = new FormData();
-    fd.set("mode", next);
-    setModeResult(null);
-    const previous = mode;
-    setMode(next); // optimistic
-    startModeTransition(async () => {
-      const r = await setPolishMode(fd);
-      setModeResult(r);
-      if (!r.ok) setMode(previous);
-    });
-  }
-
   return (
     <Card
       title="Polish"
-      description="Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes."
+      description="A second pass that applies your spoken self-corrections (“I mean…”, “scratch that…”), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation."
     >
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <label
-            htmlFor="polish-toggle"
-            className="flex items-center gap-3 cursor-pointer select-none"
+      <div className="flex flex-wrap items-center gap-3">
+        <label
+          htmlFor="polish-toggle"
+          className="flex items-center gap-3 cursor-pointer select-none"
+        >
+          <Switch
+            id="polish-toggle"
+            checked={enabled}
+            onCheckedChange={handleToggle}
+            disabled={togglePending}
+            aria-label="Polish each transcription"
+          />
+          <span className="text-sm font-medium">
+            Polish each transcription
+          </span>
+        </label>
+        {toggleResult && (
+          <p
+            className={cn(
+              "text-sm",
+              toggleResult.ok ? "text-sage" : "text-destructive"
+            )}
+            role="status"
           >
-            <Switch
-              id="polish-toggle"
-              checked={enabled}
-              onCheckedChange={handleToggle}
-              disabled={togglePending}
-              aria-label="Polish each transcription"
-            />
-            <span className="text-sm font-medium">
-              Polish each transcription
-            </span>
-          </label>
-          {toggleResult && (
-            <p
-              className={cn(
-                "text-sm",
-                toggleResult.ok ? "text-sage" : "text-destructive"
-              )}
-              role="status"
-            >
-              {toggleResult.ok ? toggleResult.message : toggleResult.error}
-            </p>
-          )}
-        </div>
-
-        {/* Mode picker — visible always so the user can configure
-            their preferred mode before turning polish on, disabled
-            when off so the choice doesn't go off into the void. */}
-        <fieldset className="space-y-3" disabled={modePending || !enabled}>
-          <legend className="text-sm font-medium">Mode</legend>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <ModeOption
-              label="Intuitive"
-              description="Tries to understand your intent and applies explicit self-corrections (“I mean…”, “scratch that…”). Best when you talk through a thought and want the polished result."
-              value="intuitive"
-              selected={mode === "intuitive"}
-              onSelect={() => handleModeChange("intuitive")}
-              disabled={modePending || !enabled}
-            />
-            <ModeOption
-              label="Prescriptive"
-              description="Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting."
-              value="prescriptive"
-              selected={mode === "prescriptive"}
-              onSelect={() => handleModeChange("prescriptive")}
-              disabled={modePending || !enabled}
-            />
-          </div>
-          {modeResult && (
-            <p
-              className={cn(
-                "text-sm",
-                modeResult.ok ? "text-sage" : "text-destructive"
-              )}
-              role="status"
-            >
-              {modeResult.ok ? modeResult.message : modeResult.error}
-            </p>
-          )}
-        </fieldset>
+            {toggleResult.ok ? toggleResult.message : toggleResult.error}
+          </p>
+        )}
       </div>
     </Card>
   );
@@ -486,55 +421,6 @@ function FeedbackCard({
 // Radio-style card pair for the polish mode picker. Visually highlights
 // the selected mode with the peach accent; full-card tap target so the
 // click region is generous on mobile.
-function ModeOption({
-  label,
-  description,
-  value,
-  selected,
-  onSelect,
-  disabled,
-}: {
-  label: string;
-  description: string;
-  value: "intuitive" | "prescriptive";
-  selected: boolean;
-  onSelect: () => void;
-  disabled: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled}
-      role="radio"
-      aria-checked={selected}
-      className={cn(
-        "text-left rounded-xl border p-4 transition-colors",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        selected
-          ? "border-peach-deep bg-peach/10"
-          : "border-border/70 bg-background hover:bg-muted/50",
-        disabled && "opacity-60 cursor-not-allowed"
-      )}
-    >
-      <div className="flex items-center gap-2 font-medium text-sm">
-        <span
-          className={cn(
-            "inline-block h-3 w-3 rounded-full border",
-            selected ? "border-peach-deep bg-peach-deep" : "border-muted-foreground/40"
-          )}
-          aria-hidden
-        />
-        {label}
-        <span className="ml-auto text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-          {value}
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{description}</p>
-    </button>
-  );
-}
-
 function DeleteForm({ orgSlug }: { orgSlug: string }) {
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();

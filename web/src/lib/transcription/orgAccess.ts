@@ -9,8 +9,8 @@
 //      latency and accuracy in our testing. When an org has an allow-list,
 //      we either use the language-default (if it's in the list) or fall
 //      back to the first allowed entry. This is how a super admin pins an
-//      org to a specific (provider, model) pair — e.g. back to Groq Whisper
-//      for cost reasons: set the allow-list to a single entry.
+//      org to a specific (provider, model) pair — e.g. `deepgram/nova-2`:
+//      set the allow-list to a single entry.
 //
 //   2. `checkOrgModelAccess()` — legacy gate for the old client-picked
 //      model path. Kept so any caller still passing a model can be
@@ -19,15 +19,21 @@
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { organizations } from "@/lib/db/schema";
+import { isSupportedSttProvider } from "./index";
 import { isProviderId, type ProviderId } from "./types";
 
-/** "groq/whisper-large-v3-turbo" → ("groq", "whisper-large-v3-turbo") */
+/** "deepgram/nova-3" → ("deepgram", "nova-3"). Rejects providers without a
+ *  live STT adapter (not just unknown key namespaces) — e.g. a stale
+ *  `groq/…` allow-list entry from before Groq STT was retired parses as a
+ *  valid provider ID but must not route, so it falls through to the
+ *  deepgram default instead. */
 function parseSlug(slug: string): { providerId: ProviderId; model: string } | null {
   const idx = slug.indexOf("/");
   if (idx <= 0) return null;
   const providerId = slug.slice(0, idx).toLowerCase();
   const model = slug.slice(idx + 1);
   if (!isProviderId(providerId) || model.length === 0) return null;
+  if (!isSupportedSttProvider(providerId)) return null;
   return { providerId, model };
 }
 

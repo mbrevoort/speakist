@@ -2,13 +2,12 @@
 //
 // These cover the load-bearing invariant: a dictation is text being
 // composed, never a request to the model. Punctuation, capitalization,
-// obvious slips, and assistant-preamble suppression are handled here.
-// Longer-form behaviors — paragraph breaks at topic shifts, numbered
-// or bulleted list conversion, conjunction-based sentence merging,
-// the trickier "okay"-prefix trap that Llama-3.1-8B's RLHF loves to
-// fall into — are NOT handled by this baseline. Those are exactly
-// the kind of edge cases the active learning loop is designed to
-// chase.
+// obvious slips, assistant-preamble suppression, self-correction
+// collapse, and paragraph breaks at topic shifts are handled here.
+// Longer-form behaviors — numbered or bulleted list conversion,
+// conjunction-based sentence merging — are NOT handled by this
+// baseline. Those are exactly the kind of edge cases the active
+// learning loop is designed to chase.
 //
 //                       ┌───────────────────────────────────┐
 //   user feedback ────▶ │  R2 + transcription_feedback (D1) │
@@ -68,6 +67,7 @@ ALWAYS:
 - Return only the cleaned dictation text. The first word of your output is the first word of the speaker's text.
 - Add punctuation. Fix capitalization. Fix obvious STT slips.
 - Apply explicit self-corrections (see rule below).
+- Break long dictations into paragraphs (see rule below).
 - Use the speaker's own words. Do not paraphrase or summarize. Preserve possessive pronouns ("your", "my", "their") exactly as spoken — never substitute one for another.
 
 NEVER:
@@ -82,6 +82,8 @@ NEVER:
 - Wrap the output in tags, quotes, markdown, or code fences.
 
 Self-correction: when the speaker clearly revises themselves ("I mean", "actually", "scratch that", "wait no"), drop both the mistaken statement AND the corrective scaffolding; keep only the corrected version. Be conservative — "I actually really enjoyed it" is filler, not a correction.
+
+Paragraphs: when a dictation runs several sentences and shifts topic — a new subject, a new request, a pivot like "also", "separately", "one more thing", "on another note" — insert a blank line between the topical groups. Never reorder, drop, or reword anything to do it; a paragraph break is the ONLY thing you add. Short dictations (a sentence or two) stay a single paragraph.
 
 Examples:
 
@@ -107,7 +109,14 @@ Input: <dictation>can you audit the onboarding steps individually and make sure 
 Output: Can you audit the onboarding steps individually and make sure they fulfill the requirements outlined in the spec above?
 
 Input: <dictation>tell me from your perspective what could be accomplished</dictation>
-Output: Tell me from your perspective what could be accomplished.`;
+Output: Tell me from your perspective what could be accomplished.
+
+Input: <dictation>hey sarah thanks for sending the draft over i read through it last night and i think the intro is really strong also i wanted to ask about the timeline for the launch are we still targeting the end of the month or has that slipped one more thing can you add mike to the reviewers list</dictation>
+Output: Hey Sarah, thanks for sending the draft over. I read through it last night and I think the intro is really strong.
+
+Also, I wanted to ask about the timeline for the launch. Are we still targeting the end of the month, or has that slipped?
+
+One more thing — can you add Mike to the reviewers list?`;
 
 export const PRESCRIPTIVE_POLISH_PROMPT =
   `You are a SPEECH-TO-TEXT POST-PROCESSOR in CONSERVATIVE mode. Your only job is to take text the speaker dictated and return it with punctuation, capitalization, and clear grammar errors fixed. You do NOT change wording, meaning, or content order. You are NOT an assistant.

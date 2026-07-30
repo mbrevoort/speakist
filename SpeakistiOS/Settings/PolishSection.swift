@@ -1,15 +1,16 @@
 import SwiftUI
 
 /// Inline Polish settings, designed to slot directly into the Home
-/// list (`Form`/`List` of sections). Renders one Section that holds
-/// the enable toggle and — when enabled — a mode segmented picker
-/// underneath, so the whole Polish surface lives on the main screen
+/// list (`Form`/`List` of sections). Renders one Section holding the
+/// enable toggle, so the whole Polish surface lives on the main screen
 /// instead of behind a NavigationLink. Returns `EmptyView()` when
 /// signed out so the Section disappears entirely instead of showing
 /// a sign-in prompt that conflicts with the existing Account row.
 ///
-/// The system prompt itself is super-admin-only (configured at
-/// /admin/system on web). End users only choose enable + mode.
+/// Polish is single-behavior now (the intuitive/prescriptive mode split
+/// was retired — the server always uses the intuitive prompt), so the
+/// only user choice is on/off. The system prompt itself is
+/// super-admin-only (configured at /admin/system on web).
 struct PolishSection: View {
     @EnvironmentObject private var account: SpeakistAccountManager
 
@@ -20,7 +21,6 @@ struct PolishSection: View {
 
     @State private var loading = true
     @State private var savingToggle = false
-    @State private var savingMode = false
     @State private var lastError: String?
 
     var body: some View {
@@ -54,29 +54,6 @@ struct PolishSection: View {
                 set: { saveToggle(to: $0) }
             ))
             .disabled(savingToggle)
-
-            // Mode picker is always visible so the user can configure
-            // their preferred mode before turning polish on. Disabled
-            // (greyed out) when the toggle is off so server calls
-            // don't fire on a state nobody asked for.
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("Mode", selection: Binding(
-                    get: { loaded.mode },
-                    set: { saveMode(to: $0) }
-                )) {
-                    Text("Intuitive").tag(SpeakistAPIClient.PolishMode.intuitive)
-                    Text("Prescriptive").tag(SpeakistAPIClient.PolishMode.prescriptive)
-                }
-                .pickerStyle(.segmented)
-                .disabled(!loaded.enabled || savingMode)
-
-                Text(loaded.mode == .intuitive
-                     ? "Tries to understand your intent and applies explicit self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}). Best when you talk through a thought and want the polished result."
-                     : "Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 4)
         } header: {
             Text("Polish")
         } footer: {
@@ -85,7 +62,7 @@ struct PolishSection: View {
                     .font(.footnote)
                     .foregroundStyle(.speakistCoral)
             } else {
-                Text("Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes.")
+                Text("A second pass that applies your spoken self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -143,26 +120,6 @@ struct PolishSection: View {
             do {
                 let resp = try await client.updatePolish(
                     enabled: newValue,
-                    systemPrompt: nil
-                )
-                apply(from: resp)
-            } catch {
-                lastError = error.localizedDescription
-            }
-        }
-    }
-
-    private func saveMode(to newValue: SpeakistAPIClient.PolishMode) {
-        guard let client = account.apiClient else { return }
-        guard newValue != loaded?.mode else { return }
-        savingMode = true
-        lastError = nil
-        Task {
-            defer { savingMode = false }
-            do {
-                let resp = try await client.updatePolish(
-                    enabled: nil,
-                    mode: newValue,
                     systemPrompt: nil
                 )
                 apply(from: resp)

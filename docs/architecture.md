@@ -36,8 +36,8 @@ covers the product surface.
 | Auth | Auth.js v5 (NextAuth) + magic-link + Drizzle adapter |
 | Email | Resend (dev falls back to console) |
 | Payments | Stripe (Checkout + Customer Portal + webhooks) |
-| Upstream STT | DeepGram Nova-3 (default) and Groq Whisper, switchable per-org by super admin |
-| Polish LLM | Groq `llama-3.1-8b-instant` |
+| Upstream STT | DeepGram Nova-3 (default; nova-2 selectable per-org by super admin). Groq Whisper was retired — Deepgram outperformed it on latency + accuracy. |
+| Polish LLM | Groq `openai/gpt-oss-20b` (reasoning_effort=low; prompt-cached system prompt) |
 | Polish prompt store | `polish_prompt_versions` (D1) — versioned, rollback-able, edited via `/admin/polish-prompts` or proposed via the MCP `propose_polish_prompt` tool. Seed bodies in [`web/src/lib/transcription/default-polish-prompts.ts`](../web/src/lib/transcription/default-polish-prompts.ts). |
 
 Deliberately avoided: third-party networking SDKs (`URLSession`/`fetch`
@@ -67,17 +67,15 @@ This is the load-bearing flow. The same shape on Mac and iOS.
    ┌──────────────────────────────────────────────────────────────┐
    │  Cloudflare Worker — /api/transcribe                         │
    │  1. Resolve user's active org (last_active_org_id || 1st)    │
-   │  2. Read X-Language. Pick provider+model:                    │
-   │       en  → groq/whisper-large-v3-turbo                      │
-   │       else → groq/whisper-large-v3                           │
+   │  2. Pick provider+model: deepgram/nova-3 for every language  │
    │     (plus org's allowed_models_json as a guard + override)   │
    │  3. resolveProviderKey(env, orgId, providerId)               │
    │       org override → app_settings system key → env → throw   │
    │  4. dispatch() → upstream provider's REST API                │
-   │  5. (optional) runPolish() — Groq llama-3.1-8b-instant       │
-   │       super-admin's mode prompt; output-length sanity check  │
-   │  6. debitForAudioTranscription() — credit ledger insert      │
-   │  7. return { text, audioSeconds, provider, model, balance }  │
+   │  5. (optional) runPolish() — Groq openai/gpt-oss-20b         │
+   │       gated (short inputs skip) + 500ms latency budget       │
+   │  6. respond { text, audioSeconds, provider, model, timings } │
+   │  7. settle() via ctx.waitUntil — credit ledger insert        │
    └──────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -226,10 +224,8 @@ Largely the same, with two iOS-specific complications:
    diff and extracts 1–4-token replacement runs.
 3. Each pair is upserted into `corrections.sqlite`.
 4. On the next transcription, `VocabularyBuilder.keyterms(from:)`
-   returns the top 50 proper-noun-shaped corrections to feed the
-   transcription engine's keyterm-boost slot if the chosen provider
-   supports one (DeepGram does; Groq Whisper doesn't, so keyterms
-   are silently dropped on Whisper).
+   returns the top 50 proper-noun-shaped corrections to feed
+   DeepGram's keyterm-boost slot.
 
 iOS doesn't have a correction loop today — the iOS history surface is
 read-only.
@@ -274,15 +270,18 @@ the new workspace, not a stale earlier one.
 
 ## 6. Polish
 
-A second LLM pass that runs after STT. Two server-side modes:
+A second LLM pass that runs after STT (opt-in, off by default —
+Deepgram's smart_format covers punctuation/formatting natively). One
+behavior: applies explicit self-corrections ("I mean…", "scratch
+that…"), removes false starts, and breaks long dictations into
+paragraphs at topic shifts. Runs on Groq `openai/gpt-oss-20b`.
 
-- **Intuitive** — applies explicit self-corrections ("I mean…",
-  "scratch that…"), fixes obvious slips. The intent-aware variant.
-- **Prescriptive** — punctuation, capitalization, clear grammar
-  fixes only. Never touches meaning. Default for new users.
-
-Each user picks `polish_mode` per their `users` row (UI on Mac
-Settings → Polish, iOS Home → Polish, web `/dashboard/settings`).
+Historically there were two modes (intuitive/prescriptive); the
+server now always resolves the **intuitive** prompt. The
+`users.polish_mode` column and the `/api/me/polish` `mode` param
+remain for older-client compat but are ignored. (UI on Mac
+Settings → Polish, iOS Home → Polish, web `/dashboard/settings` —
+each is just an on/off toggle now.)
 The active prompt strings live in `polish_prompt_versions` (D1),
 versioned + rollback-able, edited at `/admin/polish-prompts` or
 proposed via the MCP `propose_polish_prompt` tool. The resolver
@@ -315,11 +314,12 @@ must never block the user from getting their transcript.
   alike).
 - Non-empty and the default is in the list → use the default.
 - Non-empty and the default is NOT in the list → use the first allowed
-  entry.
+  entry. Entries for providers without a live STT adapter (e.g. stale
+  `groq/*` slugs from before Groq STT was retired; migration 0024
+  strips them) are skipped, falling through to the default.
 
-Pinning an org to e.g. `["groq/whisper-large-v3-turbo"]` is how a super
-admin gives one org a different (e.g. cheaper) STT engine without
-changing global defaults.
+Pinning an org to e.g. `["deepgram/nova-2"]` is how a super admin gives
+one org a different STT model without changing global defaults.
 
 API key resolution (`lib/transcription/secrets.ts`) is in this order:
 

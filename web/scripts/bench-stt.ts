@@ -17,14 +17,13 @@
 // the polish LLM before scoring. Use this to answer: "does the polish
 // pass mask the vocab-bleed, or does it propagate?"
 //
-// Auth: needs DEEPGRAM_API_KEY and/or GROQ_API_KEY in env. A provider
-// without a key is skipped (the bench still runs for whichever providers
-// are configured).
+// Auth: needs DEEPGRAM_API_KEY in env (and GROQ_API_KEY for --polish).
+// A provider without a key is skipped.
 //
 // Usage:
-//   GROQ_API_KEY=... DEEPGRAM_API_KEY=... pnpm bench:stt
+//   DEEPGRAM_API_KEY=... pnpm bench:stt
 //   pnpm bench:stt -- --providers deepgram
-//   pnpm bench:stt -- --providers groq --model whisper-large-v3
+//   pnpm bench:stt -- --model nova-2
 //   pnpm bench:stt -- --polish --polish-mode intuitive
 //   pnpm bench:stt -- --only vocab-bleed-stripe
 //   pnpm bench:stt -- -n 3   (3 iterations to smooth provider noise)
@@ -32,7 +31,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, basename } from "node:path";
 import { deepgramAdapter } from "../src/lib/transcription/adapters/deepgram";
-import { groqAdapter } from "../src/lib/transcription/adapters/groq";
 import type { ProviderAdapter, TranscriptionInput } from "../src/lib/transcription/types";
 import { polishWithApiKey, bakedInPromptForMode, POLISH_MODEL, type PolishMode } from "../src/lib/transcription/polish";
 
@@ -50,7 +48,7 @@ interface CliArgs {
 
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
-    providers: ["deepgram", "groq"],
+    providers: ["deepgram"],
     iterations: 1,
     polish: false,
     polishMode: "intuitive",
@@ -99,10 +97,10 @@ function printHelp(): void {
   console.log(`Usage: pnpm bench:stt -- [flags]
 
 Flags:
-  --providers <list>           Comma-separated provider ids (default: deepgram,groq).
+  --providers <list>           Comma-separated provider ids (default: deepgram).
                                Skipped silently if API key not configured.
   --model <id>                 Override default model. Only valid with --providers <single>.
-                               Defaults: deepgram=nova-3, groq=whisper-large-v3-turbo.
+                               Default: deepgram=nova-3.
   --only <name>                Run only one fixture by its 'name' (basename without ext).
   -n, --iterations <n>         Run each case n times. Averages out provider noise.
   --polish                     Pipe STT output through the polish LLM before scoring.
@@ -112,7 +110,7 @@ Flags:
 
 Env:
   DEEPGRAM_API_KEY  required for deepgram provider (skipped silently if missing)
-  GROQ_API_KEY      required for groq provider AND for --polish (skipped silently if missing)
+  GROQ_API_KEY      required for --polish (the polish LLM runs on Groq)
 
 Fixture format: see scripts/bench-stt-fixtures/README.md
 `);
@@ -217,11 +215,8 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     envKey: "DEEPGRAM_API_KEY",
     defaultModel: "nova-3",
   },
-  groq: {
-    adapter: groqAdapter,
-    envKey: "GROQ_API_KEY",
-    defaultModel: "whisper-large-v3-turbo",
-  },
+  // groq STT was retired (adapter removed); GROQ_API_KEY is still used by
+  // --polish, which runs the polish LLM on Groq.
 };
 
 async function runTranscription(
