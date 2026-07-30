@@ -66,7 +66,7 @@ const MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 export async function POST(req: Request): Promise<Response> {
   const startedAt = Date.now();
-  const { env } = await getCloudflareContext({ async: true });
+  const { env, ctx } = await getCloudflareContext({ async: true });
 
   // Per-stage wall-clock breakdown returned to the client in every
   // success response under `timings`. Lets the Mac log a unified
@@ -266,10 +266,12 @@ export async function POST(req: Request): Promise<Response> {
 
   upstreamStatus = output.upstreamStatus;
 
-  // ---- polish + debit + cost (shared with the streaming path) -------------
-  // finalizeTranscription runs the optional polish pass, debits credits on
-  // the idempotent (org, transcription id) key, and computes cost. Polish
-  // is skipped when the client sends `X-Polish-Skip: true` (fast mode).
+  // ---- polish + cost (shared with the streaming path) ---------------------
+  // finalizeTranscription runs the optional polish pass (gated for short
+  // inputs, capped by a latency budget) and computes cost. The credit debit
+  // is returned as a deferred `settle()` we run AFTER responding — it's
+  // 23–194ms of D1 writes the user shouldn't wait on. Idempotency (unique
+  // (org, transcription id)) and the balance pre-check above still hold.
   const polishSkipRequested = boolHeader(req.headers.get("X-Polish-Skip")) ?? false;
   const result = await finalizeTranscription({
     env: env as unknown as Parameters<typeof finalizeTranscription>[0]["env"],
@@ -286,37 +288,19 @@ export async function POST(req: Request): Promise<Response> {
     startedAt,
   });
 
-  // Surface analytics fields captured inside finalize (0 on duplicate).
+  // Surface analytics fields captured inside finalize.
   audioMs = result.audioMs;
   upstreamMc = result.upstreamMc;
   retailMc = result.retailMc;
   timings.polish = result.timings.polish;
-  timings.debit = result.timings.debit;
+  // Debit is deferred past the response now; keep the `debit` key (same
+  // value as polish, i.e. a 0ms delta) because shipped Mac builds decode
+  // WorkerTimings with all fields required — dropping it would fail the
+  // whole response decode on older clients.
+  timings.debit = result.timings.polish;
 
-  if (result.debitKind === "insufficient") {
-    // Should be rare given the pre-check above, but possible if balance
-    // raced. Treat as 402 — the transcript is effectively lost.
-    return finish(
-      "insufficient_credit",
-      json({ error: "insufficient_credit", balanceMillicents: result.balanceMillicents }, 402)
-    );
-  }
-
-  if (result.debitKind === "duplicate") {
-    // Idempotent replay — return the transcript we already have from this
-    // call (not from the stored row; we never persist transcript text).
-    return finish("ok", json({
-      text: result.finalText,
-      audioSeconds: result.audioSeconds,
-      provider: providerId,
-      model,
-      polishApplied: result.polishApplied,
-      polishErrorReason: result.polishErrorReason,
-      usageEventId: result.usageEventId,
-      duplicate: true,
-      timings: { ...timings, total: Date.now() - startedAt },
-    }));
-  }
+  // Settle (debit + rollups) after the response is on the wire.
+  ctx.waitUntil(result.settle());
 
   return finish("ok", json({
     text: result.finalText,
@@ -333,19 +317,19 @@ export async function POST(req: Request): Promise<Response> {
     polishApplied: result.polishApplied,
     // Set when polish ran but the result wasn't used — surfaces the
     // failure mode to the client so the Mac log shows e.g.
-    // `rejected: output_too_long` or `assistant_preamble: starts with
-    // "here is"`. Helps debug why polishApplied=false when the user
-    // expected it to be true.
+    // `rejected: output_too_long`, `skipped_short_input`, or
+    // `budget_exceeded_500ms`. Helps debug why polishApplied=false when
+    // the user expected it to be true.
     polishErrorReason: result.polishErrorReason,
-    usageEventId: result.usageEventId,
-    newBalanceMillicents: result.newBalanceMillicents,
-    autoTopupTriggered: result.autoTopupTriggered,
+    // usageEventId / newBalanceMillicents / autoTopupTriggered are no
+    // longer returned — the debit hasn't happened yet when we respond.
+    // Shipped clients decode them as optionals and only log them.
     // Per-stage cumulative ms relative to request start. `auth` is the
     // user/org lookup, `body` adds reading the audio bytes off the wire,
     // `upstream` adds the STT provider round-trip, `polish` adds the
     // optional LLM pass (==`upstream` if polish was skipped), `debit`
-    // adds the credit-ledger write, `total` is end-to-end Worker time.
-    // Compute deltas client-side: e.g. upstream cost = upstream - body.
+    // ==`polish` now that settlement is deferred, `total` is end-to-end
+    // Worker time. Compute deltas client-side.
     timings: { ...timings, total: Date.now() - startedAt },
   }));
 }

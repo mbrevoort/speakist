@@ -276,6 +276,7 @@ async function handleTranscribeStreamInner(
     if (finalized) return;
     finalized = true;
     const rawText = finalSegments.join(" ").replace(/\s+/g, " ").trim();
+    let settle: (() => Promise<unknown>) | null = null;
     try {
       const result = await finalizeTranscription({
         env,
@@ -291,40 +292,32 @@ async function handleTranscribeStreamInner(
         polishSkip,
         startedAt,
       });
-      if (result.debitKind === "insufficient") {
-        emitAnalytics("insufficient_credit", { audioMs: result.audioMs, upstreamStatus: 101 });
-        safeSend(
-          server,
-          JSON.stringify({
-            type: "error",
-            error: "insufficient_credit",
-            balanceMillicents: result.balanceMillicents,
-          })
-        );
-      } else {
-        emitAnalytics("ok", {
-          audioMs: result.audioMs,
-          upstreamMc: result.upstreamMc,
-          retailMc: result.retailMc,
-          upstreamStatus: 101,
-        });
-        safeSend(
-          server,
-          JSON.stringify({
-            type: "result",
-            text: result.finalText,
-            rawText: result.rawText,
-            audioSeconds: result.audioSeconds,
-            provider: "deepgram",
-            model,
-            polishApplied: result.polishApplied,
-            polishErrorReason: result.polishErrorReason,
-            usageEventId: result.usageEventId,
-            newBalanceMillicents: result.newBalanceMillicents,
-            duplicate: result.debitKind === "duplicate",
-          })
-        );
-      }
+      settle = result.settle;
+      emitAnalytics("ok", {
+        audioMs: result.audioMs,
+        upstreamMc: result.upstreamMc,
+        retailMc: result.retailMc,
+        upstreamStatus: 101,
+      });
+      // Send the terminal result BEFORE settling — the Mac pastes on this
+      // message, and the debit is 23–194ms of D1 writes it shouldn't wait
+      // on. The balance pre-check at upgrade time still gates empty
+      // wallets; settlement dedup/insufficiency is handled server-side.
+      // (usageEventId / newBalanceMillicents are no longer sent — the
+      // debit hasn't happened yet; shipped clients decode them optionally.)
+      safeSend(
+        server,
+        JSON.stringify({
+          type: "result",
+          text: result.finalText,
+          rawText: result.rawText,
+          audioSeconds: result.audioSeconds,
+          provider: "deepgram",
+          model,
+          polishApplied: result.polishApplied,
+          polishErrorReason: result.polishErrorReason,
+        })
+      );
     } catch (err) {
       console.error("[transcribe/ws] finalize failed:", err);
       emitAnalytics("internal_error", { upstreamStatus: 101 });
@@ -332,6 +325,10 @@ async function handleTranscribeStreamInner(
     } finally {
       safeClose(server);
       safeClose(dg);
+      // Settle (debit + rollups) after the sockets are done. We're inside
+      // ctx.waitUntil (see the close handlers), so the isolate stays alive
+      // until this completes; markDone() releases the outer waitUntil.
+      if (settle) await settle();
       markDone();
     }
   }

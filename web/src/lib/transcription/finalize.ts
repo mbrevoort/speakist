@@ -4,10 +4,19 @@
 //   * the streaming WebSocket proxy (relay audio to Deepgram live).
 //
 // Once we have a raw transcript + a provider-reported audio duration, the
-// tail is identical: optional polish pass, credit debit (idempotent on the
-// client-supplied transcription id), PostHog analytics for the polish LLM,
-// and cost computation. Keeping it in one place means the streaming path
-// can't silently drift from batch on billing or polish behavior.
+// tail is identical: optional polish pass, cost computation, and a deferred
+// "settlement" (credit debit + rollups). Keeping it in one place means the
+// streaming path can't silently drift from batch on billing or polish
+// behavior.
+//
+// Latency design: only polish + cost computation run on the response
+// critical path. The debit (3–5 D1 writes, measured 23–194ms) is returned
+// as a `settle()` closure the caller runs AFTER responding — via
+// `ctx.waitUntil()` on the batch route, and after the terminal result
+// message on the streaming path. Polish itself is gated (skipped for very
+// short inputs, where it was observed to be rejected anyway) and budgeted
+// (raw text wins if the LLM is slower than the budget), which caps the
+// 200–1100ms tail measured in production logs.
 
 import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -18,6 +27,18 @@ import { getProviderPricing, computeCost } from "@/lib/transcription/pricing";
 import { captureAIGeneration } from "@/lib/posthog/server";
 import type { ProviderKeyEnv } from "@/lib/transcription/secrets";
 import type { ProviderId } from "@/lib/transcription/types";
+
+/** Transcripts shorter than this skip polish entirely. Measured: short
+ *  inputs (14–27 chars) consistently had polish REJECTED (output_too_long
+ *  anti-inflation guard) after burning 200–350ms — pure wasted latency.
+ *  Short dictations rarely need cleanup anyway. */
+export const POLISH_MIN_INPUT_CHARS = 40;
+
+/** Max time to wait for the polish LLM before returning the raw transcript.
+ *  Measured polish latency: median ~340ms with a 1000ms+ tail. 500ms keeps
+ *  the typical polish while capping the tail; the losing LLM call is simply
+ *  ignored (not billed to latency — a few orphaned tokens at Groq). */
+export const POLISH_BUDGET_MS = 500;
 
 export interface PolishPrefs {
   polishEnabled: boolean;
@@ -68,10 +89,16 @@ export interface FinalizeArgs {
   startedAt: number;
 }
 
-export interface FinalizeResult {
+/** Outcome of the deferred debit — see `FinalizeResult.settle`. */
+export interface SettleResult {
   debitKind: "ok" | "duplicate" | "insufficient";
-  /** Present only when debitKind === "insufficient". */
+  usageEventId?: string;
+  newBalanceMillicents?: number;
+  autoTopupTriggered?: boolean;
   balanceMillicents?: number;
+}
+
+export interface FinalizeResult {
   /** Post-polish transcript (=== rawText when polish disabled/skipped). */
   finalText: string;
   /** Pre-polish STT output; clients persist this for feedback reports. */
@@ -80,18 +107,19 @@ export interface FinalizeResult {
   audioSeconds: number;
   polishApplied: boolean;
   polishErrorReason?: string;
-  usageEventId?: string;
-  newBalanceMillicents?: number;
-  autoTopupTriggered?: boolean;
-  /** Analytics: computed cost. 0 on duplicate/insufficient (as before). */
+  /** Analytics: computed cost (always computed, even if the later debit
+   *  turns out to be a duplicate — analytics wants the request's cost). */
   upstreamMc: number;
   retailMc: number;
   /** Analytics: round(providerSeconds * 1000). */
   audioMs: number;
-  processingMs: number;
-  /** Cumulative ms from startedAt at the polish + debit checkpoints, so
-   *  the batch route can keep its per-stage `timings` breakdown. */
-  timings: { polish: number; debit: number };
+  /** Cumulative ms from startedAt at the polish checkpoint. */
+  timings: { polish: number };
+  /** Deferred settlement: the idempotent credit debit + rollups. Callers
+   *  MUST run this exactly once, off the response path — `ctx.waitUntil()`
+   *  on the batch route; after the terminal result message on streaming.
+   *  Never throws (logs + returns a kind instead). */
+  settle: () => Promise<SettleResult>;
 }
 
 function wordCount(s: string): number {
@@ -101,10 +129,10 @@ function wordCount(s: string): number {
 }
 
 /**
- * Run polish (optional) + debit + cost computation for a completed
- * transcription. Never throws for polish failures — they fall through with
- * the raw text. Returns everything both response builders need; mapping to
- * HTTP JSON vs a WebSocket terminal message is the caller's job.
+ * Run polish (gated + budgeted) and cost computation for a completed
+ * transcription, returning everything the response needs plus a deferred
+ * `settle()` for the debit. Never throws for polish failures — they fall
+ * through with the raw text.
  */
 export async function finalizeTranscription(args: FinalizeArgs): Promise<FinalizeResult> {
   const {
@@ -132,49 +160,65 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
   let finalText = rawText;
   let polishApplied = false;
   let polishErrorReason: string | undefined;
+  const trimmed = rawText.trim();
   try {
-    if (polishPrefs?.polishEnabled && rawText.trim().length > 0 && !polishSkip) {
-      const polish = await runPolish(
-        env,
-        orgId,
-        rawText,
-        (polishPrefs.polishMode as PolishMode) ?? "prescriptive"
-      );
-      // Metadata-only log (no content) so operators can confirm the right
-      // prompt variant ran + whether output length looks sane.
-      console.info(
-        `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
-          `mode=${polishPrefs.polishMode} ` +
-          `inChars=${rawText.length} outChars=${polish.text.length} ` +
-          `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
-          `latencyMs=${polish.latencyMs}` +
-          (polish.errorReason ? ` reason=${polish.errorReason}` : "")
-      );
-      if (polish.applied) {
-        finalText = polish.text;
-        polishApplied = true;
+    if (polishPrefs?.polishEnabled && trimmed.length > 0 && !polishSkip) {
+      if (trimmed.length < POLISH_MIN_INPUT_CHARS) {
+        // Short inputs: polish is overwhelmingly rejected by the
+        // anti-inflation guard on these — skip the 200–350ms round-trip.
+        polishErrorReason = "skipped_short_input";
       } else {
-        polishErrorReason = polish.errorReason;
+        const mode = (polishPrefs.polishMode as PolishMode) ?? "prescriptive";
+        // Race polish against the latency budget. On timeout we return the
+        // raw transcript; the losing LLM call resolves into the void.
+        const budget = new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), POLISH_BUDGET_MS);
+        });
+        const polish = await Promise.race([runPolish(env, orgId, rawText, mode), budget]);
+        if (polish === null) {
+          polishErrorReason = `budget_exceeded_${POLISH_BUDGET_MS}ms`;
+          console.info(
+            `[transcribe] polish skipped mode=${polishPrefs.polishMode} ` +
+              `inChars=${rawText.length} reason=${polishErrorReason}`
+          );
+        } else {
+          // Metadata-only log (no content) so operators can confirm the
+          // right prompt variant ran + whether output length looks sane.
+          console.info(
+            `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
+              `mode=${polishPrefs.polishMode} ` +
+              `inChars=${rawText.length} outChars=${polish.text.length} ` +
+              `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
+              `latencyMs=${polish.latencyMs}` +
+              (polish.errorReason ? ` reason=${polish.errorReason}` : "")
+          );
+          if (polish.applied) {
+            finalText = polish.text;
+            polishApplied = true;
+          } else {
+            polishErrorReason = polish.errorReason;
+          }
+          captureAIGeneration({
+            distinctId: userId,
+            traceId: transcriptionClientId,
+            provider: "groq",
+            model: POLISH_MODEL,
+            inputTokens: polish.promptTokens,
+            outputTokens: polish.completionTokens,
+            latencySeconds: polish.latencyMs / 1000,
+            httpStatus: polish.applied ? 200 : 0,
+            isError: !polish.applied,
+            groups: { organization: orgId },
+            extra: {
+              polish_mode: polishPrefs.polishMode,
+              polish_applied: polish.applied,
+              polish_error_reason: polish.errorReason,
+              input_chars: rawText.length,
+              output_chars: polish.text.length,
+            },
+          });
+        }
       }
-      captureAIGeneration({
-        distinctId: userId,
-        traceId: transcriptionClientId,
-        provider: "groq",
-        model: POLISH_MODEL,
-        inputTokens: polish.promptTokens,
-        outputTokens: polish.completionTokens,
-        latencySeconds: polish.latencyMs / 1000,
-        httpStatus: polish.applied ? 200 : 0,
-        isError: !polish.applied,
-        groups: { organization: orgId },
-        extra: {
-          polish_mode: polishPrefs.polishMode,
-          polish_applied: polish.applied,
-          polish_error_reason: polish.errorReason,
-          input_chars: rawText.length,
-          output_chars: polish.text.length,
-        },
-      });
     } else if (polishSkip && polishPrefs?.polishEnabled) {
       polishErrorReason = "skipped_by_client";
     }
@@ -185,73 +229,73 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
   }
   const polishAt = Date.now() - startedAt;
 
-  // ---- debit ---------------------------------------------------------------
-  const processingMs = Date.now() - startedAt;
-  const debit = await debitForAudioTranscription({
-    orgId,
-    userId,
-    transcriptionClientId,
-    providerId,
-    model,
-    audioSeconds: audioSecondsForBilling,
-    // Billed on the final (post-polish) word count so the dashboard shows
-    // what the user actually got. Billing math itself is duration × rate.
-    wordCount: wordCount(finalText),
-    polishApplied,
-    processingMs,
-  });
-  const debitAt = Date.now() - startedAt;
+  // ---- cost (cheap cached read; needed for analytics at response time) ----
+  let upstreamMc = 0;
+  let retailMc = 0;
+  try {
+    const pricing = await getProviderPricing(providerId, model);
+    if (pricing) {
+      const costs = computeCost(pricing, audioSecondsForBilling);
+      upstreamMc = costs.upstreamMc;
+      retailMc = costs.retailMc;
+    }
+  } catch (err) {
+    console.warn("[transcribe] pricing read failed:", err);
+  }
 
-  const base = {
+  // ---- deferred settlement (debit + rollups) -------------------------------
+  const settle = async (): Promise<SettleResult> => {
+    try {
+      const processingMs = Date.now() - startedAt;
+      const debit = await debitForAudioTranscription({
+        orgId,
+        userId,
+        transcriptionClientId,
+        providerId,
+        model,
+        audioSeconds: audioSecondsForBilling,
+        // Billed on the final (post-polish) word count so the dashboard
+        // shows what the user actually got. Billing math is duration × rate.
+        wordCount: wordCount(finalText),
+        polishApplied,
+        processingMs,
+      });
+      if (debit.kind === "insufficient") {
+        // Rare: balance raced negative between the route's pre-check and
+        // now. The user already has their text; we just couldn't charge.
+        console.warn(
+          `[transcribe] deferred debit found insufficient balance ` +
+            `org=${orgId} balance=${debit.balanceMillicents}mc`
+        );
+        return { debitKind: "insufficient", balanceMillicents: debit.balanceMillicents };
+      }
+      if (debit.kind === "duplicate") {
+        return { debitKind: "duplicate", usageEventId: debit.usageEventId };
+      }
+      return {
+        debitKind: "ok",
+        usageEventId: debit.usageEventId,
+        newBalanceMillicents: debit.newBalanceMillicents,
+        autoTopupTriggered: debit.autoTopupTriggered,
+      };
+    } catch (err) {
+      // Never let settlement failures surface — the transcript already
+      // shipped. Unbilled usage is preferable to a user-visible error.
+      console.error("[transcribe] settle failed:", err);
+      return { debitKind: "insufficient" };
+    }
+  };
+
+  return {
     finalText,
     rawText,
     audioSeconds,
     polishApplied,
     polishErrorReason,
-    audioMs,
-    processingMs,
-    timings: { polish: polishAt, debit: debitAt },
-  };
-
-  if (debit.kind === "insufficient") {
-    return {
-      ...base,
-      debitKind: "insufficient",
-      balanceMillicents: debit.balanceMillicents,
-      upstreamMc: 0,
-      retailMc: 0,
-    };
-  }
-
-  if (debit.kind === "duplicate") {
-    // Idempotent replay — keep cost fields at 0 as the batch route did
-    // (it returned before computing costs on the duplicate branch).
-    return {
-      ...base,
-      debitKind: "duplicate",
-      usageEventId: debit.usageEventId,
-      upstreamMc: 0,
-      retailMc: 0,
-    };
-  }
-
-  // ok — compute cost for analytics.
-  let upstreamMc = 0;
-  let retailMc = 0;
-  const pricing = await getProviderPricing(providerId, model);
-  if (pricing) {
-    const costs = computeCost(pricing, audioSecondsForBilling);
-    upstreamMc = costs.upstreamMc;
-    retailMc = costs.retailMc;
-  }
-
-  return {
-    ...base,
-    debitKind: "ok",
-    usageEventId: debit.usageEventId,
-    newBalanceMillicents: debit.newBalanceMillicents,
-    autoTopupTriggered: debit.autoTopupTriggered,
     upstreamMc,
     retailMc,
+    audioMs,
+    timings: { polish: polishAt },
+    settle,
   };
 }
