@@ -284,11 +284,11 @@ final class ShortcutManager {
         // instead of being held off until the engine is live.
         env.hudController.showPreparing()
 
-        // Pause any background media (Spotify/YouTube/etc.) — still on
-        // key-down, so it's quiet before the user starts speaking. No-op when
-        // the feature is off or nothing is playing. Resumed in
-        // finishRecording() (and the start-failure path below).
-        env.mediaController.pauseIfPlaying()
+        // Duck background audio (music/video/etc.) — still on key-down, so
+        // it's quiet before the user starts speaking. No-op when the feature
+        // is off. Volume is restored in finishRecording() (and the
+        // start-failure path below).
+        env.audioDucker.duck()
 
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
@@ -307,8 +307,8 @@ final class ShortcutManager {
                 self.env.audioRecorder.onPCMChunk = nil
                 self.env.transcriptionService.endStreamingSession()
                 // Engine never came up → finishRecording() won't run, so
-                // resume media here (no-op if we didn't pause).
-                self.env.mediaController.resume()
+                // restore volume here (no-op if we didn't duck).
+                self.env.audioDucker.restore()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -343,14 +343,14 @@ final class ShortcutManager {
         // contract: set before start, clear after stop).
         let recordingResult = env.audioRecorder.stop()
         env.audioRecorder.onPCMChunk = nil
-        // Recording is over — resume background media now (at key-release),
+        // Recording is over — restore the output volume now (at key-release),
         // regardless of what happens with the transcription afterward. No-op
-        // if we didn't pause. This is the choke point for ShortcutManager's
+        // if we didn't duck. This is the choke point for ShortcutManager's
         // end paths (normal release, toggle stop, max-duration cutoff,
         // finish-on-ready, and the sub-minimum / failed-stop discards below);
-        // the engine-start-failure branch above and QuickDictate resume on
+        // the engine-start-failure branch above and QuickDictate restore on
         // their own paths.
-        env.mediaController.resume()
+        env.audioDucker.restore()
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()

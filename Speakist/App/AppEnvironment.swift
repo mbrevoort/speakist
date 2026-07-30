@@ -13,7 +13,7 @@ final class AppEnvironment: ObservableObject {
     let correctionStore: CorrectionStore
     let usageTracker: UsageTracker
     let audioRecorder: AudioRecorder
-    let mediaController: MediaController
+    let audioDucker: AudioDucker
     let cursorInserter: CursorInserter
     let focusedFieldProbe: FocusedFieldProbe
     let transcriptionService: TranscriptionService
@@ -38,7 +38,7 @@ final class AppEnvironment: ObservableObject {
         self.correctionStore = CorrectionStore()
         self.usageTracker = UsageTracker(historyStore: historyStore)
         self.audioRecorder = AudioRecorder(preferences: prefs, deviceMonitor: deviceMonitor)
-        self.mediaController = MediaController(preferences: prefs)
+        self.audioDucker = AudioDucker(preferences: prefs)
         self.cursorInserter = CursorInserter()
         self.focusedFieldProbe = FocusedFieldProbe()
         self.hudController = HUDController(preferences: prefs)

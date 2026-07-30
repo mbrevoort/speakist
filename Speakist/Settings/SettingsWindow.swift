@@ -223,9 +223,30 @@ struct GeneralSettingsView: View {
                 Toggle("Show overlay UI while recording", isOn: Binding(
                     get: { prefs.showHUD },
                     set: { prefs.showHUD = $0 }))
-                Toggle("Pause background media while dictating", isOn: Binding(
-                    get: { prefs.pauseMediaDuringDictation },
-                    set: { prefs.pauseMediaDuringDictation = $0 }))
+                Toggle("Automatically lower the volume of other audio while dictating", isOn: Binding(
+                    get: { prefs.duckAudioDuringDictation },
+                    set: { prefs.duckAudioDuringDictation = $0 }))
+                // Nested sub-setting under the toggle above: the label is
+                // indented and secondary (grayed) so it reads as a child
+                // option; the row spans full width so the control on the right
+                // aligns with the toggle's control above it.
+                HStack {
+                    Text("Reduce volume level")
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 20)
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { prefs.audioDuckLevel },
+                        set: { prefs.audioDuckLevel = $0 })) {
+                        ForEach(AudioDuckLevel.allCases) { level in
+                            Text(level.label).tag(level)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                .disabled(!prefs.duckAudioDuringDictation)
             }
         }
         .formStyle(.grouped)

@@ -46,7 +46,8 @@ final class Preferences: ObservableObject {
         static let apiBaseURL = "apiBaseURL"
         static let useTranscribeProxy = "useTranscribeProxy"
         static let useStreamingTranscription = "useStreamingTranscription"
-        static let pauseMediaDuringDictation = "pauseMediaDuringDictation"
+        static let duckAudioDuringDictation = "duckAudioDuringDictation"
+        static let audioDuckLevel = "audioDuckLevel"
         static let polishEnabled = "polishEnabled"
         static let polishMode = "polishMode"
         static let polishSystemPrompt = "polishSystemPrompt"
@@ -158,9 +159,11 @@ final class Preferences: ObservableObject {
             // Mac falls back to the batch upload automatically.
             //   defaults write <bundleID> useStreamingTranscription 1
             K.useStreamingTranscription: false,
-            // Auto-pause background media (Spotify/YouTube/etc.) while a
-            // dictation is recording, resume when it ends. On by default.
-            K.pauseMediaDuringDictation: true,
+            // Lower (duck) background audio while a dictation is recording,
+            // restore it when the recording ends. On by default, ducking to
+            // 2% (see audioDuckLevel).
+            K.duckAudioDuringDictation: true,
+            K.audioDuckLevel: AudioDuckLevel.twoPercent.rawValue,
             // Polish prefs are authoritative on the backend (source of
             // truth = /api/me/polish). These local values are a cache so
             // Settings can render instantly on launch without blocking on
@@ -307,13 +310,20 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: K.useStreamingTranscription); objectWillChange.send() }
     }
 
-    /// Automatically pause whatever media is playing (Spotify, Apple Music, a
-    /// YouTube tab, etc.) when a dictation recording starts, and resume it
-    /// when the recording ends. On by default. User-overridable via
-    /// `defaults write <bundleID> pauseMediaDuringDictation 0`.
-    var pauseMediaDuringDictation: Bool {
-        get { defaults.bool(forKey: K.pauseMediaDuringDictation) }
-        set { defaults.set(newValue, forKey: K.pauseMediaDuringDictation); objectWillChange.send() }
+    /// Lower the system output volume (duck background audio — music, video,
+    /// anything) while a dictation is recording, then restore it when the
+    /// recording ends. On by default. User-overridable via
+    /// `defaults write <bundleID> duckAudioDuringDictation 0`.
+    var duckAudioDuringDictation: Bool {
+        get { defaults.bool(forKey: K.duckAudioDuringDictation) }
+        set { defaults.set(newValue, forKey: K.duckAudioDuringDictation); objectWillChange.send() }
+    }
+
+    /// How far to lower other audio while dictating (Mute / 2% / 4%). Only
+    /// consulted when `duckAudioDuringDictation` is on. Defaults to 2%.
+    var audioDuckLevel: AudioDuckLevel {
+        get { AudioDuckLevel(rawValue: defaults.string(forKey: K.audioDuckLevel) ?? "") ?? .twoPercent }
+        set { defaults.set(newValue.rawValue, forKey: K.audioDuckLevel); objectWillChange.send() }
     }
 
     // MARK: - Polish prefs (cached from /api/me)

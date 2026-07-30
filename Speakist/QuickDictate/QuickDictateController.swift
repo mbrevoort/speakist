@@ -67,7 +67,7 @@ final class QuickDictateController: ObservableObject {
     private let accountManager: SpeakistAccountManager
     private let audioArchive: AudioArchive
     private let correctionStore: CorrectionStore
-    private let mediaController: MediaController
+    private let audioDucker: AudioDucker
 
     private var levelSubscription: AnyCancellable?
     /// Carried across phases so save() can construct a feedback-ready
@@ -84,7 +84,7 @@ final class QuickDictateController: ObservableObject {
         self.accountManager = env.accountManager
         self.audioArchive = env.audioArchive
         self.correctionStore = env.correctionStore
-        self.mediaController = env.mediaController
+        self.audioDucker = env.audioDucker
     }
 
     /// Begin a recording session. Permission gate first so a revoked
@@ -116,10 +116,10 @@ final class QuickDictateController: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in self?.level = value }
 
-        // Pause background media (Spotify/YouTube/etc.) for the duration of
-        // the recording — same behavior as push-to-talk. No-op when the
-        // feature is off or nothing is playing; resumed in stop()/cancel().
-        mediaController.pauseIfPlaying()
+        // Duck background audio for the duration of the recording — same
+        // behavior as push-to-talk. No-op when the feature is off; volume is
+        // restored in stop()/cancel().
+        audioDucker.duck()
 
         do {
             try await audioRecorder.start()
@@ -127,7 +127,7 @@ final class QuickDictateController: ObservableObject {
         } catch {
             levelSubscription?.cancel()
             levelSubscription = nil
-            mediaController.resume()
+            audioDucker.restore()
             Logger.shared.warn("Quick Dictate start failed: \(error.localizedDescription)")
             phase = .error(message: "Couldn't start recording: \(error.localizedDescription)")
         }
@@ -143,9 +143,9 @@ final class QuickDictateController: ObservableObject {
         level = 0
 
         let stopResult = audioRecorder.stop()
-        // Recording is over — resume background media now, regardless of the
-        // transcription outcome. No-op if we didn't pause.
-        mediaController.resume()
+        // Recording is over — restore the output volume now, regardless of the
+        // transcription outcome. No-op if we didn't duck.
+        audioDucker.restore()
         guard let result = stopResult else {
             phase = .error(message: "Recording produced no audio — try again.")
             return
@@ -273,8 +273,8 @@ final class QuickDictateController: ObservableObject {
         if case .recording = phase {
             audioRecorder.cancel()
         }
-        // Resume media if this session had paused it (no-op otherwise).
-        mediaController.resume()
+        // Restore volume if this session ducked it (no-op otherwise).
+        audioDucker.restore()
         if let tempURL = pendingAudioURL {
             audioArchive.discard(tempURL: tempURL)
             pendingAudioURL = nil
