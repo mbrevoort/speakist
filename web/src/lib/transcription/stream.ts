@@ -177,6 +177,12 @@ async function handleTranscribeStreamInner(
   q.set("sample_rate", "16000");
   q.set("channels", "1");
   q.set("interim_results", "true");
+  // Disable silence-based endpointing. Deepgram's default (~10ms) treats any
+  // mid-sentence pause as end-of-utterance, finalizing + punctuating the
+  // fragment as a complete sentence ("I don't know what." | "We're gonna
+  // do."). Push-to-talk has an explicit end signal — the CloseStream we send
+  // on key-release — so utterance detection is pure downside here.
+  q.set("endpointing", "false");
 
   let deepgram: CfWebSocket | null = null;
   try {
