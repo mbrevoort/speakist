@@ -499,47 +499,27 @@ struct PolishSettingsView: View {
     @EnvironmentObject var env: AppEnvironment
 
     @State private var savingToggle = false
-    @State private var savingMode = false
     @State private var lastError: String?
     @State private var lastSavedAt: Date?
 
     var body: some View {
         Form {
+            // Single behavior since the mode split was retired: Deepgram's
+            // smart formatting covers punctuation/capitalization natively,
+            // so polish is only about what an LLM adds — self-corrections,
+            // stumble cleanup, and paragraph breaks. The server ignores the
+            // legacy mode field.
             Section {
                 Toggle("Polish each transcription", isOn: Binding(
                     get: { prefs.polishEnabled },
                     set: { newValue in saveToggle(newValue) }))
                     .disabled(savingToggle)
 
-                Text("Cleans up every transcription before it lands — adds punctuation, capitalization, and clear grammar fixes.")
+                Text("A second pass that applies your spoken self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
                 Text("Post-transcription polish")
-            }
-
-            // Mode picker. Always visible (even when polish is off) so
-            // a user can configure their preferred mode before flipping
-            // the toggle on. The actions disable when polish is off so
-            // server state stays consistent with the visual.
-            Section {
-                Picker("Mode", selection: Binding(
-                    get: { prefs.polishMode },
-                    set: { saveMode($0) }
-                )) {
-                    Text("Intuitive").tag(SpeakistAPIClient.PolishMode.intuitive)
-                    Text("Prescriptive").tag(SpeakistAPIClient.PolishMode.prescriptive)
-                }
-                .pickerStyle(.segmented)
-                .disabled(!prefs.polishEnabled || savingMode)
-
-                Text(prefs.polishMode == .intuitive
-                     ? "Tries to understand your intent and applies explicit self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}). Best when you talk through a thought and want the polished result."
-                     : "Conservative — only fixes punctuation, capitalization, and clear grammar. Never changes meaning or removes content. Best when you want verbatim with formatting.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("Mode")
             } footer: {
                 if let err = lastError {
                     Text(err).font(.footnote).foregroundColor(.red)
@@ -563,32 +543,6 @@ struct PolishSettingsView: View {
             defer { savingToggle = false }
             do {
                 let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
-                prefs.applyPolishFromServer(
-                    enabled: resp.enabled,
-                    mode: resp.mode,
-                    systemPrompt: resp.systemPrompt,
-                    isCustom: resp.isCustom,
-                    defaultPrompt: resp.defaultPrompt
-                )
-                lastSavedAt = Date()
-            } catch {
-                lastError = "Couldn't save: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func saveMode(_ newValue: SpeakistAPIClient.PolishMode) {
-        guard newValue != prefs.polishMode else { return }
-        savingMode = true
-        lastError = nil
-        Task {
-            defer { savingMode = false }
-            do {
-                let resp = try await env.apiClient.updatePolish(
-                    enabled: nil,
-                    mode: newValue,
-                    systemPrompt: nil
-                )
                 prefs.applyPolishFromServer(
                     enabled: resp.enabled,
                     mode: resp.mode,

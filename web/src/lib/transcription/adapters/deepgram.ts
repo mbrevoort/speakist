@@ -72,7 +72,13 @@ export function buildDeepgramQuery(opts: DeepgramParamOpts): URLSearchParams {
 
 function buildRequest(input: TranscriptionInput, apiKey: string): Request {
   const url = new URL(DEEPGRAM_URL);
-  url.search = buildDeepgramQuery(input).toString();
+  const q = buildDeepgramQuery(input);
+  // Batch-only: paragraph segmentation over the whole clip. The live
+  // streaming API has no paragraph support, so this stays out of
+  // buildDeepgramQuery (which the streaming proxy shares) — streaming
+  // paragraphs come from the polish LLM instead.
+  q.set("paragraphs", "true");
+  url.search = q.toString();
 
   return new Request(url.toString(), {
     method: "POST",
@@ -86,14 +92,24 @@ function buildRequest(input: TranscriptionInput, apiKey: string): Request {
 
 async function parseResponse(res: Response): Promise<TranscriptionOutput> {
   const body = (await res.json()) as DeepgramResponse;
-  const text = body.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? "";
+  const alt = body.results?.channels?.[0]?.alternatives?.[0];
+  // With paragraphs=true Deepgram adds a ready newline-formatted variant of
+  // the transcript alongside the flat one; prefer it, fall back to flat.
+  const text = alt?.paragraphs?.transcript ?? alt?.transcript ?? "";
   const audioSeconds = body.metadata?.duration ?? 0;
-  return { text, audioSeconds };
+  return { text: text.trim(), audioSeconds };
 }
 
 interface DeepgramResponse {
   metadata?: { duration?: number };
-  results?: { channels?: { alternatives?: { transcript?: string }[] }[] };
+  results?: {
+    channels?: {
+      alternatives?: {
+        transcript?: string;
+        paragraphs?: { transcript?: string };
+      }[];
+    }[];
+  };
 }
 
 export const deepgramAdapter: ProviderAdapter = {

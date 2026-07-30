@@ -134,11 +134,14 @@ export async function resolvePromptForMode(mode: PolishMode): Promise<string> {
 /** Groq chat-completions endpoint (OpenAI-compatible). */
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-/** Deliberately cheap + fast. If accuracy proves too low, swap for
- *  `openai/gpt-oss-20b` (strict structured outputs, 1.7× cost) or
- *  `llama-3.3-70b-versatile` (12× cost). Bench against
- *  `web/src/lib/transcription/polish-fixtures.ts` first. */
-export const POLISH_MODEL = "llama-3.1-8b-instant";
+/** gpt-oss-20b replaced llama-3.1-8b-instant: the 8B model's weak
+ *  instruction-following made it "answer" dictations instead of polishing
+ *  them (the anti-answer guards caught these, but each one burned a full
+ *  LLM round-trip for nothing). gpt-oss-20b at reasoning_effort=low is in
+ *  the same latency class on Groq (~1000 TPS, and Groq prompt-caches our
+ *  fixed system prompt) at a negligible absolute cost delta. Bench against
+ *  `web/src/lib/transcription/polish-fixtures.ts` before changing again. */
+export const POLISH_MODEL = "openai/gpt-oss-20b";
 
 /** Milliseconds — polish is bounded because we're blocking the
  *  /api/transcribe response on it. Whisper-compatible timeout budget
@@ -495,13 +498,18 @@ export async function polishWithApiKey(
     // a find/replace-style task, not a generative one — we want it boring.
     temperature: 0.0,
     top_p: 0.1,
-    // Hard cap on output tokens to curtail hallucination. Polish adds
+    // gpt-oss is a reasoning model: keep its deliberation minimal (this is
+    // formatting, not analysis) and keep any reasoning text out of
+    // message.content so parsing stays clean.
+    reasoning_effort: "low",
+    reasoning_format: "hidden",
+    // Hard cap on generated tokens to curtail hallucination. Polish adds
     // punctuation + ~5% length for grammar fixes; a 30% headroom (chars/3)
-    // covers that while making it physically impossible for the model to
-    // emit a long preamble or summary. Floor at 96 so very short inputs
-    // still have room for punctuation on a multi-sentence thought; ceiling
-    // at 1024 handles long dictations.
-    max_tokens: Math.max(96, Math.min(1024, Math.ceil(text.length / 3))),
+    // covers the visible output. On top of that, reasoning tokens count
+    // against max_tokens even when hidden — the +192 reserve keeps a
+    // truncated low-effort think from starving the actual answer. Floor
+    // raised accordingly; ceiling handles long dictations.
+    max_tokens: Math.max(288, Math.min(1536, 192 + Math.ceil(text.length / 3))),
     // Belt to the prefill suspenders — if the model emits the closing
     // sentinel we stop generation there. Bounds tail latency on the
     // odd case where the model wanders past the close.

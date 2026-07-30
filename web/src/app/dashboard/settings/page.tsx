@@ -13,7 +13,6 @@ import { requireUser } from "@/lib/authz";
 import { getCurrentOrgForUser } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { orgMembers, users, vocabularyEntries } from "@/lib/db/schema";
-import type { PolishMode } from "@/lib/transcription/polish";
 import { SettingsClient } from "./settings-client";
 
 export const metadata = { title: "Settings — Speakist" };
@@ -38,13 +37,10 @@ export default async function SettingsPage() {
   const [polishRow] = await db
     .select({
       enabled: users.polishEnabled,
-      mode: users.polishMode,
     })
     .from(users)
     .where(eq(users.id, user.id))
     .limit(1);
-
-  const polishMode: PolishMode = (polishRow?.mode as PolishMode) ?? "prescriptive";
 
   // Live (non-tombstoned) vocabulary entries for this user, newest-used
   // first. Same row scope the Mac app fetches via GET /api/vocabulary.
@@ -80,7 +76,6 @@ export default async function SettingsPage() {
         isSoleOwner={isSoleOwner}
         role={org.role}
         polishEnabled={!!polishRow?.enabled}
-        polishMode={polishMode}
         vocabEntries={vocabRows}
       />
     </div>

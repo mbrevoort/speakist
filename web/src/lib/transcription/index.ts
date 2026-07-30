@@ -1,15 +1,16 @@
 // Transcription dispatcher — picks an adapter, fetches the upstream, maps
 // errors to typed failures. Called by /api/transcribe on every request.
 //
-// Phase A ships with only the Deepgram adapter registered. Phase B+ adds
-// Groq/OpenAI/xAI by dropping a new file in adapters/ and registering it
+// Deepgram is the only STT adapter. Groq Whisper was retired (Deepgram
+// nova-3 outperformed it and is the default for every language); note the
+// `groq` PROVIDER ID still exists as a key namespace because the polish
+// LLM runs on Groq. A future provider = new file in adapters/ + an entry
 // in `ADAPTERS` below.
 //
 // Dispatch does NOT handle billing or analytics — that's the route
 // handler's job, so it can log analytics even on dispatch errors.
 
 import { deepgramAdapter } from "./adapters/deepgram";
-import { groqAdapter } from "./adapters/groq";
 import { resolveProviderKey, type ProviderKeyEnv } from "./secrets";
 import {
   TranscriptionDispatchError,
@@ -26,9 +27,14 @@ const UPSTREAM_TIMEOUT_MS = 25_000;
 
 const ADAPTERS: Partial<Record<ProviderId, ProviderAdapter>> = {
   deepgram: deepgramAdapter,
-  groq: groqAdapter,
-  // Phase C adds: openai: openaiAdapter, xai: xaiAdapter
 };
+
+/** Provider IDs with a live STT adapter. The allow-list parser validates
+ *  against this (not the full PROVIDER_IDS key namespace) so a stale
+ *  `groq/…` allow-list entry can't route to a provider with no adapter. */
+export function isSupportedSttProvider(providerId: ProviderId): boolean {
+  return providerId in ADAPTERS;
+}
 
 export function getAdapter(providerId: ProviderId): ProviderAdapter {
   const adapter = ADAPTERS[providerId];

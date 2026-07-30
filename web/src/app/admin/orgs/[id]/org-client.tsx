@@ -328,8 +328,8 @@ function GroqOverrideCard({
 
   return (
     <Card
-      title="Groq key override"
-      description="Point this workspace's Groq Whisper transcriptions at their own Groq project. Usage is still billed through our credit ledger at retail; the provider-side cost goes to them."
+      title="Groq key override (polish LLM)"
+      description="Point this workspace's polish LLM calls at their own Groq project. (Groq is no longer an STT provider — this key only powers the post-transcription polish pass.)"
       accent="plum"
       icon={<KeyRound className="h-4 w-4" />}
     >

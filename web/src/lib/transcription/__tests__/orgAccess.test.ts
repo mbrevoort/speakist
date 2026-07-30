@@ -60,7 +60,7 @@ describe("resolveProviderForOrg", () => {
 
   it("uses the language default when it's present in the allow-list", async () => {
     const org = await makeOrg();
-    await setAllowList(org.id, ["deepgram/nova-3", "groq/whisper-large-v3-turbo"]);
+    await setAllowList(org.id, ["deepgram/nova-3", "deepgram/nova-2"]);
     const resolved = await resolveProviderForOrg(org.id, { language: "en" });
     expect(resolved).toMatchObject({
       providerId: "deepgram",
@@ -69,14 +69,27 @@ describe("resolveProviderForOrg", () => {
     });
   });
 
-  it("falls back to the first allow-list entry to pin an org to Groq", async () => {
+  it("falls back to the first allow-list entry to pin an org to a model", async () => {
+    const org = await makeOrg();
+    await setAllowList(org.id, ["deepgram/nova-2"]);
+    const resolved = await resolveProviderForOrg(org.id, { language: "en" });
+    expect(resolved).toMatchObject({
+      providerId: "deepgram",
+      model: "nova-2",
+      source: "allow_list_fallback",
+    });
+  });
+
+  it("ignores stale entries for retired STT providers (groq) and uses the default", async () => {
+    // The 0024 migration strips these, but any straggler (e.g. an env the
+    // migration hasn't reached) must not route to an adapter-less provider.
     const org = await makeOrg();
     await setAllowList(org.id, ["groq/whisper-large-v3-turbo"]);
     const resolved = await resolveProviderForOrg(org.id, { language: "en" });
     expect(resolved).toMatchObject({
-      providerId: "groq",
-      model: "whisper-large-v3-turbo",
-      source: "allow_list_fallback",
+      providerId: "deepgram",
+      model: "nova-3",
+      source: "language_default",
     });
   });
 });

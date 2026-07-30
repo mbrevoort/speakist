@@ -35,10 +35,11 @@ import type { ProviderId } from "@/lib/transcription/types";
 export const POLISH_MIN_INPUT_CHARS = 40;
 
 /** Max time to wait for the polish LLM before returning the raw transcript.
- *  Measured polish latency: median ~340ms with a 1000ms+ tail. 500ms keeps
- *  the typical polish while capping the tail; the losing LLM call is simply
- *  ignored (not billed to latency — a few orphaned tokens at Groq). */
-export const POLISH_BUDGET_MS = 500;
+ *  Benched against gpt-oss-20b (reasoning_effort=low): p50 ~410ms,
+ *  p95 ~750ms — 800ms admits nearly every good polish while still capping
+ *  the old 1000ms+ tail. The losing LLM call is simply ignored (not billed
+ *  to latency — a few orphaned tokens at Groq). */
+export const POLISH_BUDGET_MS = 800;
 
 export interface PolishPrefs {
   polishEnabled: boolean;
@@ -168,7 +169,12 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
         // anti-inflation guard on these — skip the 200–350ms round-trip.
         polishErrorReason = "skipped_short_input";
       } else {
-        const mode = (polishPrefs.polishMode as PolishMode) ?? "prescriptive";
+        // Polish is single-mode now: always the "intuitive" prompt (self-
+        // correction collapse + paragraphing — polish's unique value; the
+        // old "prescriptive" formatting-only mode is covered natively by
+        // Deepgram smart_format). users.polish_mode + the /api/me/polish
+        // `mode` param remain for older-client compat but are ignored here.
+        const mode: PolishMode = "intuitive";
         // Race polish against the latency budget. On timeout we return the
         // raw transcript; the losing LLM call resolves into the void.
         const budget = new Promise<null>((resolve) => {
@@ -178,7 +184,7 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
         if (polish === null) {
           polishErrorReason = `budget_exceeded_${POLISH_BUDGET_MS}ms`;
           console.info(
-            `[transcribe] polish skipped mode=${polishPrefs.polishMode} ` +
+            `[transcribe] polish skipped mode=${mode} ` +
               `inChars=${rawText.length} reason=${polishErrorReason}`
           );
         } else {
@@ -186,7 +192,7 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
           // right prompt variant ran + whether output length looks sane.
           console.info(
             `[transcribe] polish ${polish.applied ? "applied" : "skipped"} ` +
-              `mode=${polishPrefs.polishMode} ` +
+              `mode=${mode} ` +
               `inChars=${rawText.length} outChars=${polish.text.length} ` +
               `tokens=${polish.promptTokens}/${polish.completionTokens} ` +
               `latencyMs=${polish.latencyMs}` +
@@ -210,7 +216,7 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
             isError: !polish.applied,
             groups: { organization: orgId },
             extra: {
-              polish_mode: polishPrefs.polishMode,
+              polish_mode: mode,
               polish_applied: polish.applied,
               polish_error_reason: polish.errorReason,
               input_chars: rawText.length,

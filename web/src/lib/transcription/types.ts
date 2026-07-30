@@ -10,7 +10,11 @@
 // `PROVIDER_IDS` tuple, new rows in `provider_pricing`. The router doesn't
 // need to change.
 
-/** Canonical set of supported upstream providers. */
+/** Canonical provider-ID namespace. This is the KEY namespace (used by
+ *  `resolveProviderKey` for org/system/env API-key resolution), not the set
+ *  of live STT adapters — `groq` remains here because the polish LLM runs
+ *  on Groq even though Groq STT was retired. For "can this provider
+ *  transcribe?", use `isSupportedSttProvider()` in index.ts. */
 export const PROVIDER_IDS = ["deepgram", "groq", "openai", "xai"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
