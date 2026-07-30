@@ -1,6 +1,34 @@
 import Foundation
 import CoreAudio
 
+/// How far to lower other audio while dictating. Backed by a preference and
+/// surfaced as a segmented control in Settings.
+enum AudioDuckLevel: String, CaseIterable, Identifiable {
+    case mute        // 0%
+    case twoPercent  // 2%
+    case fourPercent // 4%
+
+    var id: String { rawValue }
+
+    /// Volume scalar (0...1) to duck to.
+    var scalar: Float32 {
+        switch self {
+        case .mute: return 0
+        case .twoPercent: return 0.02
+        case .fourPercent: return 0.04
+        }
+    }
+
+    /// Label for the Settings control.
+    var label: String {
+        switch self {
+        case .mute: return "Mute"
+        case .twoPercent: return "2%"
+        case .fourPercent: return "4%"
+        }
+    }
+}
+
 /// Lowers the system output volume while a dictation is recording, then
 /// restores it — so background audio (music, a video, anything) doesn't
 /// compete with the user's voice or bleed into the mic.
@@ -18,9 +46,6 @@ import CoreAudio
 final class AudioDucker {
     private let preferences: Preferences
 
-    /// Very low but not silent, per the desired behavior.
-    private let duckLevel: Float32 = 0.035
-
     /// The device + per-element volumes captured when we ducked, so we can
     /// restore the exact prior levels. Non-nil only while ducked.
     private var duckedDevice: AudioObjectID?
@@ -33,42 +58,61 @@ final class AudioDucker {
     // MARK: - Public API
 
     /// Called when a recording starts: snapshot the current output volume and
-    /// lower it. No-op when the feature is off, when already ducked, or when
-    /// the volume is already at/below the target (never raises it).
+    /// lower it to the configured level. No-op when the feature is off, when
+    /// already ducked, or when the volume is already at/below the target
+    /// (never raises it).
     func duck() {
         guard preferences.duckAudioDuringDictation, duckedDevice == nil else { return }
         guard let device = defaultOutputDevice() else { return }
+        let target = preferences.audioDuckLevel.scalar
 
+        // Discover which channels are settable and read their current levels
+        // FIRST — all the HasProperty / IsPropertySettable / read calls happen
+        // here, before any volume is changed.
         var saved: [(element: UInt32, volume: Float32)] = []
-        var loweredAnything = false
-        for element in volumeElements(device) {
-            guard let current = readVolume(device, element) else { continue }
+        for element in volumeElements(device) where isVolumeSettable(device, element) {
+            guard let current = readVolume(device, element), current > target else { continue }
             saved.append((element, current))
-            if current > duckLevel, setVolume(device, element, duckLevel) {
-                loweredAnything = true
-            }
         }
-        // Only latch as "ducked" if we actually lowered something — otherwise
-        // restore() would have nothing to do and we'd needlessly re-set.
-        guard loweredAnything else { return }
+        guard !saved.isEmpty else { return }
+
+        // Apply all channels *concurrently* so a stereo change lands on both
+        // ears at once. Doing them sequentially — even back-to-back — leaves a
+        // small IPC gap that's audible as the level walking from one ear to
+        // the other, especially on restore.
+        applyConcurrently(device, saved.map { (element: $0.element, volume: target) })
+
         duckedDevice = device
         savedVolumes = saved
-        Logger.shared.info("Audio: ducked output volume for dictation")
+        Logger.shared.info("Audio: ducked output volume for dictation (\(preferences.audioDuckLevel.label))")
     }
 
     /// Called when a recording ends (any path): restore the snapshotted
     /// volume. Idempotent — a no-op if we didn't duck.
     func restore() {
         guard let device = duckedDevice else { return }
-        for saved in savedVolumes {
-            _ = setVolume(device, saved.element, saved.volume)
-        }
+        let saved = savedVolumes
         duckedDevice = nil
         savedVolumes = []
+        applyConcurrently(device, saved)
         Logger.shared.info("Audio: restored output volume after dictation")
     }
 
     // MARK: - CoreAudio helpers
+
+    /// Write every channel's volume at once. `concurrentPerform` fires the
+    /// per-element writes on separate threads so they reach coreaudiod
+    /// together — the only way to keep a multi-channel change simultaneous on
+    /// a device with no master volume element. Captures only value types (no
+    /// `self`) so it's safe to run off the main actor.
+    private func applyConcurrently(_ device: AudioObjectID, _ items: [(element: UInt32, volume: Float32)]) {
+        guard !items.isEmpty else { return }
+        let elements = items.map { $0.element }
+        let volumes = items.map { $0.volume }
+        DispatchQueue.concurrentPerform(iterations: items.count) { i in
+            AudioDucker.writeVolume(device, elements[i], volumes[i])
+        }
+    }
 
     private func defaultOutputDevice() -> AudioObjectID? {
         var addr = AudioObjectPropertyAddress(
@@ -89,15 +133,8 @@ final class AudioDucker {
         [0, 1, 2].filter { readVolume(device, $0) != nil }
     }
 
-    private func volumeAddress(_ element: UInt32) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyVolumeScalar,
-            mScope: kAudioObjectPropertyScopeOutput,
-            mElement: element)
-    }
-
     private func readVolume(_ device: AudioObjectID, _ element: UInt32) -> Float32? {
-        var addr = volumeAddress(element)
+        var addr = Self.volumeAddress(element)
         guard AudioObjectHasProperty(device, &addr) else { return nil }
         var value: Float32 = 0
         var size = UInt32(MemoryLayout<Float32>.size)
@@ -107,15 +144,28 @@ final class AudioDucker {
         return value
     }
 
-    @discardableResult
-    private func setVolume(_ device: AudioObjectID, _ element: UInt32, _ value: Float32) -> Bool {
-        var addr = volumeAddress(element)
+    private func isVolumeSettable(_ device: AudioObjectID, _ element: UInt32) -> Bool {
+        var addr = Self.volumeAddress(element)
         var settable = DarwinBoolean(false)
-        guard AudioObjectHasProperty(device, &addr),
-              AudioObjectIsPropertySettable(device, &addr, &settable) == noErr,
-              settable.boolValue else { return false }
+        return AudioObjectHasProperty(device, &addr)
+            && AudioObjectIsPropertySettable(device, &addr, &settable) == noErr
+            && settable.boolValue
+    }
+
+    private nonisolated static func volumeAddress(_ element: UInt32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: element)
+    }
+
+    /// Lean write — just `AudioObjectSetPropertyData`, no property checks
+    /// (callers verify settability up front). `nonisolated static` so it can
+    /// run from `concurrentPerform`'s background threads.
+    private nonisolated static func writeVolume(_ device: AudioObjectID, _ element: UInt32, _ value: Float32) {
+        var addr = volumeAddress(element)
         var v = value
-        return AudioObjectSetPropertyData(
-            device, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &v) == noErr
+        _ = AudioObjectSetPropertyData(
+            device, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
     }
 }

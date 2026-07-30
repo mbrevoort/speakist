@@ -47,6 +47,7 @@ final class Preferences: ObservableObject {
         static let useTranscribeProxy = "useTranscribeProxy"
         static let useStreamingTranscription = "useStreamingTranscription"
         static let duckAudioDuringDictation = "duckAudioDuringDictation"
+        static let audioDuckLevel = "audioDuckLevel"
         static let polishEnabled = "polishEnabled"
         static let polishMode = "polishMode"
         static let polishSystemPrompt = "polishSystemPrompt"
@@ -159,8 +160,10 @@ final class Preferences: ObservableObject {
             //   defaults write <bundleID> useStreamingTranscription 1
             K.useStreamingTranscription: false,
             // Lower (duck) background audio while a dictation is recording,
-            // restore it when the recording ends. On by default.
+            // restore it when the recording ends. On by default, ducking to
+            // 2% (see audioDuckLevel).
             K.duckAudioDuringDictation: true,
+            K.audioDuckLevel: AudioDuckLevel.twoPercent.rawValue,
             // Polish prefs are authoritative on the backend (source of
             // truth = /api/me/polish). These local values are a cache so
             // Settings can render instantly on launch without blocking on
@@ -314,6 +317,13 @@ final class Preferences: ObservableObject {
     var duckAudioDuringDictation: Bool {
         get { defaults.bool(forKey: K.duckAudioDuringDictation) }
         set { defaults.set(newValue, forKey: K.duckAudioDuringDictation); objectWillChange.send() }
+    }
+
+    /// How far to lower other audio while dictating (Mute / 2% / 4%). Only
+    /// consulted when `duckAudioDuringDictation` is on. Defaults to 2%.
+    var audioDuckLevel: AudioDuckLevel {
+        get { AudioDuckLevel(rawValue: defaults.string(forKey: K.audioDuckLevel) ?? "") ?? .twoPercent }
+        set { defaults.set(newValue.rawValue, forKey: K.audioDuckLevel); objectWillChange.send() }
     }
 
     // MARK: - Polish prefs (cached from /api/me)
