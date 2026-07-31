@@ -127,7 +127,9 @@ final class QuickDictateController: ObservableObject {
         } catch {
             levelSubscription?.cancel()
             levelSubscription = nil
-            audioMuter.unmute()
+            // The engine may have half-engaged a Bluetooth flip before
+            // failing — same hint as the ShortcutManager failure path.
+            audioMuter.unmute(afterBluetoothInput: audioRecorder.lastInputWasBluetooth)
             Logger.shared.warn("Quick Dictate start failed: \(error.localizedDescription)")
             phase = .error(message: "Couldn't start recording: \(error.localizedDescription)")
         }
@@ -145,7 +147,7 @@ final class QuickDictateController: ObservableObject {
         let stopResult = audioRecorder.stop()
         // Recording is over — unmute other apps' audio now, regardless of
         // the transcription outcome. No-op if we didn't mute.
-        audioMuter.unmute()
+        audioMuter.unmute(afterBluetoothInput: audioRecorder.lastInputWasBluetooth)
         guard let result = stopResult else {
             phase = .error(message: "Recording produced no audio — try again.")
             return
@@ -274,7 +276,7 @@ final class QuickDictateController: ObservableObject {
             audioRecorder.cancel()
         }
         // Unmute if this session muted (no-op otherwise).
-        audioMuter.unmute()
+        audioMuter.unmute(afterBluetoothInput: audioRecorder.lastInputWasBluetooth)
         if let tempURL = pendingAudioURL {
             audioArchive.discard(tempURL: tempURL)
             pendingAudioURL = nil

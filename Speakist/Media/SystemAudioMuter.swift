@@ -96,37 +96,90 @@ final class SystemAudioMuter {
     /// un-mutes. Idempotent — a no-op if we didn't mute (or if a deferred
     /// unmute is already in flight).
     ///
-    /// **Bluetooth deferral.** Releasing the mic sends a Bluetooth headset
-    /// from HFP back to A2DP, but that renegotiation takes 1–2s — and at
-    /// key-release the output is still in HFP. Unmuting immediately lets
-    /// the music back in through the call-grade codec (hollow 8–16kHz
-    /// mono) and then jump to full quality mid-playback, which is jarring.
-    /// So when the output device is a Bluetooth headset still in call mode
-    /// (nominal sample rate ≤ 32kHz), we hold the mute and poll until the
-    /// rate recovers — i.e. A2DP is back — before releasing the tap. Hard
-    /// 4s cap so a stuck renegotiation can never leave audio muted.
-    func unmute() {
+    /// **Bluetooth deferral.** A recording on a Bluetooth mic flips the
+    /// headset into HFP; releasing the mic flips it back to A2DP. That
+    /// renegotiation is triggered by AudioRecorder's *asynchronous* engine
+    /// teardown, so it can land 1–2s AFTER key-release — and it audibly
+    /// interrupts whatever is playing (~0.5s dropout while the route
+    /// rebuilds). Releasing the tap on a single "route looks healthy"
+    /// probe therefore fails ~half the time: music resumes, then the
+    /// renegotiation arrives and cuts it out mid-note (users reported
+    /// exactly this on/off/on pattern). So when the recording used a
+    /// Bluetooth input, `unmute(afterBluetoothInput: true)` holds the mute
+    /// through the whole disturbance window: wait until we've *seen* the
+    /// churn (call-mode sample rate or a device swap) — or waited long
+    /// enough to be confident none is coming — and then require the route
+    /// to hold steady before releasing. Hard 6s cap so a stuck
+    /// renegotiation can never leave audio muted.
+    ///
+    /// - Parameter afterBluetoothInput: true when the just-finished
+    ///   recording captured from a Bluetooth mic (the only case that
+    ///   triggers the HFP flip). Callers pass
+    ///   `AudioRecorder.lastInputWasBluetooth`.
+    func unmute(afterBluetoothInput: Bool) {
         guard engine != nil, pendingUnmute == nil else { return }
-        guard bluetoothOutputStillInCallMode() else {
+        guard afterBluetoothInput,
+              let output = Self.defaultOutputDeviceID(),
+              Self.isBluetoothTransport(output) else {
             releaseTap()
             return
         }
-        Logger.shared.info("Audio: holding mute until Bluetooth output leaves call mode (HFP → A2DP)")
+        Logger.shared.info("Audio: holding mute through Bluetooth HFP → A2DP renegotiation")
         pendingUnmute = Task { @MainActor [weak self] in
-            let deadline = ContinuousClock.now.advanced(by: .seconds(4))
-            while ContinuousClock.now < deadline,
-                  self?.bluetoothOutputStillInCallMode() == true {
+            let start = ContinuousClock.now
+            let totalDeadline = start.advanced(by: Self.unmuteTotalCap)
+            // Phase 1 window: how long we wait to *observe* churn before
+            // concluding none is coming (the flip-back usually starts
+            // within ~2s of the engine teardown).
+            let churnDeadline = start.advanced(by: Self.unmuteChurnWindow)
+            var sawChurn = false
+            var lastDevice: AudioObjectID? = output
+            var stablePolls = 0
+            while ContinuousClock.now < totalDeadline {
+                let device = Self.defaultOutputDeviceID()
+                let deviceChanged = device != lastDevice
+                lastDevice = device
+                if deviceChanged || device.map(Self.inCallMode) == true {
+                    // Renegotiation in progress (or just re-published the
+                    // device). Note it and reset the stability counter —
+                    // release only after the route settles.
+                    sawChurn = true
+                    stablePolls = 0
+                } else if sawChurn || ContinuousClock.now >= churnDeadline {
+                    stablePolls += 1
+                    if stablePolls >= Self.unmuteStablePollsRequired { break }
+                }
                 do {
-                    try await Task.sleep(for: .milliseconds(150))
+                    try await Task.sleep(for: Self.unmutePollInterval)
                 } catch {
                     return // cancelled — a new dictation took the tap over
                 }
             }
-            guard let self, !Task.isCancelled else { return }
+            guard let self else { return }
             self.pendingUnmute = nil
+            let heldMs = Int(start.duration(to: ContinuousClock.now) / .milliseconds(1))
+            Logger.shared.info(
+                "Audio: releasing mute after \(heldMs)ms (churn \(sawChurn ? "observed" : "not observed"))")
             self.releaseTap()
         }
     }
+
+    // MARK: - Unmute timing knobs
+    //
+    // Tuned against real headsets; if users still report an on/off/on
+    // resume, widen the churn window; if the resume feels sluggish on
+    // setups that never renegotiate, shrink it.
+
+    /// How often the deferred unmute re-probes the output route.
+    private static let unmutePollInterval: Duration = .milliseconds(150)
+    /// Consecutive healthy polls required before release (~600ms steady).
+    private static let unmuteStablePollsRequired = 4
+    /// How long to wait for churn to *start* before assuming none is
+    /// coming. The flip-back is triggered by the recorder's async BT
+    /// teardown and typically begins within ~2s of key-release.
+    private static let unmuteChurnWindow: Duration = .milliseconds(2500)
+    /// Absolute ceiling on the hold — audio can never stay muted longer.
+    private static let unmuteTotalCap: Duration = .seconds(6)
 
     /// Destroy the tap (which un-mutes) immediately.
     private func releaseTap() {
@@ -138,16 +191,21 @@ final class SystemAudioMuter {
 
     // MARK: - Bluetooth route probing
 
-    /// True while the default output device is a Bluetooth headset whose
-    /// nominal sample rate is call-grade — the signature of HFP. A2DP
-    /// restores 44.1/48kHz. Non-Bluetooth outputs always return false, so
-    /// wired/built-in setups unmute instantly.
-    private func bluetoothOutputStillInCallMode() -> Bool {
-        guard let device = Self.defaultOutputDeviceID() else { return false }
-        let transport = Self.transportType(of: device)
-        let isBluetooth = transport == kAudioDeviceTransportTypeBluetooth
+    /// True for Bluetooth Classic or LE — the only transports exposed to
+    /// HFP renegotiation churn.
+    private static func isBluetoothTransport(_ device: AudioObjectID) -> Bool {
+        let transport = transportType(of: device)
+        return transport == kAudioDeviceTransportTypeBluetooth
             || transport == kAudioDeviceTransportTypeBluetoothLE
-        guard isBluetooth, let rate = Self.nominalSampleRate(of: device) else { return false }
+    }
+
+    /// True while a Bluetooth device's nominal sample rate is call-grade —
+    /// the signature of HFP. A2DP restores 44.1/48kHz. Non-Bluetooth
+    /// devices always return false.
+    private static func inCallMode(_ device: AudioObjectID) -> Bool {
+        guard isBluetoothTransport(device), let rate = nominalSampleRate(of: device) else {
+            return false
+        }
         return rate <= 32_000
     }
 
