@@ -96,6 +96,11 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: "© 2026 Mike Brevoort. All rights reserved."
         NSMicrophoneUsageDescription: "Speakist listens when you hold your dictation shortcut and transcribes what you say."
+        # Shown by the "System Audio Recording Only" TCC prompt the first
+        # time SystemAudioMuter creates its process tap. The tap only mutes
+        # other apps' audio during a dictation — samples are pulled and
+        # discarded, never read or stored.
+        NSAudioCaptureUsageDescription: "Speakist mutes other apps' audio while you dictate so music and videos don't compete with your voice. Nothing is recorded from them."
         NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor."
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false

@@ -32,13 +32,6 @@ final class ShortcutManager {
     /// finishes the recording so a quick tap doesn't strand the
     /// engine in the recording state with no keyup to terminate it.
     private var releaseRequestedDuringStart = false
-    /// Ducking is deferred briefly past the start cue so the "Tink" plays at
-    /// the user's real volume (the device-volume duck would otherwise quiet
-    /// our own sound too). Tracked so a quick release cancels the pending
-    /// duck before it fires — otherwise it could land after restore() and
-    /// leave the volume stuck low.
-    private var pendingDuck: DispatchWorkItem?
-
     // MARK: - Globe key monitor
     //
     // Push-to-talk on the Globe (🌐 / fn) key can't be wired through
@@ -290,10 +283,14 @@ final class ShortcutManager {
         // instead of being held off until the engine is live.
         env.hudController.showPreparing()
 
-        // NOTE: ducking no longer happens here at key-down — it's scheduled
-        // just after the start cue plays (engine-live below), so the "Tink"
-        // sounds at the user's real volume instead of being quieted by our
-        // own duck. See the pendingDuck scheduling after playStartSound().
+        // Mute other apps' audio at key-down, before the engine starts. On
+        // Bluetooth headsets the engine start flips the device to HFP —
+        // which applies HFP's own (usually louder) stored volume — so the
+        // mute must already be engaged when that happens. The process tap
+        // excludes our own process, so the "Tink" start cue below plays at
+        // full volume regardless. Unmuted in finishRecording() and in the
+        // engine-start-failure branch below.
+        env.audioMuter.mute()
 
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
@@ -312,8 +309,8 @@ final class ShortcutManager {
                 self.env.audioRecorder.onPCMChunk = nil
                 self.env.transcriptionService.endStreamingSession()
                 // Engine never came up → finishRecording() won't run, so
-                // restore volume here (no-op if we didn't duck).
-                self.env.audioDucker.restore()
+                // unmute here (no-op if we didn't mute).
+                self.env.audioMuter.unmute()
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -328,21 +325,6 @@ final class ShortcutManager {
             self.didHitMaxDuration = false
             self.env.hudController.activateRecording()
             self.playStartSound()
-            // Duck background audio for the recording. When the start cue is
-            // enabled, defer the duck briefly so the "Tink" rings out at the
-            // user's real volume — the duck lowers the *device* volume, which
-            // would quiet our own cue too. The work item is cancelled by
-            // finishRecording() so a quick release can't duck after restore.
-            if self.env.preferences.playSounds {
-                let duckWork = DispatchWorkItem { [weak self] in
-                    self?.pendingDuck = nil
-                    self?.env.audioDucker.duck()
-                }
-                self.pendingDuck = duckWork
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: duckWork)
-            } else {
-                self.env.audioDucker.duck()
-            }
             self.scheduleMaxDurationCutoff()
 
             // The user already released the shortcut while the engine
@@ -363,17 +345,14 @@ final class ShortcutManager {
         // contract: set before start, clear after stop).
         let recordingResult = env.audioRecorder.stop()
         env.audioRecorder.onPCMChunk = nil
-        // Recording is over — cancel any not-yet-fired duck (quick release
-        // during the post-cue delay), then restore the output volume now (at
-        // key-release), regardless of what happens with the transcription
-        // afterward. No-op if we didn't duck. This is the choke point for
+        // Recording is over — unmute other apps' audio now (at key-release),
+        // regardless of what happens with the transcription afterward.
+        // No-op if we didn't mute. This is the choke point for
         // ShortcutManager's end paths (normal release, toggle stop,
         // max-duration cutoff, finish-on-ready, and the sub-minimum /
         // failed-stop discards below); the engine-start-failure branch above
-        // and QuickDictate restore on their own paths.
-        pendingDuck?.cancel()
-        pendingDuck = nil
-        env.audioDucker.restore()
+        // and QuickDictate unmute on their own paths.
+        env.audioMuter.unmute()
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()
