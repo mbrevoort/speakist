@@ -142,10 +142,12 @@ final class QuickDictateController: ObservableObject {
         levelSubscription = nil
         level = 0
 
+        // Read the Bluetooth-input hint BEFORE stop() — see ShortcutManager.
+        let wasBluetoothInput = audioRecorder.isCurrentInputBluetooth()
         let stopResult = audioRecorder.stop()
         // Recording is over — unmute other apps' audio now, regardless of
         // the transcription outcome. No-op if we didn't mute.
-        audioMuter.unmute()
+        audioMuter.unmute(afterBluetoothInput: wasBluetoothInput)
         guard let result = stopResult else {
             phase = .error(message: "Recording produced no audio — try again.")
             return
@@ -270,11 +272,12 @@ final class QuickDictateController: ObservableObject {
         levelSubscription?.cancel()
         levelSubscription = nil
         level = 0
+        let wasBluetoothInput = audioRecorder.isCurrentInputBluetooth()
         if case .recording = phase {
             audioRecorder.cancel()
         }
         // Unmute if this session muted (no-op otherwise).
-        audioMuter.unmute()
+        audioMuter.unmute(afterBluetoothInput: wasBluetoothInput)
         if let tempURL = pendingAudioURL {
             audioArchive.discard(tempURL: tempURL)
             pendingAudioURL = nil

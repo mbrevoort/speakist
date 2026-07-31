@@ -309,8 +309,11 @@ final class ShortcutManager {
                 self.env.audioRecorder.onPCMChunk = nil
                 self.env.transcriptionService.endStreamingSession()
                 // Engine never came up → finishRecording() won't run, so
-                // unmute here (no-op if we didn't mute).
-                self.env.audioMuter.unmute()
+                // unmute here (no-op if we didn't mute). The engine may
+                // have half-engaged a Bluetooth flip before failing, so
+                // pass the hint the same as the normal end path.
+                self.env.audioMuter.unmute(
+                    afterBluetoothInput: self.env.audioRecorder.isCurrentInputBluetooth())
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -340,6 +343,10 @@ final class ShortcutManager {
 
     private func finishRecording() {
         cancelMaxDurationTimer()
+        // Read the Bluetooth-input hint BEFORE stop() — it drives whether
+        // the unmute below must wait out the HFP → A2DP renegotiation that
+        // stop()'s async teardown is about to trigger.
+        let wasBluetoothInput = env.audioRecorder.isCurrentInputBluetooth()
         // stop() removes the tap; clear the PCM sink afterward so no stray
         // callback outlives the recording (matches AudioRecorder's ordering
         // contract: set before start, clear after stop).
@@ -352,7 +359,7 @@ final class ShortcutManager {
         // max-duration cutoff, finish-on-ready, and the sub-minimum /
         // failed-stop discards below); the engine-start-failure branch above
         // and QuickDictate unmute on their own paths.
-        env.audioMuter.unmute()
+        env.audioMuter.unmute(afterBluetoothInput: wasBluetoothInput)
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()

@@ -551,9 +551,13 @@ final class AudioRecorder: ObservableObject {
 
     /// Whether the recorder's current input device is Bluetooth.
     /// See `AudioInputDevice.isBluetooth` for the HFP-vs-A2DP
-    /// rationale that drives the prewarm/teardown branches.
+    /// rationale that drives the prewarm/teardown branches. Also read
+    /// by SystemAudioMuter's unmute paths: a Bluetooth input means the
+    /// recording triggered a profile flip whose HFP→A2DP renegotiation
+    /// arrives asynchronously after stop(), and the unmute must wait
+    /// through it.
     @MainActor
-    private func isCurrentInputBluetooth() -> Bool {
+    func isCurrentInputBluetooth() -> Bool {
         deviceMonitor.currentInput(preferredUID: preferences.inputDeviceUID)?.isBluetooth ?? false
     }
 
