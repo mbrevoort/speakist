@@ -223,30 +223,14 @@ struct GeneralSettingsView: View {
                 Toggle("Show overlay UI while recording", isOn: Binding(
                     get: { prefs.showHUD },
                     set: { prefs.showHUD = $0 }))
-                Toggle("Automatically lower the volume of other audio while dictating", isOn: Binding(
-                    get: { prefs.duckAudioDuringDictation },
-                    set: { prefs.duckAudioDuringDictation = $0 }))
-                // Nested sub-setting under the toggle above: the label is
-                // indented and secondary (grayed) so it reads as a child
-                // option; the row spans full width so the control on the right
-                // aligns with the toggle's control above it.
-                HStack {
-                    Text("Reduce volume level")
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Mute other audio while dictating", isOn: Binding(
+                        get: { prefs.muteAudioDuringDictation },
+                        set: { prefs.muteAudioDuringDictation = $0 }))
+                    Text("Silences music and videos while you speak, and brings them back when you're done. macOS will ask once for System Audio Recording access — Speakist uses it only to mute, never to record.")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 20)
-                    Spacer()
-                    Picker("", selection: Binding(
-                        get: { prefs.audioDuckLevel },
-                        set: { prefs.audioDuckLevel = $0 })) {
-                        ForEach(AudioDuckLevel.allCases) { level in
-                            Text(level.label).tag(level)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
                 }
-                .disabled(!prefs.duckAudioDuringDictation)
             }
         }
         .formStyle(.grouped)
