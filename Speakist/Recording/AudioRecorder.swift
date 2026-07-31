@@ -39,6 +39,14 @@ final class AudioRecorder: ObservableObject {
     let bandLevels = PassthroughSubject<[Float], Never>()
     @Published private(set) var isRecording = false
 
+    /// Whether the input device was Bluetooth when the last recording
+    /// started. A Bluetooth mic flips the headset A2DP → HFP, and the
+    /// flip-back after stop() is asynchronous — SystemAudioMuter's unmute
+    /// paths read this to decide whether to hold the mute through that
+    /// renegotiation. Owned here (captured in start()) so callers don't
+    /// each have to re-derive it before stop()/cancel().
+    @MainActor private(set) var lastInputWasBluetooth = false
+
     /// Number of frequency bands published per tap. Matches the
     /// HUD's bar count so the controller doesn't need to resample.
     static let bandCount = 7
@@ -237,6 +245,11 @@ final class AudioRecorder: ObservableObject {
     @MainActor
     func start() async throws {
         guard !isRecording else { return }
+        // Captured up front — even when start() later throws — because a
+        // Bluetooth input means the engine may (half-)engage the HFP flip,
+        // and the unmute paths need this fact AFTER stop()/cancel(), when
+        // re-deriving it at each call site is an ordering trap.
+        lastInputWasBluetooth = isCurrentInputBluetooth()
         try configureInputDevice()
 
         let inputNode = engine.inputNode
@@ -551,13 +564,9 @@ final class AudioRecorder: ObservableObject {
 
     /// Whether the recorder's current input device is Bluetooth.
     /// See `AudioInputDevice.isBluetooth` for the HFP-vs-A2DP
-    /// rationale that drives the prewarm/teardown branches. Also read
-    /// by SystemAudioMuter's unmute paths: a Bluetooth input means the
-    /// recording triggered a profile flip whose HFP→A2DP renegotiation
-    /// arrives asynchronously after stop(), and the unmute must wait
-    /// through it.
+    /// rationale that drives the prewarm/teardown branches.
     @MainActor
-    func isCurrentInputBluetooth() -> Bool {
+    private func isCurrentInputBluetooth() -> Bool {
         deviceMonitor.currentInput(preferredUID: preferences.inputDeviceUID)?.isBluetooth ?? false
     }
 

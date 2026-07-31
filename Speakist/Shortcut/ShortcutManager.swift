@@ -313,7 +313,7 @@ final class ShortcutManager {
                 // have half-engaged a Bluetooth flip before failing, so
                 // pass the hint the same as the normal end path.
                 self.env.audioMuter.unmute(
-                    afterBluetoothInput: self.env.audioRecorder.isCurrentInputBluetooth())
+                    afterBluetoothInput: self.env.audioRecorder.lastInputWasBluetooth)
                 self.env.hudController.hide()
                 self.env.notifier.transcriptionFailed(error.localizedDescription)
                 self.pendingStart = nil
@@ -343,10 +343,6 @@ final class ShortcutManager {
 
     private func finishRecording() {
         cancelMaxDurationTimer()
-        // Read the Bluetooth-input hint BEFORE stop() — it drives whether
-        // the unmute below must wait out the HFP → A2DP renegotiation that
-        // stop()'s async teardown is about to trigger.
-        let wasBluetoothInput = env.audioRecorder.isCurrentInputBluetooth()
         // stop() removes the tap; clear the PCM sink afterward so no stray
         // callback outlives the recording (matches AudioRecorder's ordering
         // contract: set before start, clear after stop).
@@ -359,7 +355,7 @@ final class ShortcutManager {
         // max-duration cutoff, finish-on-ready, and the sub-minimum /
         // failed-stop discards below); the engine-start-failure branch above
         // and QuickDictate unmute on their own paths.
-        env.audioMuter.unmute(afterBluetoothInput: wasBluetoothInput)
+        env.audioMuter.unmute(afterBluetoothInput: env.audioRecorder.lastInputWasBluetooth)
         guard let result = recordingResult else {
             env.transcriptionService.endStreamingSession()
             env.hudController.hide()

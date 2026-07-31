@@ -114,10 +114,13 @@ final class SystemAudioMuter {
     ///
     /// - Parameter afterBluetoothInput: true when the just-finished
     ///   recording captured from a Bluetooth mic (the only case that
-    ///   triggers the HFP flip). Callers read it off `AudioRecorder`.
-    func unmute(afterBluetoothInput: Bool = false) {
+    ///   triggers the HFP flip). Callers pass
+    ///   `AudioRecorder.lastInputWasBluetooth`.
+    func unmute(afterBluetoothInput: Bool) {
         guard engine != nil, pendingUnmute == nil else { return }
-        guard afterBluetoothInput, Self.defaultOutputIsBluetooth() else {
+        guard afterBluetoothInput,
+              let output = Self.defaultOutputDeviceID(),
+              Self.isBluetoothTransport(output) else {
             releaseTap()
             return
         }
@@ -130,14 +133,13 @@ final class SystemAudioMuter {
             // within ~2s of the engine teardown).
             let churnDeadline = start.advanced(by: Self.unmuteChurnWindow)
             var sawChurn = false
-            var lastDevice = Self.defaultOutputDeviceID()
+            var lastDevice: AudioObjectID? = output
             var stablePolls = 0
             while ContinuousClock.now < totalDeadline {
-                guard let self, !Task.isCancelled else { return }
                 let device = Self.defaultOutputDeviceID()
                 let deviceChanged = device != lastDevice
                 lastDevice = device
-                if self.bluetoothOutputStillInCallMode() || deviceChanged {
+                if deviceChanged || device.map(Self.inCallMode) == true {
                     // Renegotiation in progress (or just re-published the
                     // device). Note it and reset the stability counter —
                     // release only after the route settles.
@@ -153,11 +155,9 @@ final class SystemAudioMuter {
                     return // cancelled — a new dictation took the tap over
                 }
             }
-            guard let self, !Task.isCancelled else { return }
+            guard let self else { return }
             self.pendingUnmute = nil
-            let held = start.duration(to: ContinuousClock.now)
-            let heldMs = held.components.seconds * 1000
-                + held.components.attoseconds / 1_000_000_000_000_000
+            let heldMs = Int(start.duration(to: ContinuousClock.now) / .milliseconds(1))
             Logger.shared.info(
                 "Audio: releasing mute after \(heldMs)ms (churn \(sawChurn ? "observed" : "not observed"))")
             self.releaseTap()
@@ -191,26 +191,22 @@ final class SystemAudioMuter {
 
     // MARK: - Bluetooth route probing
 
-    /// True while the default output device is a Bluetooth headset whose
-    /// nominal sample rate is call-grade — the signature of HFP. A2DP
-    /// restores 44.1/48kHz. Non-Bluetooth outputs always return false, so
-    /// wired/built-in setups unmute instantly.
-    private func bluetoothOutputStillInCallMode() -> Bool {
-        guard let device = Self.defaultOutputDeviceID() else { return false }
-        let transport = Self.transportType(of: device)
-        let isBluetooth = transport == kAudioDeviceTransportTypeBluetooth
-            || transport == kAudioDeviceTransportTypeBluetoothLE
-        guard isBluetooth, let rate = Self.nominalSampleRate(of: device) else { return false }
-        return rate <= 32_000
-    }
-
-    /// True when the current default output device is Bluetooth (Classic
-    /// or LE) — the only outputs exposed to HFP renegotiation churn.
-    private static func defaultOutputIsBluetooth() -> Bool {
-        guard let device = defaultOutputDeviceID() else { return false }
+    /// True for Bluetooth Classic or LE — the only transports exposed to
+    /// HFP renegotiation churn.
+    private static func isBluetoothTransport(_ device: AudioObjectID) -> Bool {
         let transport = transportType(of: device)
         return transport == kAudioDeviceTransportTypeBluetooth
             || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    /// True while a Bluetooth device's nominal sample rate is call-grade —
+    /// the signature of HFP. A2DP restores 44.1/48kHz. Non-Bluetooth
+    /// devices always return false.
+    private static func inCallMode(_ device: AudioObjectID) -> Bool {
+        guard isBluetoothTransport(device), let rate = nominalSampleRate(of: device) else {
+            return false
+        }
+        return rate <= 32_000
     }
 
     private static func defaultOutputDeviceID() -> AudioObjectID? {
