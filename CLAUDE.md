@@ -1,113 +1,42 @@
-# Speakist — Claude Code guide
+# Speakist repository guidance
 
-Push-to-talk dictation for Mac + iOS. Cloudflare Worker backend.
-Source for [speakist.ai](https://speakist.ai). See
-[README.md](README.md) and [docs/architecture.md](docs/architecture.md)
-for the deep dive.
+Speakist is a macOS push-to-talk dictation app with a Next.js and Cloudflare backend for the website, accounts, and optional Cloud transcription.
 
-## Layout
+## Source of truth
 
-```
-Speakist/          Mac app (SwiftUI menu-bar utility)
-SpeakistiOS/       iOS containing app
-SpeakistKeyboard/  iOS custom keyboard extension
-Shared/            Swift code shared across all three Apple targets
-web/               Next.js backend on Cloudflare (Workers + D1 + R2)
-docs/              Architecture, releasing, CI/CD, agent loop
-scripts/           Release + signing + image-generation
-```
+The Xcode project is generated from project.yml. Never hand-edit Speakist.xcodeproj. Run make project after target, source, package, entitlement, or build-setting changes.
 
-## Commands
+Use pnpm 10.28.0 for web work. Keep local D1 initialized before running backend tests or development mode.
 
-**Web** (always run from `web/`, not repo root):
+## Product behavior
 
-```sh
-cd web
-pnpm dev              # local Worker against local D1
-pnpm typecheck        # tsc --noEmit
-pnpm test:run         # vitest run
-pnpm db:migrate:local # apply drizzle migrations locally
-pnpm bench:polish --tier baseline   # validate shipped defaults
-```
+- New installs default to on-device Parakeet transcription and guarded local AI cleanup.
+- Existing installs that predate the engine setting remain on Speakist Cloud until the user switches.
+- Local mode does not require sign-in and does not send dictation audio or transcript text to the backend.
+- Cloud mode remains an explicit option for multilingual transcription, synced vocabulary, billing, and cloud polish.
+- Vocabulary replacements are exact whole-token rules. Do not introduce fuzzy acoustic rewriting without a measured false-positive gate.
+- Automatic cleanup must never be learned as a user correction. Learn only explicit edits made after processed text is shown.
+- The cleanup model must preserve word content or fall back to deterministic cleanup.
 
-**Mac / iOS** (from repo root):
+## Common commands
 
-```sh
-make project          # regen Speakist.xcodeproj from project.yml
-make run              # build + launch Debug (Local channel → localhost:3000)
-make test
-```
+    make project
+    make build
+    make test
 
-## Conventions and gotchas
+    cd web
+    pnpm install --frozen-lockfile
+    pnpm db:migrate:local
+    pnpm db:seed:local
+    pnpm test
+    pnpm dev
 
-- **Web tests + typecheck must stay green before committing.** No
-  exceptions. `pnpm test:run && pnpm typecheck`.
-- **Money is millicents (1/1000 of a cent), stored as integers.**
-  Float-based money is a bug; per-word pricing is sub-cent.
-- **D1 does NOT support multi-statement transactions.** Multi-step
-  writes use sequential statements + unique-index safety nets.
-  Examples in `web/src/lib/polish-prompts.ts`.
-- **Every API route + server action goes through `requireUser` /
-  `requireOrgMember` / `requireSuperAdmin` / `requireUserFromRequest`**
-  in `web/src/lib/authz.ts`. Direct `getDb()` reads from route
-  handlers are a smell.
-- **Audio + transcripts never persist server-side.** The proxy
-  streams to the upstream STT provider without writing to D1, R2,
-  or logs. Only opt-in feedback rows + their audio attachments
-  exist server-side (R2 bucket `*-feedback-audio-*`).
-- **Polish prompts live in `polish_prompt_versions`** (D1, versioned,
-  rollback-able). Baselines for fresh installs:
-  `web/src/lib/transcription/default-polish-prompts.ts`. Don't write
-  to the deprecated `app_settings.polish_*_prompt` columns — they're
-  a fallback that'll be dropped in a future migration.
-- **Drizzle migrations are hand-written SQL** in
-  `web/drizzle/migrations/` (NNNN_*.sql). Don't use drizzle-kit
-  generate — the existing migrations were authored carefully and
-  must stay readable.
-- **`Speakist.xcodeproj` is generated.** Edit `project.yml` and
-  re-run `make project` instead. Same for the per-config Info.plist
-  files.
-- **`SPEAKIST_APPLE_TEAM_ID`** env var threads through Makefile,
-  project.yml, and the release scripts. Don't hardcode the team ID.
-- **GitHub Actions workflows** trigger an automated security
-  reminder on edit — comment-only and literal-CLI-flag edits are
-  fine; treat any input from `github.event.*.title` or `body` as
-  untrusted and pipe through `env:` instead of inlining.
-- **PostHog analytics** is gated on the `stable` channel only — dev
-  / beta / local builds never report (see `Shared/Analytics.swift`).
+For local native tests when the Developer ID key is locked, use ad-hoc signing with CODE_SIGN_IDENTITY=-, CODE_SIGN_STYLE=Manual, and an empty DEVELOPMENT_TEAM.
 
-## Schema conventions
+## Verification
 
-- IDs: `text` UUIDs from `crypto.randomUUID()` at insert time
-  (`$defaultFn(uuid)` in `web/src/lib/db/schema.ts`).
-- Timestamps: `integer` Unix milliseconds via the local
-  `timestampMs(name)` helper.
-- Booleans: `integer` 0/1 via the local `bool(name)` helper.
-- Enums: `text` with a TypeScript literal-union `$type<…>()` hint.
-- Authorization is in code, not RLS. D1 doesn't have RLS.
+A build is not the final proof. Run native tests, web tests, type checking, and a local HTTP smoke test. For dictation changes, verify a real recording when permissions allow. For model or vocabulary changes, include positive replacements and ordinary-word false-positive regressions.
 
-## Where to read more
+## Commits
 
-- **`docs/architecture.md`** — system overview, transcribe path,
-  module layout, persistence model.
-- **`docs/cicd.md`** — workflow design + secrets checklist.
-- **`docs/releasing.md`** — manual Mac DMG release runbook.
-- **`docs/feedback-agent.md`** — the active learning loop + MCP
-  tools agents use to iterate polish prompts.
-- **`docs/polish-prompt-mirror.md`** — prod→dev cross-env mirror.
-- **`web/SETUP.md`** — local-dev setup from a fresh clone.
-- **`web/DEPLOYING.md`** — deploy a new Cloudflare environment.
-- **`SECURITY.md`** — disclosure flow + in-scope surface.
-
-## Commit conventions
-
-- Branch: `<your-handle>/<short-topic>`.
-- Commit message: `<area>: <imperative summary>` (e.g.
-  `polish: …`, `ios: …`, `feedback: …`, `ci(polish): …`). One- or
-  two-sentence body explaining the why for any non-trivial change.
-- Co-author trailer: `Co-Authored-By: Claude <noreply@anthropic.com>`
-  on Claude-assisted commits.
-- Don't commit unless asked — local edits stay uncommitted until the
-  human says "commit."
-- Run `pnpm typecheck && pnpm test:run` in `web/` before staging if
-  you touched anything under `web/`.
+Use focused conventional commits such as feat:, fix:, docs:, test:, and ci:. Do not commit credentials, local auth codes, ignored environment files, model caches, or retained user audio.

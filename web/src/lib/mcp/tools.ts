@@ -190,7 +190,7 @@ export const getFeedbackTool: McpToolDefinition = {
             language: row.language,
             // Request-context snapshot from the original transcribe
             // call. `keyterms === null` means the submitting client
-            // didn't report a list (older builds, current iOS).
+            // didn't report a list (older builds).
             // `keyterms === []` means it explicitly said "empty".
             // `transcription_options === null` likewise distinguishes
             // "not reported" from "reported as empty object".
@@ -631,4 +631,3 @@ export class McpError extends Error {
     super(message);
   }
 }
-

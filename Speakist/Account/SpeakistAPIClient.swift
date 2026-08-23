@@ -73,8 +73,7 @@ final class SpeakistAPIClient {
         var body: [String: Any] = [:]
         if let name = deviceName, !name.isEmpty { body["deviceName"] = name }
         // Tell the server which platform initiated the flow so the
-        // /link page can render "Code from your Mac" vs "Code from
-        // your iPhone" instead of always saying "Mac". Server-side
+        // /link page can render "Code from your Mac". Server-side
         // validates against a known enum; unknown values are dropped
         // and the page falls back to a generic "your device" label.
         if let platform = platform, !platform.isEmpty { body["platform"] = platform }
@@ -238,9 +237,7 @@ final class SpeakistAPIClient {
     /// Permanently delete the signed-in user's account. The server
     /// cascades the user's data (vocabulary, sessions, sole-member
     /// orgs, etc.); the caller is responsible for clearing the local
-    /// keychain token after a 200. Required for App Review compliance
-    /// on iOS (5.1.1(v) — apps that allow account creation must allow
-    /// in-app account deletion).
+    /// keychain token after a 200.
     func deleteAccount() async throws {
         let (data, response) = try await rawRequest(
             path: "/api/me",

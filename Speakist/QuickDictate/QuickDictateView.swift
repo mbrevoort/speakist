@@ -96,7 +96,7 @@ private struct QuickDictatePane: View {
 
     private var recordingView: some View {
         VStack(spacing: 24) {
-            // Voice-driven concentric peach rings. Mirrors the iOS
+            // Voice-driven concentric peach rings. Mirrors the compact
             // visual so the two platforms feel like the same product.
             ZStack {
                 Circle()

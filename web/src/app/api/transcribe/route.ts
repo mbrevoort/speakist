@@ -1,6 +1,6 @@
 // POST /api/transcribe — Worker-proxied transcription endpoint.
 //
-// Mac and iOS clients:
+// Mac clients:
 //   1. POST audio bytes here
 //   2. Worker resolves (provider, model) from the user's language and
 //      the org's allowed-models list (super admin → Org page)
@@ -160,7 +160,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ---- provider/model resolution -----------------------------------------
-  // Server picks the (provider, model) — the Mac/iOS clients only send
+  // Server picks the (provider, model) — Mac clients only send
   // the user's chosen language. Routing rules:
   //
   //   1. Global default: Deepgram nova-3 for every language (its

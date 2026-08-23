@@ -1,575 +1,69 @@
-# Releasing Speakist for Mac
+# Releasing Speakist
 
-End-to-end: build → sign → notarize → DMG → Sparkle-sign → host → users
-auto-update.
+This checklist prepares a local-first Mac release while retaining Speakist Cloud for users who choose it.
 
-This doc has five parts:
+This release supports Apple silicon Macs running macOS 14 or later. The MLX
+cleanup dependency is not shipped for Intel Macs; website requirements and the
+arm64-only archive must remain aligned.
 
-0. **Release channels** — dev / beta / stable (the model)
-1. **One-time setup** — once per machine that will ever produce a release
-2. **Per-release runbook** — every time you ship a new version
-3. **Emergency rollback** — yanking a bad release
-4. **Troubleshooting** — the errors you'll actually hit
-5. **CI automation** — dev pipeline + prod pipeline (GitHub Releases)
+## Release boundary
 
----
+This release is ready to publish when:
 
-## 0. Release channels
+- Fresh installs default to Parakeet and local AI cleanup.
+- Existing installs with completed onboarding and no prior engine key remain on Cloud.
+- Explicit engine and cleanup choices survive upgrade.
+- Onboarding requires the Parakeet transcription model before the first test,
+  clearly reports its download progress and failures, and lets users continue
+  with rules-only cleanup while the optional Qwen model downloads or is retried.
+- Settings can switch both directions and accurately describe the data path.
+- Exact vocabulary replacements work without fuzzy name substitution.
+- Only explicit user edits are learned.
+- Website copy presents local as free, private, and default, with Cloud as optional.
+- Native and web tests, type checking, build, and runtime smoke tests pass.
 
-Four channels, fully isolated. Each has a **distinct bundle ID and
-display name**, which makes macOS treat them as different apps — you can
-install all four side-by-side without TCC grants, Keychain items,
-UserDefaults, history DBs, or log files cross-contaminating:
+## Version preparation
 
-| Channel | Bundle ID | Display name | `SUFeedURL` | `apiBaseURL` default | DMG filename |
-|---|---|---|---|---|---|
-| `stable` | `com.brevoort-studio.speakist` | Speakist | `speakist.ai/appcast.xml` | `speakist.ai` | `Speakist-0.2.0.dmg` |
-| `beta` | `com.brevoort-studio.speakist.beta` | Speakist Beta | `speakist.ai/appcast-beta.xml` | `speakist.ai` | `Speakist-0.2.0-beta.dmg` |
-| `dev` | `com.brevoort-studio.speakist.dev` | Speakist Dev | `speakist-dev.brevoortstudio.com/appcast-dev.xml` | `speakist-dev.brevoortstudio.com` | `Speakist-0.2.0-dev.dmg` |
-| `local` | `com.brevoort-studio.speakist.local` | Speakist Local | *(no auto-update)* | `http://localhost:3000` | *(Xcode local only)* |
+1. Choose the semantic version and release notes.
+2. Confirm project.yml versions and channel configuration.
+3. Run make project.
+4. Review the generated diff and ensure only Speakist and SpeakistTests targets exist.
+5. Confirm third-party notices cover FluidAudio, Parakeet model distribution, MLX packages, Hugging Face tooling, and the pinned cleanup model.
 
-`local` is what you get from `make build` / running straight from Xcode
-(Xcode's Debug configuration produces the Local channel). It has its
-own bundle ID on purpose so your local dev loop doesn't collide with
-any signed channel you're also using day-to-day, and it points at
-`localhost:3000` by default so `pnpm dev` in `web/` is the assumed
-backend.
+## Verification
 
-How it works:
+    make test
 
-- **Channel identity is baked in at build time.** `scripts/release.sh`
-  rewrites the `Release:` block in `project.yml` before `xcodegen
-  generate` so all five channel-specific build settings carry the right
-  values: `PRODUCT_BUNDLE_IDENTIFIER`, `SPEAKIST_DISPLAY_NAME`,
-  `SPEAKIST_CHANNEL`, `SPEAKIST_API_BASE_URL`, `SPEAKIST_FEED_URL`.
-  Info.plist reads them via `$(...)` references and ships into the
-  codesigned bundle. Modifying Info.plist after signing invalidates the
-  signature, which is why the channel can't be chosen at runtime.
-- The Local-channel values come from `project.yml`'s
-  `settings.configs.Debug` block, which xcodegen reads for local Xcode
-  builds. No release script involvement.
-- **Users switch channels by installing a different DMG**, not by a
-  toggle. Sparkle only ever polls the URL baked into its current .app.
-- **The dev-channel appcast lives on the dev Worker** so you can ship
-  dev-channel updates without touching prod. Beta + stable appcasts
-  live on the prod Worker.
-- **Everything keyed on identity derives from `Bundle.main` at runtime**
-  via `Speakist/App/AppIdentity.swift` — Keychain service (`{bundleID}.apikeys`),
-  logger subsystem, Application Support folder (`{displayName}/`), temp
-  dir (`/tmp/{displayName}/`), log directory (`~/Library/Logs/{displayName}/`).
-- **Preferences.swift reads `SpeakistDefaultAPIBaseURL` from Info.plist**
-  as the default for the `apiBaseURL` UserDefaults key. Users can still
-  override per-install with `defaults write {bundle-id} apiBaseURL "…"`
-  (the correct bundle ID varies by channel — see the table above).
+    cd web
+    pnpm test
+    pnpm exec tsc --noEmit
+    pnpm build
 
-### Switching someone from an old single-bundle-ID install
+Also perform two manual upgrade scenarios using isolated preferences:
 
-If someone was running a pre-channel-split build of Speakist, their
-existing data lives under `Application Support/Speakist/` and their
-Keychain tokens sit under `com.brevoort-studio.speakist.apikeys`. Installing
-a new dev DMG (`com.brevoort-studio.speakist.dev`) won't migrate that —
-they'll see a fresh empty history, sign in again, and re-grant Microphone
-and Accessibility (the new bundle ID is a new app to TCC). That's expected.
-If they want to keep their old history, manually copy
-`~/Library/Application Support/Speakist/*.sqlite` to
-`~/Library/Application Support/Speakist Dev/` (or the matching display
-name for whatever channel they're moving to).
+1. Fresh install: local selected, no sign-in prompt, models visibly download, test dictation succeeds.
+2. Existing install: onboarding already complete with no engine key, Cloud remains selected; switching to local prepares models and succeeds.
 
-### When to use each channel
+Record a retained-audio regression with both proper-name aliases and ordinary near-sounding words. Require positive alias replacements and zero ordinary-word substitutions.
 
-- **dev** — your own daily testing + a small circle of trusted testers.
-  Ships frequently (sometimes multiple times per day). Points at the dev
-  backend. Breakage tolerated.
-- **beta** — pre-release candidates with production backend. Ship a
-  week or two before stable to catch regressions that only surface
-  against real data. Small volunteer audience.
-- **stable** — public-facing production. Ships weekly to monthly with
-  changelogs.
+## Publish
 
-### Why separate appcast URLs instead of one appcast + Sparkle's channel filter
+Create a GitHub Release with the intended tag and notes. The production workflow deploys web and Mac independently, builds stable or beta, notarizes the Mac DMG, uploads it, and publishes the matching Sparkle entry.
 
-Sparkle supports `<sparkle:channel>` elements inside `<item>` blocks
-that would let a single appcast serve all three with Sparkle filtering
-client-side. We use separate URLs because:
+After CI completes, verify the exact artifact rather than relying only on green jobs:
 
-1. **Dev releases don't require a prod deploy.** With a single appcast
-   on `speakist.ai`, every dev release would need a `pnpm deploy:prod`
-   for stable users to pick up the new manifest. Bad ergonomics.
-2. **Clearer blast radius.** A malformed entry in `appcast-dev.xml`
-   can't break stable-channel auto-update.
-3. **Debuggability.** `curl https://speakist.ai/appcast.xml` tells you
-   exactly what stable users see, uncomplicated by filters.
+- Download endpoint redirects to the new DMG.
+- DMG mounts and the app launches on the supported macOS version.
+- codesign assessment and notarization ticket pass.
+- Sparkle feed reports the expected version and build.
+- Landing, FAQ, privacy, and terms pages show local-first copy.
+- Optional Cloud sign-in and transcription still work for an existing account.
 
----
+## Rollback
 
-## 1. One-time setup
+- Web: redeploy the last known-good commit and compatible migrations.
+- Mac: republish the last known-good signed artifact and appcast entry for the affected channel.
+- Data-path emergency: existing users can switch engines in Settings. Do not silently force Cloud or local for users who already chose.
+- Model emergency: preserve Parakeet transcription and fall back from local AI cleanup to deterministic rules.
 
-### 1.1 Apple Developer ID certificate
-
-You need a **Developer ID Application** cert installed in the login
-Keychain for the team in `SPEAKIST_APPLE_TEAM_ID` (see Makefile;
-forks override). If you can already run `make archive` without
-signing errors, you're set. If not: Apple Developer → Certificates
-→ create a new Developer ID Application cert, download the `.cer`,
-double-click to install.
-
-### 1.2 Command-line tools
-
-```bash
-brew install xcodegen jq
-```
-
-- `xcodegen` — regenerates `Speakist.xcodeproj` from `project.yml`
-- `jq` — used by the release script to build the publish-API JSON payload safely
-
-DMG creation uses `hdiutil` and AppleScript (both shipped with macOS),
-no extra dependencies. See `scripts/release.sh` — we deliberately don't
-use `create-dmg` because its `--app-drop-link` symlink no longer
-auto-resolves to the Applications folder icon in modern macOS DMGs.
-
-### 1.3 Sparkle tools + keypair
-
-Sparkle's binaries live alongside the framework download, not in Homebrew.
-
-1. Download the latest Sparkle release:
-   https://github.com/sparkle-project/Sparkle/releases
-2. Unzip. Copy the `bin/` folder to a permanent home, e.g.:
-   ```bash
-   mkdir -p ~/Library/Developer/Sparkle
-   cp -r ~/Downloads/Sparkle-2.x.x/bin ~/Library/Developer/Sparkle/
-   ```
-3. If you put it somewhere else, set `SPARKLE_TOOLS` in your shell:
-   ```bash
-   export SPARKLE_TOOLS=/your/path/to/bin   # add to ~/.zshrc
-   ```
-
-**Generate the EdDSA keypair that signs updates:**
-
-```bash
-~/Library/Developer/Sparkle/bin/generate_keys
-```
-
-This prints a **public key** and stores the **private key** in your login
-Keychain. Take the public key and paste it into `project.yml`:
-
-```yaml
-targets:
-  Speakist:
-    info:
-      properties:
-        SUPublicEDKey: "PASTE-THE-PUBLIC-KEY-HERE"
-```
-
-Commit that change.
-
-> ⚠️ **Back up the private key.** Export it from Keychain Access (the
-> entry is "Private key for signing Sparkle updates") into 1Password or a
-> YubiKey. Losing it means you can **never push updates to existing
-> installs again** — every user would have to manually re-download the app.
-> Treat this key like you'd treat a domain registrar login.
-
-### 1.4 notarytool credentials
-
-```bash
-xcrun notarytool store-credentials SPEAKIST_NOTARY \
-  --apple-id <your-apple-id-email> \
-  --team-id "$SPEAKIST_APPLE_TEAM_ID" \
-  --password APP_SPECIFIC_PASSWORD
-```
-
-`APP_SPECIFIC_PASSWORD` is generated at https://appleid.apple.com → Sign-In
-and Security → App-Specific Passwords. Label it "Speakist notarytool" or
-similar.
-
-`SPEAKIST_NOTARY` is the profile name the release script reads (via the
-`NOTARY_PROFILE` env var — defaults to `SPEAKIST_NOTARY`).
-
-### 1.5 R2 buckets for DMG hosting
-
-DMGs live on Cloudflare R2 behind a custom domain per env:
-
-| Env | Bucket | Custom domain |
-|---|---|---|
-| dev | `speakist-releases-dev` | `downloads-dev.brevoortstudio.com` |
-| prod | `speakist-releases-prod` | `downloads.speakist.ai` |
-
-One-time setup — do both envs:
-
-```bash
-cd web
-pnpm exec wrangler r2 bucket create speakist-releases-dev
-pnpm exec wrangler r2 bucket create speakist-releases-prod
-```
-
-Then attach the custom domains via the Cloudflare dashboard (can't be done
-via wrangler CLI at the moment):
-
-1. Dashboard → R2 → `speakist-releases-dev` → **Settings** → **Custom Domains** → **Connect Domain**
-2. Enter `downloads-dev.brevoortstudio.com`
-3. Cloudflare provisions TLS + inserts a CNAME; propagation is ~1 minute
-4. Same for `speakist-releases-prod` → `downloads.speakist.ai`. Both
-   custom domains are now live; prod is the prerequisite for shipping
-   any stable / beta release.
-
-### 1.6 Publish-token secret
-
-The release script POSTs to `/api/admin/releases/publish` on the Worker
-to register each new release in D1. Protected by a shared-secret token:
-
-```bash
-# Generate once
-openssl rand -base64 32
-
-# Set it on each env that accepts releases:
-cd web
-pnpm exec wrangler secret put RELEASE_PUBLISH_TOKEN --env dev
-pnpm exec wrangler secret put RELEASE_PUBLISH_TOKEN --env production
-# paste the same value for both, or different ones — they're independent
-```
-
-Then export the matching value in your shell so `scripts/release.sh`
-can send it:
-
-```bash
-# ~/.zshrc (or similar)
-export SPEAKIST_PUBLISH_TOKEN_DEV="..."
-export SPEAKIST_PUBLISH_TOKEN_PROD="..."
-```
-
-Dev-channel releases use the DEV token against the dev Worker; beta +
-stable releases use the PROD token against the prod Worker.
-
-> **What about non-secret per-env values?** The download base URL,
-> the R2 bucket name, the iOS TestFlight invite, the email "from"
-> address — those live in `web/wrangler.toml` `[env.X.vars]` blocks
-> as Tier 2 runtime vars and roll out automatically on `pnpm
-> deploy:dev` / `pnpm deploy:prod`. No `wrangler secret put` needed.
-> See [cicd.md § Config management](cicd.md#config-management) for
-> the full tier model + a recipe for adding new values.
-
----
-
-## 2. Per-release runbook
-
-### 2.1 Build + sign + notarize + DMG
-
-From the repo root:
-
-```bash
-make release VERSION=0.2.0                    # stable channel (default)
-make release VERSION=0.2.0 CHANNEL=dev        # dev channel
-make release VERSION=0.2.0 CHANNEL=beta       # beta channel
-```
-
-This runs `scripts/release.sh`, which:
-
-1. Snapshots `project.yml` to `project.yml.release-bak`
-2. Rewrites `SUFeedURL`, `SpeakistDefaultAPIBaseURL`, and `SpeakistChannel`
-   in `project.yml` for the chosen channel
-3. Bumps `MARKETING_VERSION` to `0.2.0`, increments `CURRENT_PROJECT_VERSION`
-4. `xcodegen generate`
-5. `xcodebuild archive` (Release config, Developer ID signing)
-6. `xcodebuild -exportArchive` with `scripts/exportOptions.plist`
-7. Sanity-checks the exported Info.plist matches the channel we asked for
-   (guards against stale build-cache returning a wrong-channel plist)
-8. Zips the `.app`, submits to Apple via `notarytool`, waits for "Accepted"
-9. `stapler staple` the notary ticket onto the `.app`
-10. Builds `build/Speakist-0.2.0{-dev|-beta}.dmg` via `hdiutil` + a short
-    AppleScript that lays out the window and uses a Finder alias (not a
-    symlink) for the drag-to-Applications target
-
-11. `sign_update` (from Sparkle) computes an EdDSA signature for the DMG
-12. **Uploads the DMG to the channel's R2 bucket** via
-    `wrangler r2 object put --remote`
-13. **POSTs to `/api/admin/releases/publish`** with the signature + DMG URL;
-    the Worker inserts a row into the `releases` D1 table
-14. Restores `project.yml` — **keeping the version bump, discarding the
-    channel swap**
-
-Expect 5–10 minutes. The notarization step is the slowest; you're waiting
-on Apple's queue.
-
-**The release is live the moment the publish API call returns 200.** The
-dynamic `/appcast*.xml` endpoints on the Worker immediately reflect the
-new version — no `pnpm deploy:*` needed. No manual appcast edits, no
-git-commit-to-ship.
-
-### 2.2 Commit the version bump
-
-The only thing left is persisting the version bump in git:
-
-```bash
-git add project.yml
-git commit -m "Release 0.2.0 ($CHANNEL)"
-git push
-```
-
-There's no appcast file to edit (dynamic now), no release artifacts in
-the repo, no GitHub Release to create.
-
-### 2.3 Verify the release end-to-end
-
-**Sparkle path (existing installs):**
-
-1. Open a Speakist install that's on the **previous** version
-2. Settings → About → **Check for updates…**
-3. Sparkle should fetch the appcast, find 0.2.0, show "Install Update"
-4. Click install → downloads DMG → verifies EdDSA signature → quits + relaunches
-
-**Download path (new users):**
-
-1. Visit landing page → click **Download for Mac** (or go straight to
-   `https://speakist.ai/api/download/mac`)
-2. Browser 302s to `https://downloads.speakist.ai/Speakist-0.2.0.dmg`
-3. DMG downloads from R2
-4. Mount, drag to Applications, launch → Gatekeeper accepts the notarized build
-
-`/api/download/mac` also supports `?channel=beta` and `?channel=dev` for
-beta/dev testers — same 302 flow, different R2 object.
-
-If any step fails:
-- Appcast XML malformed or empty — hit the URL directly in a browser to
-  inspect; if the feed is empty the publish API call didn't insert a row
-- EdDSA signature mismatch — DMG was modified after `sign_update`; rebuild
-- DMG 404 on R2 — the upload step silently failed; re-run `scripts/release.sh`
-  (uploads are idempotent)
-- Publish endpoint 401 — `RELEASE_PUBLISH_TOKEN` (Worker secret) doesn't
-  match `SPEAKIST_PUBLISH_TOKEN_{DEV,PROD}` in your shell
-
----
-
-## 3. Emergency rollback
-
-Releases live in D1, not in static files. Two ways:
-
-**A) Yank the release (recommended)** — keeps the row for audit, just
-hides it from the appcast + download redirect. Run a SQL update via
-wrangler (or build a super-admin UI later):
-
-```bash
-cd web
-pnpm exec wrangler d1 execute speakist-prod --remote --env production \
-  --command "UPDATE releases SET yanked_at = unixepoch() * 1000, yanked_reason = 'breaks on macOS 14.1' WHERE channel = 'stable' AND version = '0.2.0'"
-```
-
-Next Sparkle poll (hourly by default) will no longer see 0.2.0 as a
-valid update. The DMG stays on R2 — you can delete it manually if you want:
-
-```bash
-pnpm exec wrangler r2 object delete speakist-releases-prod/Speakist-0.2.0.dmg --remote
-```
-
-**B) Hard delete** — remove the row entirely. Use A unless you specifically
-don't want an audit trail.
-
-Users who already installed 0.2.0 are stuck on it until you ship 0.2.1.
-
----
-
-## 4. Troubleshooting
-
-### "Speakist wants to access the keychain" prompt
-
-With per-channel bundle IDs (`…speakist.local`, `…speakist.dev`,
-`…speakist.beta`, `…speakist`), each channel writes to its own Keychain
-service (`{bundleID}.apikeys`), so cross-channel prompts don't happen
-anymore — each build asks about its own service only.
-
-You may still see a prompt **once**, the first time a new signature runs
-against an existing Keychain item within the same channel (e.g., if you
-re-sign the Local build with a different Apple Development identity).
-Keychain ACLs are tied to the specific code signature. Click **Always
-Allow** — the new signature is added to the item's ACL and future
-launches are silent.
-
-Clean-slate recipe if you want to start fresh for a channel (replace
-`.dev` with `.beta`, `.local`, or remove the suffix entirely for stable):
-
-```bash
-security delete-generic-password -s com.brevoort-studio.speakist.dev.apikeys -a refreshToken
-```
-
-Then relaunch → Settings → Account → **Sign in with Speakist**.
-
-### App ships with a generic (iconless) Finder icon
-
-The app's icon lives at `Speakist/Resources/Assets.xcassets/AppIcon.appiconset/`
-as 10 PNG files (16pt–512pt, @1x and @2x) plus a `Contents.json` manifest.
-If the PNGs are missing, Xcode compiles `Assets.car` without icon pixels,
-omits `CFBundleIconName` from the Info.plist, and Finder falls back to the
-grey-document placeholder. Inside a DMG, this also makes the drag window
-look broken — the source `.app` shows as an empty square next to the
-Applications alias.
-
-Regenerate from `design/Speakist.svg`:
-
-```bash
-make icons
-```
-
-This runs `scripts/generate-app-icon.swift`, which uses NSImage's built-in
-SVG renderer to produce all 10 sizes and rewrites `Contents.json`. Commit
-the resulting PNGs — they're checked into the repo so fresh clones / CI
-don't need to regenerate.
-
-`release.sh` preflight aborts if fewer than 10 PNGs are present in the
-appiconset, so you can't accidentally ship another iconless build.
-
-Note: if you only replace the DMG bytes (same version, same filename) to
-fix an icon regression, the Sparkle signature stored in D1 no longer
-matches the new bytes and Sparkle installs will fail verification. Bump
-to the next patch version (`make release VERSION=0.1.1 …`) instead — that
-inserts a fresh D1 row with a matching signature.
-
-### Making an already-installed build poll a different channel
-
-Sparkle checks `NSUserDefaults` for `SUFeedURL` before falling back to
-the Info.plist value. That means you can temporarily point a signed
-install at a different channel's appcast without rebuilding. Because
-each channel has its own bundle ID, use the right one for the install
-you want to reconfigure:
-
-```bash
-# Point a Dev install at the beta channel (use Dev's bundle ID)
-defaults write com.brevoort-studio.speakist.dev SUFeedURL \
-  "https://speakist.ai/appcast-beta.xml"
-
-# Undo (revert to the URL baked into Info.plist)
-defaults delete com.brevoort-studio.speakist.dev SUFeedURL
-```
-
-Pair with `apiBaseURL` if you also want the app calling a different backend:
-
-```bash
-defaults write com.brevoort-studio.speakist.dev apiBaseURL \
-  "https://speakist.ai"
-```
-
-Restart Speakist after either change. This is strictly a dev-convenience
-knob — distributed builds should have the correct channel baked in at
-release time via `scripts/release.sh`.
-
-Note: the Local build (`com.brevoort-studio.speakist.local`) has an
-empty `SUFeedURL` and no auto-update — overriding the default wouldn't
-help because Local installs don't ship through the release pipeline that
-would sign a compatible replacement. Just `make build` to rebuild.
-
-### Sparkle tarball extracts into your current directory
-
-`Sparkle-X.Y.Z.tar.xz` uses `./` as its tar root. Running `tar -xf` in
-`~/Downloads` will scatter `bin/`, `Symbols/`, `Sparkle.framework`,
-`Sparkle Test App.app`, etc. directly into your Downloads folder.
-**Always extract into a temp directory:**
-
-```bash
-TMP=$(mktemp -d)
-(cd "$TMP" && tar -xf ~/Downloads/Sparkle-*.tar.xz)
-cp -R "$TMP/bin" ~/Library/Developer/Sparkle/
-rm -rf "$TMP"
-```
-
-### Restoring the Sparkle private key on a new machine
-
-Your private key backup (from 1Password) is a ~44-char base64 string,
-not a `.p12` — Sparkle stores EdDSA keys as raw "password value" in the
-login Keychain, not as a certificate.
-
-To use the backed-up key directly when signing:
-
-```bash
-sign_update -s "<the-base64-private-key>" Speakist-0.2.0.dmg
-```
-
-To re-add it to a fresh machine's Keychain so it's picked up automatically,
-the simplest path is to run `generate_keys --account-name …` with the
-`--insert` flag — see `generate_keys -h`. Or manually re-create the
-Keychain item with `security add-generic-password -s "https://sparkle-project.org"
--a "ed25519" -w "<private-key>"`.
-
-### `make release` preflight errors
-
-| Error | Fix |
-|---|---|
-| `brew install jq` | `brew install jq` |
-| `Sparkle sign_update missing at …` | Install Sparkle tools (§1.3) |
-| `notarytool keychain profile 'SPEAKIST_NOTARY' not configured` | `xcrun notarytool store-credentials …` (§1.4) |
-| `wrangler not logged in` | `cd web && pnpm exec wrangler login` |
-| `SPEAKIST_PUBLISH_TOKEN_{DEV,PROD} env var is not set` | Export matching `RELEASE_PUBLISH_TOKEN` value in shell (§1.6) |
-| `Channel mismatch in built Info.plist!` | Stale build cache. Run `rm -rf build/ Speakist.xcodeproj` and retry |
-| `Publish API returned HTTP 401` | `RELEASE_PUBLISH_TOKEN` Worker secret doesn't match your shell's `SPEAKIST_PUBLISH_TOKEN_*` value; re-sync |
-| `Publish API returned HTTP 503` | `RELEASE_PUBLISH_TOKEN` not configured on the Worker. Run `wrangler secret put RELEASE_PUBLISH_TOKEN --env …` + redeploy |
-
-### Post-release verification failures
-
-**Sparkle says "You're up to date" but I just shipped:**
-- The appcast is empty or stale. Hit the URL directly for whichever
-  channel you shipped:
-  ```bash
-  # dev
-  curl -s https://speakist-dev.brevoortstudio.com/appcast-dev.xml | head -30
-  # beta
-  curl -s https://speakist.ai/appcast-beta.xml | head -30
-  # stable
-  curl -s https://speakist.ai/appcast.xml | head -30
-  ```
-  If there are no `<item>` blocks, the publish API call didn't insert
-  a row. Tail the relevant Worker while re-running `make release`:
-  ```bash
-  # dev
-  pnpm exec wrangler tail speakist-web-dev --env dev --format pretty
-  # beta + stable both ship to prod
-  pnpm exec wrangler tail speakist-web-prod --env production --format pretty
-  ```
-  to see the `/api/admin/releases/publish` POST.
-- Sparkle caches appcasts briefly — force-check via Settings → About →
-  **Check for updates…** rather than waiting for the automatic poll.
-- Running install's `sparkle:version` is ≥ the latest release's. Sparkle
-  won't downgrade or re-install the same build number. Bump
-  `CURRENT_PROJECT_VERSION` by running `make release` again (it
-  auto-increments).
-
-**"Update available" prompt but Install fails with a signature error:**
-- EdDSA verification failing means the DMG was modified after `sign_update`
-  produced its signature. If you re-uploaded or regenerated the DMG
-  manually, the signature in D1 no longer matches. Re-run
-  `scripts/release.sh` — it re-signs + re-uploads + updates D1.
-
-**Download works but app fails Gatekeeper check on launch:**
-- Stapler didn't attach the notary ticket. Verify:
-  `xcrun stapler validate /Applications/Speakist.app`
-- If invalid, re-run the release (notarization is the step that produces
-  the ticket; stapling attaches it). Apple's notary queue can reject builds
-  with hardened-runtime violations — read the `notarytool log` output
-  carefully.
-
----
-
-## 5. CI automation
-
-Both the **dev channel** (every push to `main`) and the **prod
-channels** (`stable` + `beta`, on GitHub Release publish) ship via
-GitHub Actions. Manual `make release` from a laptop is now a fallback
-for emergencies (e.g. CI is down and you need to ship a hotfix).
-
-| Channel | Trigger | Workflow |
-|---|---|---|
-| `dev` | push to `main` | `.github/workflows/deploy-dev.yml` |
-| `beta` | GitHub Release with prerelease ✓ | `.github/workflows/deploy-prod.yml` |
-| `stable` | GitHub Release (latest) | `.github/workflows/deploy-prod.yml` |
-
-`scripts/release.sh` reads opt-in env-var hooks
-(`NOTARY_API_KEY_PATH`, `SPARKLE_PRIVATE_KEY`) so the same script
-runs both on a developer's laptop (keychain credentials) and inside
-GitHub Actions (env-var credentials). The CI side wraps it in
-`scripts/release-ci.sh`, parameterized by env vars (`RELEASE_CHANNEL`,
-`RELEASE_VERSION`, `RELEASE_NOTES_FILE`) so a single script drives
-both pipelines. iOS uses the parallel `scripts/release-ios-ci.sh`,
-parameterized via `RELEASE_IOS_SCHEME` / `RELEASE_IOS_CONFIG`.
-
-The release notes shown in Sparkle's update window come from the
-**GitHub Release body**, rendered to HTML via `gh api /markdown` and
-stored in D1's `releases.releaseNotes`. To update what users see in a
-"What's new" panel: edit the GitHub Release description.
-
-See `docs/cicd.md` for the secrets checklist, Apple Developer portal
-setup, Cloudflare prod resource provisioning, and failure modes.
+Do not publish a production release from an ad-hoc signed build.

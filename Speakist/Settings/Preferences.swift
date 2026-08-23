@@ -10,6 +10,68 @@ enum DeepgramModel: String, CaseIterable, Identifiable, Codable {
     var displayName: String { rawValue }
 }
 
+/// Where the Mac app performs speech recognition. The local Parakeet
+/// transcription route never uploads audio or calls the Speakist backend;
+/// cloud preserves the existing Worker/Deepgram behavior.
+enum TranscriptionEngine: String, CaseIterable, Identifiable, Codable {
+    case parakeet
+    case cloud
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .parakeet: return "On this Mac (Parakeet)"
+        case .cloud: return "Speakist Cloud"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .parakeet:
+            return "Audio stays on this Mac. The English model downloads once, then works offline."
+        case .cloud:
+            return "Audio is sent to Speakist's backend and discarded after transcription."
+        }
+    }
+}
+
+enum LocalCleanupMode: String, CaseIterable, Identifiable, Codable {
+    case deterministic
+    case qwenExperimental
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .deterministic: return "Rules only"
+        case .qwenExperimental: return "Local AI cleanup (recommended)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .deterministic:
+            return "Fast pause and contraction cleanup with no generative model."
+        case .qwenExperimental:
+            return "Removes safe fillers, expands common casual speech, and uses a tiny 4-bit model for punctuation and presentation cleanup. Changes that do not preserve your words are discarded."
+        }
+    }
+}
+
+enum TranscriptionEngineMigration {
+    /// Returns a value to persist only when an install has never stored an
+    /// engine. Completed installs predate the choice and therefore preserve
+    /// Cloud; fresh installs start local. Existing explicit values are never
+    /// overwritten.
+    static func valueToPersist(storedValue: String?, onboardingCompleted: Bool) -> String? {
+        guard storedValue == nil else { return nil }
+        return onboardingCompleted
+            ? TranscriptionEngine.cloud.rawValue
+            : TranscriptionEngine.parakeet.rawValue
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let defaults = UserDefaults.standard
@@ -44,6 +106,8 @@ final class Preferences: ObservableObject {
         static let rateDeepgramNova3 = "rate.deepgram.nova3"
         static let rateDeepgramNova2 = "rate.deepgram.nova2"
         static let apiBaseURL = "apiBaseURL"
+        static let transcriptionEngine = "transcriptionEngine"
+        static let localCleanupMode = "localCleanupMode"
         static let useTranscribeProxy = "useTranscribeProxy"
         static let useStreamingTranscription = "useStreamingTranscription"
         // Storage key predates the switch from volume-ducking to a full
@@ -99,6 +163,17 @@ final class Preferences: ObservableObject {
             defaults.removeObject(forKey: K.apiBaseURL)
         }
 
+        // This is the release migration boundary. A completed install that
+        // predates the engine preference has already been using Cloud, so
+        // preserve that behavior. Fresh installs start with the local stack.
+        // Once an engine value exists, every later update preserves it.
+        if let migratedEngine = TranscriptionEngineMigration.valueToPersist(
+            storedValue: defaults.string(forKey: K.transcriptionEngine),
+            onboardingCompleted: defaults.bool(forKey: K.onboardingCompleted)
+        ) {
+            defaults.set(migratedEngine, forKey: K.transcriptionEngine)
+        }
+
         defaults.register(defaults: [
             // Legacy — only consulted by the direct-Deepgram path when
             // useTranscribeProxy is OFF. Kept for backward compat.
@@ -144,6 +219,10 @@ final class Preferences: ObservableObject {
             // where <bundleID> varies per channel — see AppIdentity.bundleID
             // for the mapping.
             K.apiBaseURL: channelDefaultAPIBase,
+            // Local is the default for a fresh install. The migration above
+            // keeps established Cloud users on Cloud until they opt in.
+            K.transcriptionEngine: TranscriptionEngine.parakeet.rawValue,
+            K.localCleanupMode: LocalCleanupMode.qwenExperimental.rawValue,
             // Phase A flag: when true, Mac uploads audio to the Worker's
             // /api/transcribe endpoint. When false, Mac mints a Deepgram
             // ephemeral key and uploads directly to api.deepgram.com (the
@@ -291,6 +370,26 @@ final class Preferences: ObservableObject {
     var useGlobeKey: Bool {
         get { defaults.bool(forKey: K.useGlobeKey) }
         set { defaults.set(newValue, forKey: K.useGlobeKey); objectWillChange.send() }
+    }
+    var transcriptionEngine: TranscriptionEngine {
+        get {
+            TranscriptionEngine(rawValue: defaults.string(forKey: K.transcriptionEngine) ?? "")
+                ?? .parakeet
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: K.transcriptionEngine)
+            objectWillChange.send()
+        }
+    }
+    var localCleanupMode: LocalCleanupMode {
+        get {
+            LocalCleanupMode(rawValue: defaults.string(forKey: K.localCleanupMode) ?? "")
+                ?? .qwenExperimental
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: K.localCleanupMode)
+            objectWillChange.send()
+        }
     }
     /// Phase A transcription routing flag — see `K.useTranscribeProxy`.
     /// True = audio flows Mac → Worker → Deepgram (new path).

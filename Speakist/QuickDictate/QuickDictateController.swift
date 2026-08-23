@@ -3,7 +3,7 @@ import Combine
 import AppKit
 import AVFoundation
 
-/// Mac equivalent of the iOS `QuickDictateController`. Drives a
+/// Drives a
 /// record → transcribe → review → copy flow that lives entirely
 /// inside Speakist's main window — handy when the user wants to
 /// dictate but isn't focused on an editable field, or when they
@@ -68,6 +68,7 @@ final class QuickDictateController: ObservableObject {
     private let audioArchive: AudioArchive
     private let correctionStore: CorrectionStore
     private let audioMuter: SystemAudioMuter
+    private let transcriptionService: TranscriptionService
 
     private var levelSubscription: AnyCancellable?
     /// Carried across phases so save() can construct a feedback-ready
@@ -76,6 +77,7 @@ final class QuickDictateController: ObservableObject {
     private var pendingEntryID: String?
     private var pendingAudioURL: URL?
     private var pendingDurationMs: Int = 0
+    private var pendingRawTranscript: String?
 
     init(env: AppEnvironment) {
         self.audioRecorder = env.audioRecorder
@@ -85,6 +87,7 @@ final class QuickDictateController: ObservableObject {
         self.audioArchive = env.audioArchive
         self.correctionStore = env.correctionStore
         self.audioMuter = env.audioMuter
+        self.transcriptionService = env.transcriptionService
     }
 
     /// Begin a recording session. Permission gate first so a revoked
@@ -94,6 +97,7 @@ final class QuickDictateController: ObservableObject {
         pendingEntryID = nil
         pendingAudioURL = nil
         pendingDurationMs = 0
+        pendingRawTranscript = nil
         editedText = ""
         phase = .preparing
 
@@ -153,7 +157,7 @@ final class QuickDictateController: ObservableObject {
             return
         }
 
-        guard accountManager.isSignedIn, let token = accountManager.bearerToken, !token.isEmpty else {
+        guard preferences.transcriptionEngine == .parakeet || accountManager.isSignedIn else {
             phase = .error(message: "Sign in to Speakist before transcribing.")
             audioArchive.discard(tempURL: result.url)
             return
@@ -164,25 +168,11 @@ final class QuickDictateController: ObservableObject {
         pendingEntryID = entryID
         pendingDurationMs = durationMs
 
-        let client = SpeakistTranscribeClient(
-            apiBaseURL: preferences.apiBaseURL,
-            bearerToken: token,
-            transcriptionClientId: entryID,
-            dictation: preferences.dictationMode,
-            fillerWords: preferences.includeFillerWords,
-            measurements: preferences.convertMeasurements,
-            profanityFilter: preferences.maskProfanity,
-            detectLanguage: preferences.autoDetectLanguage,
-            replaceRules: VocabularyBuilder.replaceRules(from: correctionStore))
-
-        let keyterms = VocabularyBuilder.keyterms(from: correctionStore)
-        let language = preferences.language.isEmpty ? nil : preferences.language
-
         do {
-            let response = try await client.transcribe(
+            let response = try await transcriptionService.transcribeForPreview(
                 audioURL: result.url,
-                keyterms: keyterms,
-                language: language)
+                transcriptionClientId: entryID,
+                reportCloudUsage: true)
             let raw = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !raw.isEmpty else {
                 phase = .error(message: "Didn't catch anything — try again.")
@@ -193,6 +183,8 @@ final class QuickDictateController: ObservableObject {
             // Hold the temp audio path; `save()` archives it once the
             // user commits. `cancel()` discards it.
             pendingAudioURL = result.url
+            pendingRawTranscript = (response.rawText ?? response.text)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             editedText = raw
             phase = .reviewing(rawText: raw,
                                audioSeconds: response.audioSeconds > 0 ? response.audioSeconds : result.durationSeconds,
@@ -220,8 +212,13 @@ final class QuickDictateController: ObservableObject {
 
         // Ingest any user edits as corrections so the vocabulary
         // learns from this session, mirroring the push-to-talk path.
-        let pairs = DiffEngine.corrections(from: raw, to: finalText)
-        if !pairs.isEmpty { correctionStore.ingest(pairs: pairs) }
+        let originalASR = pendingRawTranscript ?? raw
+        if raw != finalText {
+            // `raw` is the already-processed text shown in the editor. Learn
+            // only the user's explicit edits, not local cleanup/replacements.
+            let pairs = DiffEngine.corrections(from: raw, to: finalText)
+            if !pairs.isEmpty { correctionStore.ingest(pairs: pairs) }
+        }
 
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(finalText, forType: .string)
@@ -251,7 +248,7 @@ final class QuickDictateController: ObservableObject {
             durationMs: pendingDurationMs,
             provider: providerLabel,
             model: modelLabel,
-            rawTranscript: raw,
+            rawTranscript: originalASR,
             finalTranscript: finalText,
             audioPath: archivedPath,
             targetBundleID: nil,
@@ -262,6 +259,7 @@ final class QuickDictateController: ObservableObject {
 
         pendingAudioURL = nil
         pendingEntryID = nil
+        pendingRawTranscript = nil
         phase = .done
     }
 
@@ -282,6 +280,7 @@ final class QuickDictateController: ObservableObject {
             pendingAudioURL = nil
         }
         pendingEntryID = nil
+        pendingRawTranscript = nil
         phase = .idle
     }
 

@@ -36,7 +36,7 @@ final class CursorInserter {
         // dictations don't run together — without it, a trailing
         // period collides with the next sentence's first word, or
         // the last word of one transcript fuses to the first word
-        // of the next. Matches the iOS keyboard's insert path.
+        // of the next. Keeps multi-paragraph insertion stable.
         let textToPaste = (text.last?.isWhitespace ?? false) ? text : text + " "
 
         let pasteboard = NSPasteboard.general

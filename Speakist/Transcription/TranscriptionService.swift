@@ -7,11 +7,11 @@ struct TranscriptionRequest {
 }
 
 /// Orchestrates a single transcription end-to-end:
-///   1. Mint a short-lived Deepgram key from the Speakist backend
-///   2. POST the audio to Deepgram directly (audio never touches our server)
+///   1. Select local Parakeet or the configured cloud client
+///   2. Transcribe the finished WAV using that engine
 ///   3. Paste the result at the user's cursor
 ///   4. Persist a history entry
-///   5. Report usage to Speakist so the credit ledger debits
+///   5. Report usage only when the legacy cloud path requires it
 ///
 /// Failure modes that need different UX:
 ///   * Not signed in → prompt user to sign in via Settings
@@ -23,6 +23,8 @@ final class TranscriptionService {
     private let preferences: Preferences
     private let accountManager: SpeakistAccountManager
     private let apiClient: SpeakistAPIClient
+    private let parakeetModel: ParakeetModelManager
+    private let qwenCleanupModel: QwenCleanupModelManager
     private let correctionStore: CorrectionStore
     private let historyStore: HistoryStore
     private let audioArchive: AudioArchive
@@ -40,6 +42,8 @@ final class TranscriptionService {
     init(preferences: Preferences,
          accountManager: SpeakistAccountManager,
          apiClient: SpeakistAPIClient,
+         parakeetModel: ParakeetModelManager,
+         qwenCleanupModel: QwenCleanupModelManager,
          correctionStore: CorrectionStore,
          historyStore: HistoryStore,
          audioArchive: AudioArchive,
@@ -51,6 +55,8 @@ final class TranscriptionService {
         self.preferences = preferences
         self.accountManager = accountManager
         self.apiClient = apiClient
+        self.parakeetModel = parakeetModel
+        self.qwenCleanupModel = qwenCleanupModel
         self.correctionStore = correctionStore
         self.historyStore = historyStore
         self.audioArchive = audioArchive
@@ -70,7 +76,8 @@ final class TranscriptionService {
     /// it up at key-release; if it's never consumed, `endStreamingSession`
     /// tears it down.
     func beginStreamingSession() -> StreamingTranscribeSession? {
-        guard preferences.useTranscribeProxy,
+        guard preferences.transcriptionEngine == .cloud,
+              preferences.useTranscribeProxy,
               preferences.useStreamingTranscription,
               accountManager.isSignedIn,
               let token = accountManager.bearerToken, !token.isEmpty else {
@@ -135,8 +142,9 @@ final class TranscriptionService {
             notifier.maxDurationHit(minutes: max(preferences.maxDurationSec / 60, 1))
         }
 
-        // 1. Need a Speakist session before we can mint a Deepgram token.
-        guard accountManager.isSignedIn else {
+        // Cloud transcription needs a Speakist session. Local Parakeet is
+        // deliberately account-free and never opens a network connection.
+        guard preferences.transcriptionEngine == .parakeet || accountManager.isSignedIn else {
             notifier.missingApiKey(provider: "Speakist")
             hud.hide()
             saveFailedEntry(id: entryID, createdAt: createdAt, durationMs: durationMs,
@@ -145,10 +153,7 @@ final class TranscriptionService {
             return
         }
 
-        // 2. Build the transcription client. Phase A default: proxy through
-        //    the Speakist Worker via /api/transcribe. The legacy direct-
-        //    Deepgram path (mint ephemeral key + POST to api.deepgram.com)
-        //    is still reachable by flipping `useTranscribeProxy` off.
+        // 2. Build the selected local or cloud transcription client.
         let client: any TranscriptionClient
         do {
             client = try await buildClient(transcriptionClientId: entryID)
@@ -195,6 +200,7 @@ final class TranscriptionService {
         // builds (where the server didn't yet return rawText).
         var finalText = ""
         var rawSttText = ""
+        var cleanupApplied = false
         var audioSeconds = request.recording.durationSeconds
         do {
             let result = try await withRetry {
@@ -206,6 +212,7 @@ final class TranscriptionService {
             finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             rawSttText = (result.rawText ?? result.text)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            cleanupApplied = result.cleanupApplied
             if result.audioSeconds > 0 {
                 audioSeconds = result.audioSeconds
             }
@@ -268,6 +275,7 @@ final class TranscriptionService {
             model: client.modelLabel,
             rawTranscript: rawSttText,
             finalTranscript: finalText,
+            cleanupApplied: cleanupApplied,
             audioPath: archivedURL?.path,
             targetBundleID: focus.bundleID,
             pasteStatus: pasteStatus,
@@ -284,7 +292,7 @@ final class TranscriptionService {
         // /api/transcribe endpoint debited inline, so we skip this call.
         // This branching lives here (not at call sites below) so the Phase A
         // proxy flow is one HTTP round-trip total from Mac's perspective.
-        if !preferences.useTranscribeProxy {
+        if preferences.transcriptionEngine == .cloud && !preferences.useTranscribeProxy {
             Task.detached { [weak self, entryID, finalText, audioSeconds, modelLabel = client.modelLabel] in
                 guard let self else { return }
                 await self.reportUsage(
@@ -299,16 +307,21 @@ final class TranscriptionService {
         playStopSound()
         hud.hide()
 
-        Analytics.shared.capture("transcription_completed", properties: [
-            "platform": "mac",
-            "provider": client.providerLabel,
-            "model": client.modelLabel,
-            "audio_seconds": audioSeconds,
-            "duration_ms": durationMs,
-            "word_count": Self.wordCount(finalText),
-            "paste_status": pasteStatus,
-            "target_bundle_id": focus.bundleID ?? "",
-        ])
+        // Local mode's privacy contract excludes per-dictation telemetry.
+        // Product-level lifecycle/screen analytics are documented separately,
+        // but no event describing a local recording leaves the Mac.
+        if preferences.transcriptionEngine == .cloud {
+            Analytics.shared.capture("transcription_completed", properties: [
+                "platform": "mac",
+                "provider": client.providerLabel,
+                "model": client.modelLabel,
+                "audio_seconds": audioSeconds,
+                "duration_ms": durationMs,
+                "word_count": Self.wordCount(finalText),
+                "paste_status": pasteStatus,
+                "target_bundle_id": focus.bundleID ?? "",
+            ])
+        }
     }
 
     func retranscribe(entryID: String) async {
@@ -396,19 +409,23 @@ final class TranscriptionService {
             errorMessage: errorMessage,
             editedAt: nil))
 
-        Analytics.shared.capture("transcription_failed", properties: [
-            "platform": "mac",
-            "provider": providerLabel,
-            "model": modelLabel,
-            "duration_ms": durationMs,
-            "error_message": errorMessage,
-            "target_bundle_id": bundleID ?? "",
-        ])
+        if preferences.transcriptionEngine == .cloud {
+            Analytics.shared.capture("transcription_failed", properties: [
+                "platform": "mac",
+                "provider": providerLabel,
+                "model": modelLabel,
+                "duration_ms": durationMs,
+                "error_message": errorMessage,
+                "target_bundle_id": bundleID ?? "",
+            ])
+        }
     }
 
     // MARK: - Build transcription client
 
     /// Returns the transcription client to use for this request.
+    ///
+    /// * Parakeet → run the English TDT v2 INT8 Core ML model locally.
     ///
     /// * `useTranscribeProxy` ON (Phase A default) → `SpeakistTranscribeClient`
     ///   which POSTs the audio to our Worker's /api/transcribe. No ephemeral
@@ -419,6 +436,17 @@ final class TranscriptionService {
     ///   POSTs audio directly to api.deepgram.com.
     private func buildClient(transcriptionClientId: String) async throws -> any TranscriptionClient {
         let replaceRules = VocabularyBuilder.replaceRules(from: correctionStore)
+
+        if preferences.transcriptionEngine == .parakeet {
+            let cleanupRuntime: any LocalTranscriptCleanupRuntime =
+                preferences.localCleanupMode == .qwenExperimental
+                && qwenCleanupModel.state.isReady
+                ? qwenCleanupModel.makeCleanupRuntime()
+                : DeterministicLocalTranscriptCleanup()
+            return parakeetModel.makeClient(
+                replaceRules: replaceRules,
+                cleanupRuntime: cleanupRuntime)
+        }
 
         if preferences.useTranscribeProxy {
             guard let token = try? keychainToken(), !token.isEmpty else {
@@ -468,6 +496,35 @@ final class TranscriptionService {
             replaceRules: replaceRules)
     }
 
+    /// The in-window Quick Dictate and Settings diagnostic paths need the
+    /// same engine routing as push-to-talk without paste/history side effects.
+    func transcribeForPreview(
+        audioURL: URL,
+        transcriptionClientId: String = UUID().uuidString,
+        reportCloudUsage: Bool = false
+    ) async throws -> TranscriptionResult {
+        if preferences.transcriptionEngine == .cloud && !accountManager.isSignedIn {
+            throw SpeakistAPIClient.Error.notSignedIn
+        }
+        let client = try await buildClient(transcriptionClientId: transcriptionClientId)
+        let result = try await client.transcribe(
+            audioURL: audioURL,
+            keyterms: VocabularyBuilder.keyterms(from: correctionStore),
+            language: preferences.language.isEmpty ? nil : preferences.language)
+        if reportCloudUsage,
+           preferences.transcriptionEngine == .cloud,
+           !preferences.useTranscribeProxy {
+            await reportUsage(
+                transcriptionClientId: transcriptionClientId,
+                wordCount: Self.wordCount(result.text),
+                audioMs: result.audioSeconds > 0
+                    ? Int(result.audioSeconds * 1000)
+                    : nil,
+                model: client.modelLabel)
+        }
+        return result
+    }
+
     /// Pull the Mac session bearer token from the account manager. Same
     /// Keychain slot the SpeakistAPIClient uses via its tokenProvider
     /// closure, just read directly because SpeakistTranscribeClient needs
@@ -477,6 +534,12 @@ final class TranscriptionService {
     }
 
     private func withRetry<T>(_ work: () async throws -> T) async throws -> T {
+        // Local failures are deterministic (model load, audio decode, or
+        // inference). Re-running immediately wastes battery and can double
+        // the perceived delay; the cloud path retains its transient retry.
+        if preferences.transcriptionEngine == .parakeet {
+            return try await work()
+        }
         do {
             return try await work()
         } catch let error as TranscriptionError where !error.isAuthFailure {

@@ -1,9 +1,6 @@
 // Three-step visual: Hold → Speak → Release. Designed to read at a glance;
 // you can understand Speakist's whole UX in 5 seconds from this strip.
 //
-// Same gesture on both platforms — Mac uses a global shortcut, iOS uses
-// a custom keyboard with a dictate key. The "Hold" step calls out both
-// so the iPhone path doesn't feel like an afterthought.
 
 export function HowItWorks() {
   return (
@@ -17,9 +14,8 @@ export function HowItWorks() {
             Three motions. No UI to learn.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            One gesture across both platforms. On Mac, a global shortcut
-            you set once. On iPhone, a custom keyboard you install once and
-            switch to whenever you want to dictate.
+            Set one global shortcut, then use the same hold, speak, release
+            gesture anywhere on your Mac.
           </p>
         </div>
 
@@ -27,7 +23,7 @@ export function HowItWorks() {
           <Step
             number="01"
             title="Hold."
-            body="Put your cursor where you want text. On Mac, hold ⌃⌘X. On iPhone, switch to the Speakist keyboard and tap-and-hold."
+            body="Put your cursor where you want text, then hold ⌃⌘X or the shortcut you chose."
             visual={<HoldVisual />}
           />
           <Step
@@ -39,7 +35,7 @@ export function HowItWorks() {
           <Step
             number="03"
             title="Release."
-            body="Text lands at your cursor. No window, no confirmation step, no cleanup. Keep typing."
+            body="Locally cleaned text lands at your cursor. No confirmation step. Keep typing."
             visual={<ReleaseVisual />}
           />
         </ol>

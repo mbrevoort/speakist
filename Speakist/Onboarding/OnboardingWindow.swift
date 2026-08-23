@@ -67,6 +67,7 @@ struct OnboardingView: View {
     /// Continue button stays at its last computed enabled/disabled
     /// state even if the user clears the shortcut in the recorder.
     @State private var shortcutNonce: Int = 0
+    @State private var modelNonce: Int = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -121,6 +122,8 @@ struct OnboardingView: View {
             // a single dictionary read.
             shortcutNonce &+= 1
         }
+        .onReceive(env.parakeetModel.$state) { _ in modelNonce &+= 1 }
+        .onReceive(env.qwenCleanupModel.$state) { _ in modelNonce &+= 1 }
     }
 
     private func okTranscriptCount() -> Int {
@@ -162,7 +165,15 @@ struct OnboardingView: View {
     private var canAdvance: Bool {
         switch step {
         case 1: return permissions.mic == .granted && permissions.accessibility == .granted
-        case 2: return keychain.hasKey(.refreshToken)
+        case 2:
+            if prefs.transcriptionEngine == .parakeet {
+                _ = modelNonce
+                // Parakeet is the only required local asset. Qwen is an
+                // optional presentation pass: deterministic cleanup remains
+                // available while it downloads or after a failure.
+                return env.parakeetModel.state.isReady
+            }
+            return keychain.hasKey(.refreshToken)
         case 3:
             // Always advanceable in Globe mode (the binding *is*
             // the Globe key — can't be unset). In custom-shortcut
@@ -281,63 +292,219 @@ private struct ProviderPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Sign in to Speakist").font(.title2.weight(.semibold))
-            Text("Your Speakist account handles transcription billing and syncs your vocabulary across Macs. New accounts start with $5 in free credit — no card required.")
+            Text("Choose transcription").font(.title2.weight(.semibold))
+            Text("The recommended local stack runs privately on this Mac and needs no account. Speakist Cloud remains available for multilingual transcription, synced vocabulary, and optional cloud polish.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            switch manager.state {
-            case .signedOut:
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        Task { await manager.startSignIn() }
-                    } label: {
-                        Label("Sign in with Speakist", systemImage: "person.crop.circle.badge.checkmark")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    if let err = manager.lastError {
-                        Text(err).font(.callout).foregroundColor(.red)
-                    }
+            Picker("Engine", selection: Binding(
+                get: { prefs.transcriptionEngine },
+                set: { prefs.transcriptionEngine = $0 })) {
+                ForEach(TranscriptionEngine.allCases) { engine in
+                    Text(engine.displayName).tag(engine)
                 }
+            }
+            .pickerStyle(.radioGroup)
 
-            case .signingIn(let code, let url, _):
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Your browser should have opened. Enter this code on the web:")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                    Text(code)
-                        .font(.system(size: 24, weight: .semibold, design: .monospaced))
-                        .kerning(3)
-                    HStack {
-                        Button("Copy code") {
-                            let pb = NSPasteboard.general
-                            pb.clearContents()
-                            pb.setString(code, forType: .string)
-                        }
-                        Button("Open link again") { NSWorkspace.shared.open(url) }
-                    }
-                }
+            Text(prefs.transcriptionEngine.detail)
+                .font(.callout)
+                .foregroundColor(.secondary)
 
-            case .signedIn:
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title2)
-                        .foregroundColor(.speakistSage)
-                    VStack(alignment: .leading) {
-                        Text("Signed in").font(.headline)
-                        Text("You can finish onboarding — transcriptions will bill against your Speakist credit.")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    }
-                }
+            if prefs.transcriptionEngine == .parakeet {
+                LocalModelsSetupPane(parakeet: env.parakeetModel,
+                                     qwen: env.qwenCleanupModel,
+                                     cleanupMode: Binding(
+                                        get: { prefs.localCleanupMode },
+                                        set: { prefs.localCleanupMode = $0 }))
+            } else {
+                cloudSignIn
             }
 
             Spacer(minLength: 0)
+        }
+        .task(id: prefs.transcriptionEngine) {
+            if prefs.transcriptionEngine == .parakeet {
+                env.parakeetModel.prepareInBackground()
+                if prefs.localCleanupMode == .qwenExperimental {
+                    env.qwenCleanupModel.prepareInBackground()
+                }
+            } else {
+                await env.correctionStore.syncFromServer(api: env.apiClient)
+            }
+        }
+        .onChange(of: prefs.localCleanupMode) { _, mode in
+            if prefs.transcriptionEngine == .parakeet,
+               mode == .qwenExperimental {
+                env.qwenCleanupModel.prepareInBackground()
+            }
+        }
+    }
 
-            Text("Using API endpoint: \(prefs.apiBaseURL.absoluteString)")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+    @ViewBuilder
+    private var cloudSignIn: some View {
+        switch manager.state {
+        case .signedOut:
+            VStack(alignment: .leading, spacing: 12) {
+                Button {
+                    Task { await manager.startSignIn() }
+                } label: {
+                    Label("Sign in with Speakist", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                if let err = manager.lastError {
+                    Text(err).font(.callout).foregroundColor(.red)
+                }
+            }
+        case .signingIn(let code, let url, _):
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Your browser should have opened. Enter this code on the web:")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                Text(code)
+                    .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                    .kerning(3)
+                HStack {
+                    Button("Copy code") {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(code, forType: .string)
+                    }
+                    Button("Open link again") { NSWorkspace.shared.open(url) }
+                }
+            }
+        case .signedIn:
+            Label("Signed in and ready for cloud transcription", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.speakistSage)
+        }
+    }
+}
+
+private struct LocalModelsSetupPane: View {
+    private enum SetupState {
+        case notInstalled
+        case preparing(Double, String)
+        case ready
+        case failed(String)
+    }
+
+    @ObservedObject var parakeet: ParakeetModelManager
+    @ObservedObject var qwen: QwenCleanupModelManager
+    @Binding var cleanupMode: LocalCleanupMode
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            modelRow(
+                title: "Parakeet transcription",
+                detail: "Required · about 1.1 GB · English speech recognition",
+                state: setupState(parakeet.state)) {
+                parakeet.prepareInBackground()
+            }
+
+            Picker("Transcript cleanup", selection: $cleanupMode) {
+                ForEach(LocalCleanupMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+
+            if cleanupMode == .qwenExperimental {
+                modelRow(
+                    title: "Local AI cleanup",
+                    detail: "Optional · about 290 MB · guarded punctuation and presentation",
+                    state: setupState(qwen.state),
+                    useRulesInstead: {
+                        cleanupMode = .deterministic
+                    }) {
+                    qwen.prepareInBackground()
+                }
+            }
+
+            if parakeet.state.isReady,
+               cleanupMode == .qwenExperimental,
+               !qwen.state.isReady {
+                Label(
+                    "You can continue now. Rules-only cleanup will be used until the optional AI model is ready.",
+                    systemImage: "checkmark.shield")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Downloads happen once and are cached on this Mac. Keep Speakist open and connected; afterward the selected local stack works offline.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+    }
+
+    @ViewBuilder
+    private func modelRow(title: String,
+                          detail: String,
+                          state: SetupState,
+                          useRulesInstead: (() -> Void)? = nil,
+                          retry: @escaping () -> Void) -> some View {
+        switch state {
+        case .notInstalled:
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Label(title, systemImage: "arrow.down.circle")
+                    Spacer()
+                    Button("Download", action: retry)
+                }
+                Text(detail).font(.caption).foregroundColor(.secondary)
+            }
+        case .preparing(let progress, let phase):
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.callout.weight(.medium))
+                ProgressView(value: progress)
+                Text(progress > 0 && progress < 1
+                     ? "\(Int(progress * 100))% · \(phase)"
+                     : phase)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(detail).font(.caption2).foregroundColor(.secondary)
+            }
+        case .ready:
+            Label("\(title) is ready", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.speakistSage)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 5) {
+                Label("\(title) setup failed", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text(message).font(.caption).foregroundColor(.secondary)
+                    .textSelection(.enabled)
+                Text("Check your connection and available disk space, then retry. Already-downloaded files are reused.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Try again", action: retry)
+                    if let useRulesInstead {
+                        Button("Use rules only", action: useRulesInstead)
+                    }
+                }
+            }
+        }
+    }
+
+    private func setupState(_ state: ParakeetModelManager.State) -> SetupState {
+        switch state {
+        case .notInstalled: return .notInstalled
+        case .preparing(let progress, let phase): return .preparing(progress, phase)
+        case .ready: return .ready
+        case .failed(let message): return .failed(message)
+        }
+    }
+
+    private func setupState(_ state: QwenCleanupModelManager.State) -> SetupState {
+        switch state {
+        case .notInstalled: return .notInstalled
+        case .preparing(let progress, let phase): return .preparing(progress, phase)
+        case .ready: return .ready
+        case .failed(let message): return .failed(message)
         }
     }
 }
@@ -435,27 +602,40 @@ private struct PolishTryPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Polish your transcripts").font(.title2.weight(.semibold))
-            Text("When polish is on, each transcript is tidied up — punctuation added, capitalization fixed, clear grammar slips corrected.")
+            Text(prefs.transcriptionEngine == .parakeet
+                 ? "Parakeet transcribes on this Mac. Exact vocabulary replacements, speech cleanup, and the guarded local AI presentation pass also stay on this Mac."
+                 : "When polish is on, each transcript is tidied up — punctuation added, capitalization fixed, clear grammar slips corrected.")
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Toggle(isOn: Binding(
-                get: { prefs.polishEnabled },
-                set: { savePolish($0) })) {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .foregroundColor(.speakistPeach)
-                    Text("Polish each transcription")
+            if prefs.transcriptionEngine == .cloud {
+                Toggle(isOn: Binding(
+                    get: { prefs.polishEnabled },
+                    set: { savePolish($0) })) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.speakistPeach)
+                        Text("Polish each transcription")
+                    }
                 }
+                .disabled(saving)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+            } else {
+                Label(prefs.localCleanupMode.displayName, systemImage: "checkmark.shield.fill")
+                    .foregroundColor(.speakistSage)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
             }
-            .disabled(saving)
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(prefs.polishEnabled ? "One more dictation" : "Turn it on, then dictate once more")
+                Text(prefs.transcriptionEngine == .parakeet
+                     ? "Try another local dictation"
+                     : (prefs.polishEnabled ? "One more dictation" : "Turn it on, then dictate once more"))
                     .font(.headline)
-                Text("Hold your shortcut and say a sentence with a couple of \u{201C}ums\u{201D} or a run-on thought. Polish will clean it up.")
+                Text(prefs.transcriptionEngine == .parakeet
+                     ? "Hold your shortcut, speak, and release. The audio will be transcribed without leaving your Mac."
+                     : "Hold your shortcut and say a sentence with a couple of \u{201C}ums\u{201D} or a run-on thought. Polish will clean it up.")
                     .font(.callout)
                     .foregroundColor(.secondary)
             }
@@ -473,7 +653,9 @@ private struct PolishTryPane: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.speakistSage)
-                    Text(prefs.polishEnabled ? "Nice — polish is on and applied." : "Done. Flip polish on above if you'd like it applied going forward.")
+                    Text(prefs.transcriptionEngine == .parakeet
+                         ? "Done — that transcription stayed local."
+                         : (prefs.polishEnabled ? "Nice — polish is on and applied." : "Done. Flip polish on above if you'd like it applied going forward."))
                         .font(.callout.weight(.medium))
                 }
             }
@@ -514,7 +696,7 @@ private struct LaunchPane: View {
                 .frame(width: 68, height: 68)
                 .foregroundColor(.speakistPeach)
             Text("Start Speakist at login?").font(.title2.weight(.semibold))
-            Text("Speakist runs in your menu bar only, no Dock icon. Launching at login keeps your shortcut always available.")
+            Text("Speakist stays available from the menu bar and the Dock. Launching at login keeps your dictation shortcut ready whenever you sign in.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: 440)

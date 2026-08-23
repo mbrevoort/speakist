@@ -61,7 +61,7 @@ Both `must_contain` and `must_not_contain` accept `case_insensitive: true`.
 ## Audio recording tips
 
 - **Format**: any common codec (the providers accept WAV/MP3/M4A/FLAC/OGG).
-  16 kHz mono WAV matches what the iOS / Mac client sends.
+  16 kHz mono WAV matches what the Mac client sends.
 - **Length**: keep fixtures short — 3-15 seconds is plenty. Long-form is
   better tested as a few short fixtures so individual failures are
   attributable.
@@ -115,10 +115,9 @@ list (`keyterms_json`) and the transcribe-option snapshot
 reported it. Mac populates both from the same `VocabularyBuilder` +
 `Preferences` source that drives real `/api/transcribe` calls, so a
 synced fixture replays in the bench with the exact provider config
-that produced the bug — including for vocab-bleed reproduction. iOS
-doesn't yet have a vocab store or option toggles, so iOS-submitted
-rows arrive with `keyterms: []` and all-false options (a faithful
-record of what iOS actually sends to STT).
+that produced the bug — including for vocab-bleed reproduction. Older
+submitted rows may have `keyterms: []` and all-false options; fixtures
+preserve exactly what the submitting build sent.
 
 The sync writes `keyterms` at the sidecar's top level (where
 `bench-stt.ts` reads it from). The full per-request snapshot is

@@ -1,4 +1,4 @@
-// Toggle switch — visually matches the macOS / iOS Toggle aesthetic so
+// Toggle switch — visually matches the macOS Toggle aesthetic so
 // the web Settings page feels consistent with the native apps. Built as
 // a styled <button role="switch">; no Radix dep, no checkbox, just an
 // accessible aria-checked button with a thumb that slides.

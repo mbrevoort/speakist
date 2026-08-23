@@ -1,30 +1,22 @@
 # Production CI/CD — runs when a GitHub Release is published.
 #
-# Three jobs (no `needs:` between them, so a single job's failure
+# Two shipping jobs (plus release context; no dependency between web and Mac):
 # doesn't block the others):
 #   * web — Cloudflare Worker (speakist-web-prod) + D1 prod migrations
 #   * mac — Mac DMG, notarized + Sparkle-signed, uploaded to R2 prod,
 #           registered in D1 prod via /api/admin/releases/publish
-#   * ios — iOS Release archive, uploaded to TestFlight (Internal)
-#           under the "Speakist" App Store Connect record
 #
 # Release semantics:
 #   tag      v0.2.0          → MARKETING_VERSION 0.2.0
 #   body     (markdown)      → Sparkle <description> HTML (Mac)
-#                             — TestFlight "What to Test" set manually
 #                               in App Store Connect (altool can't push it)
 #   prerel   off (default)   → channel=stable
 #   prerel   on              → channel=beta (uses the same prod Worker
 #                              + D1, but the appcast is /appcast-beta.xml)
 #
 # Channel ↔ Apple bundle ID matrix:
-#   stable  → com.brevoort-studio.speakist        (Mac, "Speakist")
-#             com.brevoort-studio.speakist.ios    (iOS, "Speakist")
-#   beta    → com.brevoort-studio.speakist.beta   (Mac, "Speakist Beta")
-#             — iOS beta channel is intentionally not provisioned;
-#               TestFlight External Beta on the stable iOS app record
-#               serves the same role with less Apple Developer portal
-#               churn. The iOS job below skips when channel=beta.
+#   stable  → com.brevoort-studio.speakist        ("Speakist")
+#   beta    → com.brevoort-studio.speakist.beta   ("Speakist Beta")
 #
 # Security note: this workflow consumes encrypted `secrets.*` and reads
 # `github.event.release.{tag_name,body,prerelease}`. Tag and body are
@@ -64,7 +56,7 @@ jobs:
   # Centralizes the "what are we shipping" decisions so each build job
   # consumes simple env values instead of replicating tag parsing.
   # Notes are rendered once here (markdown → HTML via gh api /markdown)
-  # and passed to the Mac job via artifact — that way iOS/web aren't
+  # and passed to the Mac job via artifact — that way web isn't
   # burdened with a markdown toolchain they don't use.
   context:
     name: Resolve release context
@@ -175,7 +167,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.28.0
 
       - uses: actions/setup-node@v4
         with:
@@ -186,6 +178,14 @@ jobs:
       - name: Install web dependencies
         working-directory: web
         run: pnpm install --frozen-lockfile
+
+      - name: Test web application
+        working-directory: web
+        run: pnpm test:run
+
+      - name: Type-check web application
+        working-directory: web
+        run: pnpm typecheck
 
       - name: Apply D1 migrations (prod)
         working-directory: web
@@ -257,7 +257,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.28.0
 
       - uses: actions/setup-node@v4
         with:
@@ -303,67 +303,3 @@ jobs:
 
       - name: Build, notarize, sign, upload, publish
         run: scripts/release-ci.sh
-
-  # ---------------------------------------------------------------------------
-  # iOS → TestFlight (Internal Testing on the "Speakist" app record)
-  # ---------------------------------------------------------------------------
-  # Only runs for stable releases. Beta/prerelease tags don't ship an
-  # iOS build because the iOS beta-channel bundle ID isn't provisioned —
-  # External TestFlight on the stable iOS app record covers that role.
-  # If you ever do want to provision …ios.beta, drop the `if:` filter
-  # and set RELEASE_IOS_SCHEME/CONFIG to the beta-flavored values.
-  ios:
-    name: Build + ship iOS to TestFlight
-    needs: context
-    if: ${{ needs.context.outputs.channel == 'stable' }}
-    # Self-hosted — same reasoning as the mac job above.
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    env:
-      APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-      # Prod iOS uses the default `SpeakistiOS` scheme + Release config
-      # (= bundle ID com.brevoort-studio.speakist.ios). RELEASE_VERSION
-      # bumps MARKETING_VERSION at xcodebuild time so the IPA's
-      # CFBundleShortVersionString matches the GitHub Release tag.
-      RELEASE_IOS_SCHEME: SpeakistiOS
-      RELEASE_IOS_CONFIG: Release
-      RELEASE_VERSION: ${{ needs.context.outputs.version }}
-      # Same PostHog key as the Mac job. release-ios-ci.sh forwards it
-      # as a `SPEAKIST_POSTHOG_KEY=…` xcodebuild build setting, scoped
-      # to the Release config only. Dev iOS workflow leaves it unset.
-      SPEAKIST_POSTHOG_KEY_STABLE: ${{ secrets.SPEAKIST_POSTHOG_KEY_STABLE }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.context.outputs.tag }}
-
-      - name: Install xcodegen
-        run: brew install xcodegen
-
-      - name: Set up Apple signing
-        # Same composite action as dev — imports the iOS Distribution
-        # P12 + drops the App Store Connect .p8 in the conventional
-        # path. Profiles for the …ios + …ios.Keyboard bundle IDs are
-        # auto-fetched by xcodebuild -allowProvisioningUpdates on first
-        # archive (provided the App IDs + App Group are registered
-        # in the Apple Developer portal — see docs/cicd.md).
-        uses: ./.github/actions/setup-apple-signing
-        with:
-          p12-base64: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_IOS_DISTRIBUTION_P12_PASSWORD }}
-          api-key-base64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
-          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-
-      - name: Cache Swift packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
-          key: spm-ios-${{ hashFiles('Speakist.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: spm-ios-
-
-      - name: Build, sign, archive, upload to TestFlight
-        run: scripts/release-ios-ci.sh

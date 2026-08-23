@@ -33,7 +33,7 @@ final class DiffEngineTests: XCTestCase {
 
     func testProperNounHeuristicCapitalization() {
         XCTAssertTrue(DiffEngine.isProperNounLike("Mytra"))
-        XCTAssertTrue(DiffEngine.isProperNounLike("iPhone"))
+        XCTAssertTrue(DiffEngine.isProperNounLike("macOS"))
         XCTAssertTrue(DiffEngine.isProperNounLike("GPT4"))
     }
 

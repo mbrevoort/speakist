@@ -25,7 +25,7 @@ export function LinkClient({
   defaultCode: string;
   userEmail: string;
   /** Native-app platform from the verification URL — drives the
-   *  "your Mac" / "your iPhone" / "your device" copy. `undefined`
+   *  "your Mac" / "your device" copy. `undefined`
    *  for older app builds that pre-date the platform field. */
   platform?: DevicePlatform;
 }) {

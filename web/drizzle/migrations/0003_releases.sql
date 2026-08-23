@@ -13,7 +13,7 @@
 CREATE TABLE `releases` (
   `id`                        text PRIMARY KEY NOT NULL,
   -- Channel this release is published on. Matches the Mac app's baked-in
-  -- SpeakistChannel Info.plist value.
+  -- Native release-channel value.
   `channel`                   text NOT NULL CHECK (channel IN ('stable', 'beta', 'dev')),
   -- Human-facing version string (CFBundleShortVersionString) — e.g. "0.2.0"
   `version`                   text NOT NULL,

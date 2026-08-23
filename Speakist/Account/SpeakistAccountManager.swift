@@ -1,13 +1,7 @@
 import Foundation
 import Combine
 
-#if canImport(AppKit)
 import AppKit
-#endif
-
-#if canImport(UIKit)
-import UIKit
-#endif
 
 /// Owns the Mac app's Speakist account state. Single source of truth for:
 ///   * the bearer refresh token (stored in Keychain as `.refreshToken`)
@@ -50,31 +44,19 @@ final class SpeakistAccountManager: ObservableObject {
     @Published private(set) var lastError: String?
 
     private let keychain: KeychainStore
-    #if canImport(AppKit)
     /// Preferences is optional so the manager can be constructed before the
     /// full app graph is wired; call `bind(preferences:)` to enable the
     /// /api/me polish-cache sync. If unbound, refreshIdentity still
-    /// updates `state` but skips the Preferences write. iOS target doesn't
-    /// reuse Preferences (the Mac Settings model isn't ported), so this
-    /// slot is macOS-only.
+    /// updates `state` but skips the Preferences write.
     private var preferences: Preferences?
-    #endif
     private var client: SpeakistAPIClient?
-    /// Read-only accessor for views that need to call API methods directly
-    /// (e.g., the iOS Polish settings screen). Nil until `bind(client:)`
-    /// completes during app construction. Mac code uses `env.apiClient`
-    /// instead — this is the path for iOS where there's no AppEnvironment
-    /// wrapper yet.
-    var apiClient: SpeakistAPIClient? { client }
 
     private var pollTask: Task<Void, Never>?
 
     /// Snapshot of the active device-code pair so `pollNow()` can fire a
     /// single off-cycle poll when the app comes foreground after the user
     /// approved in Safari. Without this we'd wait up to `interval` seconds
-    /// for the next scheduled sleep to expire — and on iOS a suspended
-    /// background app pauses Task.sleep, so that window can be arbitrarily
-    /// long.
+    /// for the next scheduled sleep to expire.
     private var activeDeviceCode: (code: String, expiresAt: Date)?
 
     init(keychain: KeychainStore) {
@@ -98,14 +80,12 @@ final class SpeakistAccountManager: ObservableObject {
         }
     }
 
-    #if canImport(AppKit)
     /// Inject Preferences so the /api/me polish block writes back to the
     /// local Settings cache. Called by AppEnvironment after both objects
-    /// exist. macOS only — iOS doesn't use the Mac Preferences type.
+    /// exist.
     func bind(preferences: Preferences) {
         self.preferences = preferences
     }
-    #endif
 
     /// Current bearer token, if any. Callable from any task via the @MainActor
     /// closure SpeakistAPIClient holds.
@@ -115,7 +95,7 @@ final class SpeakistAccountManager: ObservableObject {
 
     nonisolated var isSignedIn: Bool {
         // Safe to read the keychain from any actor — SecItemCopyMatching
-        // is thread-safe and the UserDefaults fallback on iOS is too.
+        // is thread-safe.
         // Declared `nonisolated` so SwiftUI can read it in view builders
         // without an implicit `await`.
         MainActor.assumeIsolated { keychain.hasKey(.refreshToken) }
@@ -157,11 +137,7 @@ final class SpeakistAccountManager: ObservableObject {
             }
 
             self.state = .signingIn(userCode: resp.userCode, verificationURL: url, expiresAt: expiresAt)
-            #if canImport(AppKit)
             NSWorkspace.shared.open(url)
-            #elseif canImport(UIKit)
-            await UIApplication.shared.open(url)
-            #endif
             startPolling(deviceCode: resp.deviceCode, interval: max(1, resp.interval), expiresAt: expiresAt)
         } catch {
             Logger.shared.warn("startSignIn failed: \(String(describing: error))")
@@ -280,7 +256,6 @@ final class SpeakistAccountManager: ObservableObject {
                 orgName: me.org?.name,
                 orgRole: me.org?.role
             )
-            #if canImport(AppKit)
             // Hydrate the local polish cache so Settings renders accurate
             // state on launch without a separate /api/me/polish call.
             if let polish = me.polish {
@@ -292,7 +267,6 @@ final class SpeakistAccountManager: ObservableObject {
                     defaultPrompt: polish.defaultPrompt
                 )
             }
-            #endif
         } catch SpeakistAPIClient.Error.notSignedIn {
             // Server says our token is no good. Treat as signed out.
             signOut()
@@ -335,9 +309,7 @@ final class SpeakistAccountManager: ObservableObject {
     /// the server-side user row is gone, so any lingering token is
     /// already useless.
     ///
-    /// Required for App Review on iOS (5.1.1(v)). The Mac app reuses
-    /// this same path; UI surfacing it on Mac is optional but cheap to
-    /// add later.
+    /// Kept as the native counterpart to account deletion on the web.
     func deleteAccount() async throws {
         guard let client else {
             throw SpeakistAPIClient.Error.notSignedIn
@@ -362,29 +334,16 @@ final class SpeakistAccountManager: ObservableObject {
     private func deviceNameForMac() -> String {
         // Readable per-device label shown in /dashboard/sessions when the
         // user wants to revoke a device.
-        #if canImport(AppKit)
         return Host.current().localizedName ?? "Mac"
-        #elseif canImport(UIKit)
-        return UIDevice.current.name   // "iPhone" in iOS 16+ unless entitled
-        #else
-        return "Speakist Device"
-        #endif
     }
 
     /// Compile-time-resolved platform tag sent to /api/device/start so
-    /// the /link page can show "your Mac" / "your iPhone" instead of
-    /// always saying "Mac". Must stay in sync with the server-side
+    /// the /link page can show "your Mac". Must stay in sync with the server-side
     /// `DevicePlatform` enum (web/src/app/link/device-label.ts) — the
     /// server rejects unrecognized values and the page falls back to
     /// generic copy.
     private func devicePlatformTag() -> String {
-        #if canImport(AppKit)
         return "macos"
-        #elseif canImport(UIKit)
-        return "ios"
-        #else
-        return ""
-        #endif
     }
 
     private func humanErrorMessage(_ err: Swift.Error) -> String {

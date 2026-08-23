@@ -1,4 +1,4 @@
-// Public /link page — where Mac and iOS users land after the native app
+// Public /link page — where Mac users land after the native app
 // shows them a user_code. Same device-code flow on both platforms; the
 // Cloudflare Worker endpoints don't differentiate. Three states:
 //   1. Not signed in → redirect to /auth/signin with callback back here
@@ -65,7 +65,7 @@ export default async function LinkPage({
           Link your device
         </h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">
-          Type the code shown by the Speakist app on your Mac or iPhone to
+          Type the code shown by the Speakist app on your Mac to
           connect it to this account.
         </p>
 

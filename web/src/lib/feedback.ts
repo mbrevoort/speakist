@@ -58,7 +58,7 @@ export interface FeedbackListRow {
   language: string | null;
   /** Vocab/keyterm list the client had in scope at transcription time.
    *  `null` = client did not report a list (older Mac builds, current
-   *  iOS). `[]` = explicitly empty. */
+   *  older clients). `[]` = explicitly empty. */
   keyterms: string[] | null;
   /** Decoded snapshot of the rest of the transcribe request options.
    *  `null` = client did not report. */

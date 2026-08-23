@@ -173,6 +173,10 @@ final class ShortcutManager {
     }
 
     private func prewarmTranscriptionConnection() {
+        if env.preferences.transcriptionEngine == .parakeet {
+            env.parakeetModel.prepareInBackground()
+            return
+        }
         let url = URL(string: "/api/me", relativeTo: env.preferences.apiBaseURL)
         guard let url else { return }
         let token = env.accountManager.bearerToken

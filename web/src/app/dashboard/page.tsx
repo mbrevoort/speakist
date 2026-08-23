@@ -4,7 +4,7 @@
 
 import { eq } from "drizzle-orm";
 import Link from "next/link";
-import { ArrowRight, Apple, BarChart3, CreditCard, Download, ExternalLink, Users as UsersIcon } from "lucide-react";
+import { ArrowRight, Apple, BarChart3, CreditCard, Download, Users as UsersIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Greeting } from "@/components/dashboard/local-time";
 import { requireUser } from "@/lib/authz";
@@ -12,7 +12,6 @@ import { getCurrentOrgForUser, getOrgCreditBalance } from "@/lib/orgs";
 import { getDb } from "@/lib/db";
 import { pricingConfig } from "@/lib/db/schema";
 import { millicentsToWords } from "@/lib/utils";
-import { env } from "@/lib/env";
 
 export const metadata = { title: "Dashboard — Speakist" };
 
@@ -29,8 +28,6 @@ export default async function DashboardHome() {
       .limit(1),
   ]);
   const balanceWords = millicentsToWords(balanceMc, cfg?.perWordMc ?? 20);
-  // Per-env TestFlight invite (wrangler.toml [env.X.vars]).
-  const testflightURL = env.server.IOS_TESTFLIGHT_URL;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -42,9 +39,9 @@ export default async function DashboardHome() {
           Welcome to Speakist.
         </h1>
         <p className="mt-2 text-muted-foreground max-w-xl">
-          Your workspace is set up. Install Speakist on Mac or iPhone and
-          start dictating — every transcription draws from the word balance
-          below.
+          Your optional cloud workspace is set up. Install Speakist on your
+          Mac, then choose local or cloud transcription in the app. Only cloud
+          transcription draws from the word balance below.
         </p>
       </header>
 
@@ -112,7 +109,7 @@ export default async function DashboardHome() {
         </StatCard>
       </section>
 
-      {/* Download CTA — Mac + iOS, same account works on both. */}
+      {/* Download CTA — local mode needs no account; this dashboard is for Cloud. */}
       <section className="rounded-2xl border-2 border-dashed border-border/70 bg-white/30 p-8 sm:p-10">
         <div className="flex flex-col sm:flex-row items-start gap-6">
           <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-plum text-cream">
@@ -120,12 +117,12 @@ export default async function DashboardHome() {
           </div>
           <div className="flex-1">
             <h2 className="text-xl font-semibold tracking-tight">
-              Get Speakist on Mac and iPhone
+              Get Speakist for Mac
             </h2>
             <p className="mt-2 text-muted-foreground">
-              Same account, same balance, both devices. On Mac, hold{" "}
-              <kbd className="font-mono rounded border border-border bg-muted px-1.5 py-0.5 text-xs">⌃⌘X</kbd>.
-              On iPhone, switch to the Speakist keyboard and tap-and-hold.
+              Hold{" "}<kbd className="font-mono rounded border border-border bg-muted px-1.5 py-0.5 text-xs">⌃⌘X</kbd>{" "}
+              anywhere. Local mode is free and account-free; choose Speakist
+              Cloud in the app when you want to use this workspace.
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-3">
               <Button asChild>
@@ -134,20 +131,8 @@ export default async function DashboardHome() {
                   Download for Mac
                 </a>
               </Button>
-              <Button asChild variant="outline">
-                <a
-                  href={testflightURL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="gap-2"
-                >
-                  iPhone Beta (TestFlight)
-                  <ExternalLink className="size-4" aria-hidden />
-                </a>
-              </Button>
               <span className="text-xs text-muted-foreground">
-                Requires macOS 14+ or iOS 17+. Free to install — you only pay
-                per word transcribed.
+                Requires an Apple silicon Mac with macOS 14+. You pay only for optional cloud words.
               </span>
             </div>
           </div>
@@ -182,4 +167,3 @@ function StatCard({
     </div>
   );
 }
-

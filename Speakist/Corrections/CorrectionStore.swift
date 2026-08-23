@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import Combine
+import AppKit
 
 /// Whether a learned correction reaches the upstream STT provider or
 /// stays client-side only. Mirrors the `applies_to` column on the
@@ -44,11 +45,13 @@ final class CorrectionStore: ObservableObject {
     @Published private(set) var all: [CorrectionRow] = []
 
     private var dbQueue: DatabaseQueue?
+    private static let stableRulesImportKey = "stable_explicit_replace_rules_v1"
 
     /// API client used to mirror local edits up to the server. Bound
     /// from `AppEnvironment` after construction so the store can stay
     /// network-agnostic at the file level. Nil = no push (local-only).
     private var apiClient: SpeakistAPIClient?
+    private var cloudSyncEnabled: () -> Bool = { true }
 
     /// In-memory "already tried this session" set for the reactive
     /// classifier. Keyed by the (from, to) pair. Prevents the same
@@ -66,8 +69,12 @@ final class CorrectionStore: ObservableObject {
     /// for a typical user's local-only set) is well under a cent.
     private var classifierAttempted: Set<String> = []
 
-    func bind(api: SpeakistAPIClient) {
+    func bind(
+        api: SpeakistAPIClient,
+        cloudSyncEnabled: @escaping () -> Bool = { true }
+    ) {
         self.apiClient = api
+        self.cloudSyncEnabled = cloudSyncEnabled
     }
 
     func bootstrap() {
@@ -76,6 +83,31 @@ final class CorrectionStore: ObservableObject {
             let queue = try DatabaseQueue(path: url.path)
             try migrate(queue)
             self.dbQueue = queue
+
+            // Debug/local is a separate app channel, so its Application
+            // Support directory starts empty even when the installed stable
+            // app already has the user's explicit Replace Words. Seed those
+            // rules once from the stable on-device database. This is a local
+            // SQLite-to-SQLite copy: it neither requires sign-in nor calls the
+            // Speakist backend. Local edits remain authoritative afterward.
+            if AppIdentity.channel == "local",
+               ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+                do {
+                    let stableURL = try Self.stableCorrectionsDatabaseURL()
+                    let imported = try Self.importExplicitRulesOnce(
+                        from: stableURL,
+                        into: queue)
+                    if imported > 0 {
+                        Logger.shared.info(
+                            "Imported \(imported) on-device replacement rules from Speakist")
+                    }
+                } catch {
+                    // A missing/corrupt stable database must never prevent the
+                    // local app from starting or using rules created locally.
+                    Logger.shared.warn(
+                        "Local replacement-rule import skipped: \(error.localizedDescription)")
+                }
+            }
             reload()
         } catch {
             Logger.shared.error("CorrectionStore bootstrap failed: \(error.localizedDescription)")
@@ -97,6 +129,24 @@ final class CorrectionStore: ObservableObject {
         reload()
     }
 
+    /// Test-only file-backed bootstrap for exercising the same cross-channel
+    /// import used by Speakist Local without reading the developer's real app
+    /// data. Passing no source behaves like a normal isolated database.
+    func bootstrapForTesting(
+        databaseURL: URL,
+        stableRulesURL: URL? = nil
+    ) throws {
+        let queue = try DatabaseQueue(path: databaseURL.path)
+        try migrate(queue)
+        self.dbQueue = queue
+        if let stableRulesURL {
+            _ = try Self.importExplicitRulesOnce(
+                from: stableRulesURL,
+                into: queue)
+        }
+        reload()
+    }
+
     // MARK: - Public API
 
     func ingest(pairs: [CorrectionPair]) {
@@ -109,18 +159,33 @@ final class CorrectionStore: ObservableObject {
                     let trimmedTo = pair.to.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmedFrom.isEmpty, !trimmedTo.isEmpty else { continue }
                     guard trimmedFrom.lowercased() != trimmedTo.lowercased() else { continue }
-                    // New auto-ingested entries start as `local` —
-                    // stored + visible in Settings, but NOT sent to
-                    // STT. The classifier (follow-up) promotes them
-                    // to `stt` when count ≥ 2 and the LLM agrees
-                    // it's vocab-worthy. The ON CONFLICT clause
-                    // increments count + last_seen on a recurring
-                    // correction; it does NOT downgrade applies_to,
-                    // so a row already promoted to `stt` keeps that
-                    // status when re-ingested.
+                    // New auto-ingested entries normally start as `local`.
+                    // A spelling variant of an already-approved name may
+                    // inherit that approval, but only when the source is
+                    // conservatively similar to the canonical spelling.
+                    // Capitalization alone is not enough: a one-off edit such
+                    // as `change` -> `Jeanie` must never become a global rule.
+                    let hasApprovedCanonical = try Bool.fetchOne(
+                        db,
+                        sql: """
+                            SELECT EXISTS(
+                                SELECT 1 FROM corrections
+                                WHERE lower(to_text) = lower(?)
+                                  AND applies_to = 'stt'
+                                  AND is_proper_noun = 1
+                            )
+                            """,
+                        arguments: [trimmedTo]) ?? false
+                    let appliesTo = pair.isProperNounLike
+                        && hasApprovedCanonical
+                        && Self.isSafeAutomaticAlias(
+                            source: trimmedFrom,
+                            canonical: trimmedTo)
+                        ? CorrectionAppliesTo.stt.rawValue
+                        : CorrectionAppliesTo.local.rawValue
                     try db.execute(literal: """
                         INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to)
-                        VALUES (\(trimmedFrom), \(trimmedTo), 1, \(now.timeIntervalSince1970), \(pair.isProperNounLike ? 1 : 0), 0, 'local')
+                        VALUES (\(trimmedFrom), \(trimmedTo), 1, \(now.timeIntervalSince1970), \(pair.isProperNounLike ? 1 : 0), 0, \(appliesTo))
                         ON CONFLICT(from_text, to_text) DO UPDATE SET
                           count = count + 1,
                           last_seen = \(now.timeIntervalSince1970)
@@ -139,6 +204,64 @@ final class CorrectionStore: ObservableObject {
         } catch {
             Logger.shared.error("ingest corrections failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Automatic aliases are deliberately narrower than the server-side
+    /// classifier. They must resemble an already-approved canonical spelling
+    /// after punctuation and whitespace are removed. This catches variants
+    /// such as `brevort`/`prevoort` -> `Brevoort` while rejecting ordinary
+    /// words that were corrected to a name in one particular sentence.
+    static func isSafeAutomaticAlias(source: String, canonical: String) -> Bool {
+        let sourceWords = source.split(whereSeparator: { $0.isWhitespace })
+        guard sourceWords.count == 1 else { return false }
+        let sourceWord = String(sourceWords[0])
+        let spelling = NSSpellChecker.shared.checkSpelling(
+            of: sourceWord,
+            startingAt: 0)
+        // A valid English word is ambiguous even when its spelling happens to
+        // resemble a name (`want` -> `Walti`, for example). Keep it staged for
+        // explicit approval instead of activating it automatically.
+        guard spelling.location != NSNotFound else { return false }
+
+        func folded(_ value: String) -> String {
+            value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+                .unicodeScalars
+                .filter(CharacterSet.alphanumerics.contains)
+                .map(String.init)
+                .joined()
+                .lowercased()
+        }
+
+        let source = folded(source)
+        let canonical = folded(canonical)
+        guard source.count >= 4, canonical.count >= 4, source != canonical else {
+            return false
+        }
+
+        let distance = levenshteinDistance(source, canonical)
+        let longest = max(source.count, canonical.count)
+        let similarity = 1 - (Double(distance) / Double(longest))
+        return similarity >= 0.55
+    }
+
+    private static func levenshteinDistance(_ lhs: String, _ rhs: String) -> Int {
+        let left = Array(lhs)
+        let right = Array(rhs)
+        var previous = Array(0...right.count)
+
+        for (leftIndex, leftCharacter) in left.enumerated() {
+            var current = [leftIndex + 1]
+            current.reserveCapacity(right.count + 1)
+            for (rightIndex, rightCharacter) in right.enumerated() {
+                current.append(min(
+                    current[rightIndex] + 1,
+                    previous[rightIndex + 1] + 1,
+                    previous[rightIndex] + (leftCharacter == rightCharacter ? 0 : 1)
+                ))
+            }
+            previous = current
+        }
+        return previous[right.count]
     }
 
     /// Find every local-only row and dispatch it to the classifier.
@@ -172,7 +295,7 @@ final class CorrectionStore: ObservableObject {
     /// `classifierAttempted` set is empty at launch so everything
     /// gets a clean re-try.
     private func promotePromotables() {
-        guard apiClient != nil else { return }
+        guard cloudSyncEnabled(), apiClient != nil else { return }
         for row in all where row.appliesTo == .local {
             let key = wireKey(from: row.fromText, to: row.toText)
             guard !classifierAttempted.contains(key) else { continue }
@@ -374,7 +497,13 @@ final class CorrectionStore: ObservableObject {
     /// comes to the foreground, and anything edited (or auto-learned)
     /// on the Mac before sync was wired up shows up on the web.
     func syncFromServer(api: SpeakistAPIClient) async {
+        guard cloudSyncEnabled() else { return }
         do {
+            // Local mode and signed-out use are allowed to mutate vocabulary.
+            // Replay those durable mutations before reading remote state so a
+            // stale server row cannot resurrect a rule the user deleted or
+            // overwrite an edit made while Cloud was not selected.
+            try await flushPendingVocabularyChanges(using: api)
             let response = try await api.fetchVocabulary()
             merge(serverEntries: response.entries)
 
@@ -411,22 +540,13 @@ final class CorrectionStore: ObservableObject {
     /// the local DB write so the web dashboard sees the change without
     /// waiting for the next sync.
     private func pushUpsert(_ row: CorrectionRow) {
-        guard let api = apiClient else { return }
         let wire = makeWire(from: row)
-        Task {
-            do {
-                _ = try await api.pushVocabulary(entries: [wire])
-            } catch SpeakistAPIClient.Error.notSignedIn {
-                // Silent — nothing to push.
-            } catch {
-                Logger.shared.warn("push vocab upsert failed: \(String(describing: error))")
-            }
-        }
+        enqueuePendingVocabularyChange(wire)
+        flushPendingVocabularyChangesInBackground()
     }
 
     /// Push a tombstone for a `(from, to)` pair the user just deleted.
     private func pushDelete(from fromText: String, to toText: String) {
-        guard let api = apiClient else { return }
         let wire = SpeakistAPIClient.VocabEntryWire(
             from: fromText,
             to: toText,
@@ -440,20 +560,14 @@ final class CorrectionStore: ObservableObject {
             updatedAt: nil,
             deleted: true
         )
-        Task {
-            do {
-                _ = try await api.pushVocabulary(entries: [wire])
-            } catch SpeakistAPIClient.Error.notSignedIn {
-            } catch {
-                Logger.shared.warn("push vocab delete failed: \(String(describing: error))")
-            }
-        }
+        enqueuePendingVocabularyChange(wire)
+        flushPendingVocabularyChangesInBackground()
     }
 
     /// Push the rows touched by a recent `ingest(pairs:)` so auto-
     /// learned corrections show up on the web alongside manual ones.
     private func pushTouchedPairs(_ pairs: [CorrectionPair]) {
-        guard let api = apiClient, !pairs.isEmpty else { return }
+        guard !pairs.isEmpty else { return }
         let touchedKeys: Set<String> = Set(pairs.map { pair in
             wireKey(
                 from: pair.from.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -464,12 +578,84 @@ final class CorrectionStore: ObservableObject {
             .filter { touchedKeys.contains(wireKey(from: $0.fromText, to: $0.toText)) }
             .map(makeWire(from:))
         guard !wire.isEmpty else { return }
-        Task {
+        wire.forEach(enqueuePendingVocabularyChange)
+        flushPendingVocabularyChangesInBackground()
+    }
+
+    private func enqueuePendingVocabularyChange(
+        _ wire: SpeakistAPIClient.VocabEntryWire
+    ) {
+        guard let dbQueue else { return }
+        do {
+            let payload = try JSONEncoder().encode(wire)
+            try dbQueue.write { db in
+                try db.execute(
+                    sql: """
+                        INSERT INTO correction_sync_queue
+                          (from_text, to_text, payload)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(from_text, to_text) DO UPDATE SET
+                          payload = excluded.payload
+                        """,
+                    arguments: [wire.from, wire.to, payload])
+            }
+        } catch {
+            Logger.shared.error(
+                "queue vocabulary change failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func flushPendingVocabularyChangesInBackground() {
+        guard cloudSyncEnabled(), let api = apiClient else { return }
+        Task { [weak self] in
             do {
-                _ = try await api.pushVocabulary(entries: wire)
+                try await self?.flushPendingVocabularyChanges(using: api)
             } catch SpeakistAPIClient.Error.notSignedIn {
+                // Keep the durable queue for the next signed-in Cloud sync.
             } catch {
-                Logger.shared.warn("push vocab ingest failed: \(String(describing: error))")
+                Logger.shared.warn(
+                    "push queued vocabulary changes failed: \(String(describing: error))")
+            }
+        }
+    }
+
+    private func flushPendingVocabularyChanges(
+        using api: SpeakistAPIClient
+    ) async throws {
+        guard let dbQueue else { return }
+        let pending = try await dbQueue.read { db -> [SpeakistAPIClient.VocabEntryWire] in
+            let payloads = try Data.fetchAll(
+                db,
+                sql: "SELECT payload FROM correction_sync_queue ORDER BY rowid")
+            return try payloads.map { try JSONDecoder().decode(
+                SpeakistAPIClient.VocabEntryWire.self,
+                from: $0)
+            }
+        }
+        guard !pending.isEmpty else { return }
+
+        _ = try await api.pushVocabulary(entries: pending)
+        try await dbQueue.write { db in
+            for wire in pending {
+                let payload = try JSONEncoder().encode(wire)
+                try db.execute(
+                    sql: """
+                        DELETE FROM correction_sync_queue
+                        WHERE from_text = ? AND to_text = ? AND payload = ?
+                        """,
+                    arguments: [wire.from, wire.to, payload])
+            }
+        }
+    }
+
+    func pendingVocabularyChangesForTesting() throws -> [SpeakistAPIClient.VocabEntryWire] {
+        guard let dbQueue else { return [] }
+        return try dbQueue.read { db in
+            let payloads = try Data.fetchAll(
+                db,
+                sql: "SELECT payload FROM correction_sync_queue ORDER BY rowid")
+            return try payloads.map {
+                try JSONDecoder().decode(SpeakistAPIClient.VocabEntryWire.self, from: $0)
             }
         }
     }
@@ -643,7 +829,117 @@ final class CorrectionStore: ObservableObject {
                 ON corrections(applies_to, count DESC, last_seen DESC);
             """)
         }
+        migrator.registerMigration("v3_correction_metadata") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS correction_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+            """)
+        }
+        migrator.registerMigration("v4_correction_sync_queue") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS correction_sync_queue (
+                    from_text TEXT NOT NULL,
+                    to_text TEXT NOT NULL,
+                    payload BLOB NOT NULL,
+                    PRIMARY KEY(from_text, to_text)
+                );
+            """)
+        }
         try migrator.migrate(queue)
+    }
+
+    /// Import deliberate, globally-active replacement rules from another
+    /// on-device Speakist correction database. A durable marker makes this a
+    /// one-time seed, so deleting an imported rule in Speakist Local does not
+    /// make it reappear at the next launch.
+    private static func importExplicitRulesOnce(
+        from sourceURL: URL,
+        into destination: DatabaseQueue
+    ) throws -> Int {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            return 0
+        }
+
+        let alreadyImported = try destination.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT value FROM correction_metadata WHERE key = ?",
+                arguments: [stableRulesImportKey]) != nil
+        }
+        guard !alreadyImported else { return 0 }
+
+        var configuration = Configuration()
+        configuration.readonly = true
+        let source = try DatabaseQueue(
+            path: sourceURL.path,
+            configuration: configuration)
+        let rules = try source.read { db -> [CorrectionRow] in
+            let columns = try String.fetchAll(
+                db,
+                sql: "SELECT name FROM pragma_table_info('corrections')")
+            let required = Set([
+                "from_text", "to_text", "count", "last_seen",
+                "is_proper_noun", "user_managed",
+            ])
+            guard required.isSubset(of: Set(columns)) else { return [] }
+
+            let hasAppliesTo = columns.contains("applies_to")
+            let filter = hasAppliesTo
+                ? "user_managed = 1 AND applies_to = 'stt'"
+                : "user_managed = 1"
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT from_text, to_text, count, last_seen,
+                       is_proper_noun, user_managed
+                FROM corrections
+                WHERE \(filter)
+                ORDER BY count DESC, last_seen DESC
+                """)
+            return rows.compactMap { row in
+                let fromText: String = row["from_text"] ?? ""
+                let toText: String = row["to_text"] ?? ""
+                guard !fromText.isEmpty, !toText.isEmpty else { return nil }
+                return CorrectionRow(
+                    dbID: nil,
+                    fromText: fromText,
+                    toText: toText,
+                    count: row["count"] ?? 1,
+                    lastSeen: Date(timeIntervalSince1970: row["last_seen"] ?? 0),
+                    isProperNoun: (row["is_proper_noun"] as Int? ?? 0) == 1,
+                    userManaged: true,
+                    appliesTo: .stt)
+            }
+        }
+
+        // If the stable channel has no explicit rules yet, leave the marker
+        // unset so a later local launch can import rules added in the interim.
+        guard !rules.isEmpty else { return 0 }
+
+        try destination.write { db in
+            for rule in rules {
+                try db.execute(literal: """
+                    INSERT INTO corrections
+                      (from_text, to_text, count, last_seen,
+                       is_proper_noun, user_managed, applies_to)
+                    VALUES
+                      (\(rule.fromText), \(rule.toText), \(rule.count),
+                       \(rule.lastSeen.timeIntervalSince1970),
+                       \(rule.isProperNoun ? 1 : 0), 1, 'stt')
+                    ON CONFLICT(from_text, to_text) DO UPDATE SET
+                      count = MAX(corrections.count, excluded.count),
+                      last_seen = MAX(corrections.last_seen, excluded.last_seen),
+                      is_proper_noun = MAX(corrections.is_proper_noun,
+                                           excluded.is_proper_noun),
+                      user_managed = 1,
+                      applies_to = 'stt'
+                    """)
+            }
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO correction_metadata (key, value) VALUES (?, ?)",
+                arguments: [stableRulesImportKey, String(rules.count)])
+        }
+        return rules.count
     }
 
     private static func databaseURL() throws -> URL {
@@ -653,5 +949,17 @@ final class CorrectionStore: ObservableObject {
         let dir = base.appendingPathComponent(AppIdentity.displayName, isDirectory: true)
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("corrections.sqlite")
+    }
+
+    private static func stableCorrectionsDatabaseURL() throws -> URL {
+        let fm = FileManager.default
+        let base = try fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true)
+        return base
+            .appendingPathComponent("Speakist", isDirectory: true)
+            .appendingPathComponent("corrections.sqlite")
     }
 }

@@ -10,7 +10,7 @@
 // section; it lives or dies on whether the privacy promise feels
 // enforceable, and that's a privacy-card concern.
 
-import { CircleDollarSign, Github, Lock, Sparkles, Zap } from "lucide-react";
+import { Github, Lock, Sparkles, WifiOff, Zap } from "lucide-react";
 
 export function ValueProps() {
   return (
@@ -25,9 +25,8 @@ export function ValueProps() {
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
             Built-in dictation has been a half-finished feature for years.
-            Subscription tools charge you whether you use them or not.
-            Speakist does one thing — well — and only charges you when you
-            actually use it.
+            Speakist does one thing well: private, fast dictation on your Mac,
+            with cloud transcription still available when you need it.
           </p>
         </div>
 
@@ -38,19 +37,19 @@ export function ValueProps() {
             body="Apple&rsquo;s dictation hasn&rsquo;t gotten meaningfully better in years — hit-or-miss accuracy, awkward punctuation, no polish. Speakist runs multi-stage state-of-the-art models, so the text reads like you meant it."
           />
           <Card
-            icon={<CircleDollarSign className="size-5" />}
-            title="Pay only when you dictate."
-            body="No subscription. No per-seat fee. About half the price of Wispr Flow at typical use — and when you&rsquo;re not dictating, your bill is zero."
+            icon={<WifiOff className="size-5" />}
+            title="Works offline."
+            body="The models download during setup. After that, local transcription and cleanup need no connection and have no per-word limit."
           />
           <Card
             icon={<Sparkles className="size-5" />}
             title="One gesture. Any app."
-            body="Hold ⌃⌘X on Mac. On iPhone, switch to the Speakist keyboard — a dedicated dictation keyboard you install once — and tap-and-hold. No overlays, no AI chat window, no &ldquo;smart prompts.&rdquo;"
+            body="Hold ⌃⌘X anywhere on your Mac, speak, then release. No AI chat window and no prompt-writing workflow."
           />
           <Card
             icon={<Lock className="size-5" />}
             title="Your voice stays on your device."
-            body="Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved in the cloud — only on your device."
+            body="In local mode, dictation audio and transcript text never leave your Mac. The optional cloud engine is clearly labeled and remains opt-in."
             footer={
               <a
                 href="https://github.com/mbrevoort/speakist"

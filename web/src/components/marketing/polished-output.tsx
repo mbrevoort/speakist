@@ -4,8 +4,8 @@
 // abstract differentiator copy.
 //
 // The examples are intentionally varied: a casual message, a work note,
-// an email reply — each demonstrates a different polish behavior (filler
-// removal + punctuation, sentence-restart cleanup, natural pause handling).
+// an email reply — each demonstrates conservative local filler removal,
+// capitalization, and punctuation without inventing content.
 
 import { ArrowDown, ArrowRight } from "lucide-react";
 
@@ -46,10 +46,9 @@ export function PolishedOutput() {
             Talk like you talk. Read like you wrote.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Speakist cleans up filler, false starts, and punctuation
-            automatically. You sound clear — even when you didn&apos;t. The
-            polish is optional, tuned to preserve your voice, and runs in
-            milliseconds before the text appears at your cursor.
+            Speakist removes safe fillers, expands common casual speech, and
+            cleans up punctuation locally. Model output must preserve your
+            words or Speakist falls back to deterministic rules.
           </p>
         </div>
 

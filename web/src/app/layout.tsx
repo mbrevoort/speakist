@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Speakist — push-to-talk dictation for macOS",
   description:
-    "Hold a key, speak, release. Clean text appears at your cursor in any app. Usage-based pricing. Your voice never leaves your device except to be transcribed.",
+    "Hold a key, speak, release. Parakeet transcription and local AI cleanup run privately on your Mac, then clean text appears at your cursor.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
 };
 

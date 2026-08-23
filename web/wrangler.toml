@@ -71,11 +71,6 @@ name = "speakist-web-dev"
 #                                 down every page that imports env.server.
 #   RELEASE_DOWNLOAD_BASE_URL   — Mac DMG public origin (R2 custom domain)
 #   RELEASE_R2_BUCKET           — bucket release.sh uploads DMGs to
-#   IOS_TESTFLIGHT_URL          — public TestFlight invite, surfaced on
-#                                 marketing pages + dashboard so the
-#                                 Speakist-Dev web links to the dev
-#                                 TestFlight and the prod web links to
-#                                 the prod TestFlight automatically
 #   RESEND_FROM_EMAIL           — magic-link "from" address. Same prod
 #                                 domain on both envs because Resend is
 #                                 only configured for speakist.ai.
@@ -90,7 +85,6 @@ name = "speakist-web-dev"
 NEXT_PUBLIC_SITE_URL = "https://speakist-dev.brevoortstudio.com"
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads-dev.brevoortstudio.com"
 RELEASE_R2_BUCKET = "speakist-releases-dev"
-IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/5jqHKMnu"
 RESEND_FROM_EMAIL = "noreply@speakist.ai"
 SUPER_ADMIN_EMAIL = "mike@brevoort.com"
 
@@ -153,7 +147,6 @@ workers_dev = false
 NEXT_PUBLIC_SITE_URL = "https://speakist.ai"
 RELEASE_DOWNLOAD_BASE_URL = "https://downloads.speakist.ai"
 RELEASE_R2_BUCKET = "speakist-releases-prod"
-IOS_TESTFLIGHT_URL = "https://testflight.apple.com/join/jsMN1vWs"
 RESEND_FROM_EMAIL = "noreply@speakist.ai"
 SUPER_ADMIN_EMAIL = "mike@brevoort.com"
 # Polish-prompt mirror: the dev Worker's base URL. The companion
