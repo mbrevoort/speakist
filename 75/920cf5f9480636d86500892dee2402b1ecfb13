@@ -1,0 +1,20 @@
+scripts/release.sh
+  s_248c5097e381ff::t_6f372a93f21f70 303-304
+  s_248c5097e381ff::t_779209b22bf6fb 296-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "75920cf5f9480636d86500892dee2402b1ecfb13",
+  "prompts": {},
+  "sessions": {
+    "s_248c5097e381ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a008df-d9d1-7b11-ba98-db86810cd54e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Mike Brevoort <m@mytra.ai>"
+    }
+  }
+}
