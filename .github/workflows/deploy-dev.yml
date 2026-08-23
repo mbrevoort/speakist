@@ -188,10 +188,12 @@ jobs:
         # self-hosted runner whose selected Xcode changes between releases.
         run: |
           set -euo pipefail
-          if ! xcrun --find metal >/dev/null 2>&1; then
+          # `xcrun --find` can return Xcode's placeholder shim even when the
+          # downloadable compiler is absent, so execute it for the readiness check.
+          if ! xcrun metal --version >/dev/null 2>&1; then
             xcodebuild -downloadComponent MetalToolchain
           fi
-          xcrun --find metal
+          xcrun metal --version
 
       - name: Install Sparkle tools
         # Pin to the same Sparkle version we depend on for the Mac
