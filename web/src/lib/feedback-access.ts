@@ -2,7 +2,7 @@
 //
 // Two valid bearers reach these endpoints:
 //
-//   1. A super-admin's regular session (Auth.js cookie OR Mac/iOS
+//   1. A super-admin's regular session (Auth.js cookie OR Mac
 //      bearer that resolves to a user via `requireUserFromRequest`).
 //      Implicitly grants every scope.
 //   2. A service token (`Authorization: Bearer ssat_<value>`),

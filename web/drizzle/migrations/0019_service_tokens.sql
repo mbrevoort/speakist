@@ -1,6 +1,6 @@
 -- Service tokens for non-browser callers (cron-driven agents, scripts).
 --
--- Auth.js handles browser sessions and the Mac/iOS app uses bearer
+-- Auth.js handles browser sessions and the Mac app uses bearer
 -- refresh tokens; both flow through `requireUserFromRequest` and end
 -- up tied to a user id. A scheduled-agent caller doesn't sign in
 -- interactively, so it needs its own auth surface — that's what this

@@ -2,7 +2,7 @@
 //
 // Per-user polish preferences. Source of truth for whether
 // /api/transcribe runs the LLM polish pass and what mode it runs in.
-// Mac/iOS/web all call this when the user flips the toggle or changes
+// Mac and web clients call this when the user flips the toggle or changes
 // the mode in their Settings UI.
 //
 // End users no longer customize the system prompt — that's now a

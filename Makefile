@@ -4,7 +4,7 @@ CHANNEL ?= stable
 NOTES ?=
 BUILD_DIR := build
 
-# Apple Developer Team ID used for code signing the Mac + iOS targets.
+# Apple Developer Team ID used for Mac code signing.
 # Default value is the team this repo was originally built under;
 # forks must override it to sign with their own developer account.
 # Two ways:
@@ -16,7 +16,7 @@ BUILD_DIR := build
 # project.yml reads this via ${env:SPEAKIST_APPLE_TEAM_ID}; release.sh
 # and release-*-ci.sh fall back to the same default when unset.
 # The exportOptions plists are static XML — fork-edit them
-# (scripts/exportOptions.plist, scripts/exportOptions-ios.plist) once
+# (scripts/exportOptions.plist) once
 # to match your team ID; xcodebuild doesn't substitute env vars in
 # plist values.
 SPEAKIST_APPLE_TEAM_ID ?= Q5T8FJNX57
@@ -42,6 +42,8 @@ build: project
 		-scheme $(SCHEME) \
 		-configuration $(CONFIG) \
 		-derivedDataPath $(BUILD_DIR) \
+		-skipPackagePluginValidation \
+		-skipMacroValidation \
 		build
 
 # The .app filename follows PRODUCT_NAME which tracks SPEAKIST_DISPLAY_NAME
@@ -71,6 +73,8 @@ test: project
 		-scheme $(SCHEME) \
 		-configuration $(CONFIG) \
 		-derivedDataPath $(BUILD_DIR) \
+		-skipPackagePluginValidation \
+		-skipMacroValidation \
 		test
 
 # Low-level archive (no notarization, no DMG). Use `make release` for the

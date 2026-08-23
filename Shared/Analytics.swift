@@ -4,16 +4,15 @@ import PostHog
 #endif
 
 /// Speakist's PostHog wrapper. Single source of truth for product
-/// analytics across both Mac and iOS targets.
+/// analytics in the Mac app.
 ///
 /// **Production-only by design.** The underlying SDK is *only* configured
 /// when:
 ///
 ///   1. The `SpeakistChannel` Info.plist key is `"stable"` — keeps
 ///      Local/Dev/Beta builds out of the production PostHog project
-///      entirely. We read the raw string here (rather than the iOS-only
-///      `SpeakistChannel` enum or the Mac-only `AppIdentity.channel`)
-///      so this file compiles into both targets without divergence.
+///      entirely. We read the raw string here so the wrapper does not
+///      depend on app startup state.
 ///   2. `Info.plist` has a non-empty `SpeakistPostHogKey` — supplies the
 ///      `phc_…` project key. The key is set by the per-config build
 ///      setting `SPEAKIST_POSTHOG_KEY` in `project.yml`; only the
@@ -36,8 +35,7 @@ final class Analytics {
     }
 
     /// Boot the underlying PostHog SDK. Safe to call repeatedly — second
-    /// and later calls are no-ops. Invoke from app launch (Mac:
-    /// `applicationDidFinishLaunching`; iOS: `SpeakistApp.init()`).
+    /// and later calls are no-ops. Invoke from app launch.
     func bootstrap() {
         guard !enabled else { return }
         let channel = Self.infoPlistChannel
@@ -58,12 +56,6 @@ final class Analytics {
         let config = PostHogConfig(apiKey: key, host: host ?? "https://us.i.posthog.com")
         config.captureApplicationLifecycleEvents = true
         config.captureScreenViews = true
-        // Session replay is iOS-only on the PostHog SDK — the property
-        // itself is gated on `#if os(iOS)` in PostHogConfig, so the
-        // macOS build wouldn't even compile a reference to it.
-        #if os(iOS)
-        config.sessionReplay = true
-        #endif
         PostHogSDK.shared.setup(config)
         enabled = true
         Logger.shared.info("Analytics enabled for stable channel")

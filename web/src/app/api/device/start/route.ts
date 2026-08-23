@@ -22,12 +22,12 @@ const POLL_INTERVAL_SECONDS = 3;
 const bodySchema = z.object({
   deviceName: z.string().trim().max(120).optional(),
   // Native-app-supplied platform tag — drives the /link page's
-  // device-aware copy ("Code from your Mac" vs "Code from your iPhone"
-  // vs generic fallback). Constrained to a known set so we don't
+  // device-aware copy ("Code from your Mac" vs generic fallback).
+  // Constrained to a known set so we don't
   // round-trip arbitrary user-controlled strings into the verification
   // URL where they'd render verbatim. Optional: older app builds that
   // don't send it just get the generic "your device" label.
-  platform: z.enum(["macos", "ios"]).optional(),
+  platform: z.literal("macos").optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -59,9 +59,8 @@ export async function POST(req: Request): Promise<Response> {
   const origin = new URL(req.url).origin;
   // Build verification_url_with_code as URLSearchParams so a future
   // additional param doesn't have to manage encoding by hand. The
-  // platform tag lets /link render "Code from your Mac" vs "Code
-  // from your iPhone" without us needing a DB lookup or schema
-  // migration — it just rides along on the URL the native app
+  // platform tag lets /link render "Code from your Mac" without a DB
+  // lookup or schema migration — it just rides along on the URL the app
   // shows the user.
   const params = new URLSearchParams({ code: userCode });
   if (platform) params.set("platform", platform);

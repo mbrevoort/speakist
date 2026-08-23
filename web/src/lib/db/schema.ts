@@ -630,7 +630,7 @@ export const transcriptionFeedback = sqliteTable(
     // `keytermsJson` is first-class so we can index/query it later
     // ("show me all feedback where vocab contained 'Stripe'"). The
     // value is a JSON-encoded array of strings; NULL = client did
-    // not report a keyterm list (current iOS state). Empty array =
+    // not report a keyterm list (older-client state). Empty array =
     // client explicitly said "no vocab in scope".
     keytermsJson: text("keyterms_json"),
 

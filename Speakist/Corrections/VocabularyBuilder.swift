@@ -15,4 +15,5 @@ enum VocabularyBuilder {
     static func replaceRules(from store: CorrectionStore, limit: Int = 200) -> [ReplaceRule] {
         store.replaceRules(limit: limit)
     }
+
 }

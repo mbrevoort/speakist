@@ -7,6 +7,7 @@ enum TranscriptionError: Error, LocalizedError {
     case rateLimited
     case serverError(Int, String?)
     case network(String)
+    case localModel(String)
     case empty
     case canceled
 
@@ -18,6 +19,7 @@ enum TranscriptionError: Error, LocalizedError {
         case .rateLimited: return "Rate limited — try again in a moment."
         case .serverError(let code, let msg): return "Server error \(code)\(msg.map { ": \($0)" } ?? "")."
         case .network(let msg): return "Network error: \(msg)"
+        case .localModel(let msg): return "Local transcription error: \(msg)"
         case .empty: return "No speech detected."
         case .canceled: return "Canceled."
         }
@@ -42,8 +44,26 @@ struct TranscriptionResult: Sendable {
     /// and also true on the proxy path when the server is older than
     /// the rawText-response change).
     let rawText: String?
+    /// True when a local post-transcription cleanup stage made a safe,
+    /// content-preserving change.  Defaults to false for cloud and legacy
+    /// clients that do not expose a local cleanup stage.
+    let cleanupApplied: Bool
     let providerModelLabel: String
     let audioSeconds: Double
+
+    init(
+        text: String,
+        rawText: String?,
+        cleanupApplied: Bool = false,
+        providerModelLabel: String,
+        audioSeconds: Double
+    ) {
+        self.text = text
+        self.rawText = rawText
+        self.cleanupApplied = cleanupApplied
+        self.providerModelLabel = providerModelLabel
+        self.audioSeconds = audioSeconds
+    }
 }
 
 protocol TranscriptionClient: Sendable {

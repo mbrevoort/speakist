@@ -20,7 +20,7 @@ Please include:
 - Reproduction steps — ideally the smallest case that demonstrates
   the bug.
 - Anything you already know about scope (which version, which
-  surface — Mac app / iOS app / Web backend / MCP).
+  surface — Mac app / Web backend / MCP).
 - Whether you've shared the details anywhere else.
 
 Please **do not** include personal data, real user audio, or
@@ -42,7 +42,7 @@ reporters in the release notes for the fix, if you'd like that.
 
 The bits worth focusing your time on:
 
-- **Audio path** — capture on the Mac/iOS clients, transport to
+- **Audio path** — local capture and inference on Mac, or explicit Cloud transport to
   `/api/transcribe`, processing inside the Worker, response back.
   Audio is *never* persisted server-side except when a user
   explicitly opts in to share a recording with a feedback report

@@ -51,73 +51,63 @@ export async function Pricing() {
             Pricing
           </p>
           <h2 className="mt-3 text-3xl sm:text-4xl font-semibold tracking-tight">
-            Half the price. No subscription.
+            Local is free. Cloud is optional.
           </h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Pay only for the words you actually dictate. No monthly commitment,
-            no per-seat fees, no auto-renewing tier you forget about.
+            Use the private on-device stack without an account or word limit.
+            Switch to Speakist Cloud when you need multilingual transcription
+            or synced account features.
           </p>
         </div>
 
-        <div className="mx-auto max-w-3xl">
-          {/* Main pricing card */}
+        <div className="mx-auto grid max-w-5xl gap-6 md:grid-cols-2">
           <div className="relative rounded-3xl border-2 border-peach/30 bg-background p-8 sm:p-10 shadow-lg shadow-peach/5">
             <div className="absolute -top-3 left-1/2 -translate-x-1/2">
               <span className="rounded-full bg-peach text-primary-foreground text-xs font-semibold px-3 py-1">
-                {signupBonusWords.toLocaleString("en-US")} free words to start
+                Recommended
               </span>
             </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-end gap-4 sm:gap-10 justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Per-word pricing</p>
-                <p className="mt-2 flex items-baseline gap-2">
-                  <span className="text-5xl sm:text-6xl font-semibold tracking-tight">
-                    ${pricePer1000Words.toFixed(2)}
-                  </span>
-                  <span className="text-lg text-muted-foreground">/ 1,000 words</span>
-                </p>
-              </div>
-              <div className="text-sm text-muted-foreground sm:text-right">
-                <p>
-                  Typical light use{" "}
-                  <span className="font-mono text-foreground">~${typicalMonthlySpend.toFixed(2)}/mo</span>
-                </p>
-                <p className="text-xs mt-1">
-                  500 words/day · 30 days
-                </p>
-              </div>
-            </div>
-
+            <p className="text-sm text-muted-foreground">On this Mac</p>
+            <p className="mt-2 text-5xl sm:text-6xl font-semibold tracking-tight">$0</p>
+            <p className="mt-2 text-sm text-muted-foreground">Unlimited local dictation</p>
             <hr className="my-8 border-border/60" />
-
-            <ul className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-              <PricingRow>{signupBonusWords.toLocaleString("en-US")} free words on signup — no card required</PricingRow>
-              <PricingRow>Volume discounts up to 50% on larger packs</PricingRow>
-              <PricingRow>Auto top-up with a monthly cap you control</PricingRow>
-              <PricingRow>Works on Mac and iPhone — same account, same balance</PricingRow>
-              <PricingRow>Custom vocabulary for names and jargon</PricingRow>
-              <PricingRow>Unlimited users per organization</PricingRow>
+            <ul className="space-y-3 text-sm">
+              <PricingRow>No account or credit card</PricingRow>
+              <PricingRow>Parakeet transcription on your Mac</PricingRow>
+              <PricingRow>Local AI cleanup with safety fallback</PricingRow>
+              <PricingRow>Works offline after first model download</PricingRow>
             </ul>
-
-            <div className="mt-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="mt-10">
               <Button asChild size="lg" className="flex-1">
-                <Link href="/auth/signin?intent=signup">
-                  Start with {signupBonusWords.toLocaleString("en-US")} free words
-                </Link>
+                <a href="/api/download/mac" download>Download for Mac</a>
               </Button>
             </div>
           </div>
 
-          {/* Comparison blurb */}
-          <p className="mt-8 text-center text-sm text-muted-foreground max-w-xl mx-auto">
-            For context: subscription dictation apps run{" "}
-            <span className="font-medium text-foreground">$8&ndash;$15 a month flat</span>{" "}
-            even if you don&apos;t use them. A Speakist user dictating the same
-            500 words/day pays{" "}
-            <span className="font-mono text-foreground">~${typicalMonthlySpend.toFixed(2)}/mo</span>
-            {" "}— and if you take a week off, your bill takes the week off too.
-          </p>
+          <div className="rounded-3xl border border-border bg-background p-8 sm:p-10">
+            <p className="text-sm text-muted-foreground">Speakist Cloud</p>
+            <p className="mt-2 flex items-baseline gap-2">
+              <span className="text-5xl sm:text-6xl font-semibold tracking-tight">
+                ${pricePer1000Words.toFixed(2)}
+              </span>
+              <span className="text-lg text-muted-foreground">/ 1,000 words</span>
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              About ${typicalMonthlySpend.toFixed(2)}/month at 500 words per day
+            </p>
+            <hr className="my-8 border-border/60" />
+            <ul className="space-y-3 text-sm">
+              <PricingRow>{signupBonusWords.toLocaleString("en-US")} free words on signup</PricingRow>
+              <PricingRow>Multilingual transcription</PricingRow>
+              <PricingRow>Synced vocabulary and account features</PricingRow>
+              <PricingRow>Pay only for cloud words used</PricingRow>
+            </ul>
+            <div className="mt-10">
+              <Button asChild size="lg" variant="outline" className="w-full">
+                <Link href="/auth/signin?intent=signup">Create optional cloud account</Link>
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     </section>

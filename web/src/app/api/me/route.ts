@@ -18,7 +18,7 @@
 // Account deletion. Required by App Review guideline 5.1.1(v) — apps that
 // allow account creation must also offer in-app account deletion. Web-only
 // deletion (e.g., a "delete account" link in /dashboard) does not satisfy
-// the rule; the path has to be reachable from the iOS app itself.
+// the rule; the path is reachable from the native app itself.
 //
 // Cascade strategy (no schema change required — relies on the existing
 // onDelete: "cascade" relationships and the small set of nullable

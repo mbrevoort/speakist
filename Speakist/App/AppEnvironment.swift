@@ -16,6 +16,8 @@ final class AppEnvironment: ObservableObject {
     let audioMuter: SystemAudioMuter
     let cursorInserter: CursorInserter
     let focusedFieldProbe: FocusedFieldProbe
+    let parakeetModel: ParakeetModelManager
+    let qwenCleanupModel: QwenCleanupModelManager
     let transcriptionService: TranscriptionService
     let hudController: HUDController
     let notifier: Notifier
@@ -41,6 +43,10 @@ final class AppEnvironment: ObservableObject {
         self.audioMuter = SystemAudioMuter(preferences: prefs)
         self.cursorInserter = CursorInserter()
         self.focusedFieldProbe = FocusedFieldProbe()
+        let parakeetModel = ParakeetModelManager()
+        self.parakeetModel = parakeetModel
+        let qwenCleanupModel = QwenCleanupModelManager()
+        self.qwenCleanupModel = qwenCleanupModel
         self.hudController = HUDController(preferences: prefs)
         self.notifier = Notifier()
         self.updater = UpdaterController()
@@ -61,12 +67,18 @@ final class AppEnvironment: ObservableObject {
         accountManager.bind(preferences: prefs)
         // Lets the correction store mirror local edits + ingests up to
         // the server so the web vocabulary view stays in sync.
-        correctionStore.bind(api: apiClient)
+        correctionStore.bind(
+            api: apiClient,
+            cloudSyncEnabled: { [weak prefs] in
+                prefs?.transcriptionEngine == .cloud
+            })
 
         self.transcriptionService = TranscriptionService(
             preferences: prefs,
             accountManager: accountManager,
             apiClient: apiClient,
+            parakeetModel: parakeetModel,
+            qwenCleanupModel: qwenCleanupModel,
             correctionStore: correctionStore,
             historyStore: historyStore,
             audioArchive: audioArchive,
@@ -102,6 +114,17 @@ final class AppEnvironment: ObservableObject {
         // first-show construction in `showPreparing()` is correct; the
         // persistent-panel change in `hide()` already covers presses 2+.
         audioRecorder.prewarm()
+        // The XCTest host constructs the full app environment. Keep unit tests
+        // deterministic and fast: their fake Parakeet runtime should never be
+        // accompanied by a real Core ML load from this launch-time prewarm.
+        if preferences.onboardingCompleted,
+           preferences.transcriptionEngine == .parakeet,
+           ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+            parakeetModel.prepareInBackground()
+            if preferences.localCleanupMode == .qwenExperimental {
+                qwenCleanupModel.prepareInBackground()
+            }
+        }
         // If mic access is granted later in this session (user came
         // back from System Settings, or completed onboarding), re-run
         // the audio prewarm so the first post-grant press is also fast.

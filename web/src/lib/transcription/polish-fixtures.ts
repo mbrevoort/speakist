@@ -443,7 +443,7 @@ export const POLISH_FIXTURES: PolishFixture[] = [
   },
   // ---- Production-feedback regressions --------------------------------------
   // Real-world failures pulled from transcription_feedback. The
-  // anti-answer family now covers verbs the iOS user base actually
+  // anti-answer family now covers verbs users actually
   // dictates ("audit", "review", "evaluate"), not just the textbook
   // "explain X" / "tell me about Y" shapes the seed prompts handle.
   //

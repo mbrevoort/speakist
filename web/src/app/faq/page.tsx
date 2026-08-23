@@ -7,8 +7,8 @@
 //
 // Question set focuses on what visitors plausibly wonder about that the
 // landing-page sections don't cleanly answer (offline support, languages,
-// app compatibility, word counting, what happens at zero balance, iOS
-// keyboard privacy, other platforms, refunds). Avoid restating the value
+// app compatibility, local privacy, optional cloud billing, other
+// platforms, refunds). Avoid restating the value
 // props that already live on the home page.
 
 import { Nav } from "@/components/marketing/nav";
@@ -23,14 +23,23 @@ interface QA {
 
 const QUESTIONS: QA[] = [
   {
+    q: "What Mac does Speakist require?",
+    a: (
+      <>
+        Speakist requires an Apple silicon Mac (M1 or newer) running macOS 14
+        or later. The on-device cleanup stack uses Apple&apos;s MLX framework,
+        so Intel Macs are not supported by this release.
+      </>
+    ),
+  },
+  {
     q: "Does Speakist work offline?",
     a: (
       <>
-        No. Transcription and polish run on our servers, so you need an
-        internet connection. The trade-off is that the app stays small
-        (under 30&nbsp;MB) and we can use larger, more accurate models than
-        anything that would run on a laptop battery. Latency is typically
-        well under a second on a normal connection.
+        Yes. The recommended Parakeet transcription model and small cleanup
+        model download during setup. After that, local dictation works without
+        an internet connection. Downloading models, checking for app updates,
+        and the optional Speakist Cloud engine still require a connection.
       </>
     ),
   },
@@ -38,13 +47,10 @@ const QUESTIONS: QA[] = [
     q: "Which languages does Speakist support?",
     a: (
       <>
-        English is the default and gets our fastest model. Speakist also
-        transcribes most major languages — French, Spanish, German,
-        Portuguese, Italian, Dutch, Japanese, and dozens more — and we
-        route to the right model automatically. The polish step is
-        currently tuned for English; in other languages you still get
-        accurate transcription, but punctuation and filler cleanup may be
-        lighter.
+        Local Parakeet mode is optimized for English. The optional Speakist
+        Cloud engine supports many major languages and automatic language
+        detection. You can switch engines at any time in Transcription
+        settings.
       </>
     ),
   },
@@ -61,27 +67,26 @@ const QUESTIONS: QA[] = [
     ),
   },
   {
-    q: "How is a “word” counted?",
+    q: "Is local dictation really unlimited?",
     a: (
       <>
-        One word in the <em>final</em> transcript equals one word billed.
-        Filler (&ldquo;um,&rdquo; &ldquo;uh&rdquo;), false starts, and
-        repetitions that the polish step removes don&apos;t count — you
-        only pay for the text that lands at your cursor. You can see your
-        word count per dictation in the dashboard.
+        Yes. Local transcription runs on hardware you already own, so there is
+        no account, subscription, or per-word charge. If you explicitly switch
+        to Speakist Cloud, only cloud transcriptions use your word balance.
       </>
     ),
   },
   {
-    q: "What happens when I run out of words?",
+    q: "What happens when my cloud balance reaches zero?",
     a: (
       <>
-        Two options. If you turn on auto top-up, Speakist will refill your
+        Local dictation keeps working. For Speakist Cloud, you have two options.
+        If you turn on auto top-up, Speakist will refill your
         balance automatically when it falls below the threshold you set,
         up to a monthly cap you also control — so you never get a surprise
         bill. If auto top-up is off and your balance hits zero, dictation
         simply pauses until you top up manually. Either way, nothing
-        runs without your consent.
+        cloud transcription runs without your consent.
       </>
     ),
   },
@@ -98,15 +103,13 @@ const QUESTIONS: QA[] = [
     ),
   },
   {
-    q: "Does the iPhone keyboard see anything else I type?",
+    q: "What leaves my Mac in local mode?",
     a: (
       <>
-        No. The Speakist keyboard is a dedicated dictation surface — it
-        has a push-to-talk button and that&apos;s it. There&apos;s no
-        traditional QWERTY layout in the keyboard, so there&apos;s
-        nothing to log even in principle. You switch to the Speakist
-        keyboard when you want to dictate, then switch back to your usual
-        keyboard for ordinary typing.
+        Your dictation audio and transcript text stay on your Mac. The app may
+        still use the network to download model files, check for updates, or
+        access account features you choose. Switching to Speakist Cloud clearly
+        changes the audio path and requires an account.
       </>
     ),
   },
@@ -114,7 +117,7 @@ const QUESTIONS: QA[] = [
     q: "What about Windows, Linux, or Android?",
     a: (
       <>
-        Mac and iPhone for now. We&apos;re focused on making that
+        Mac for now. We&apos;re focused on making that
         experience really good. If you&apos;d like to vote for another
         platform, email{" "}
         <a

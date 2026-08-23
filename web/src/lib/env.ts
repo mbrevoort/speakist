@@ -14,8 +14,7 @@
 //      build sees its own value. Falls back to localhost for `next dev`.
 //   2. Worker vars    — non-secret, env-specific, read at runtime via
 //      process.env. Source of truth = wrangler.toml [env.X.vars].
-//      Examples below: SUPER_ADMIN_EMAIL, RESEND_FROM_EMAIL,
-//      IOS_TESTFLIGHT_URL.
+//      Examples below: SUPER_ADMIN_EMAIL, RESEND_FROM_EMAIL.
 //   3. Worker secrets — encrypted, set via `wrangler secret put X --env Y`.
 //      Examples below: AUTH_SECRET, RESEND_API_KEY, STRIPE_*, DEEPGRAM_*.
 //
@@ -68,12 +67,6 @@ const serverSchema = publicSchema.extend({
   // domain because Resend is only configured for speakist.ai (no
   // separate dev sender domain exists).
   RESEND_FROM_EMAIL: z.string().email().default("noreply@speakist.ai"),
-
-  // Worker var — public TestFlight invite. Read by marketing pages
-  // and dashboard to surface the right invite per env. Defaulted to
-  // the dev invite so a forgotten wrangler.toml entry doesn't render
-  // an empty link in `next dev`.
-  IOS_TESTFLIGHT_URL: z.string().url().default("https://testflight.apple.com/join/5jqHKMnu"),
 
   // Stripe (Phase 4).
   STRIPE_SECRET_KEY: z.string().min(1).optional(),

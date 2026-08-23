@@ -309,7 +309,10 @@ private struct DetailView: View {
 
     private func saveEditsIfChanged() {
         guard finalDraft != entry.finalTranscript else { return }
-        let pairs = DiffEngine.corrections(from: entry.rawTranscript, to: finalDraft)
+        // Learn only what the user changed in History. Comparing against raw
+        // ASR would mistakenly teach automatic cleanup and replacements as
+        // new vocabulary rules.
+        let pairs = DiffEngine.corrections(from: entry.finalTranscript, to: finalDraft)
         correctionStore.ingest(pairs: pairs)
         history.updateFinalTranscript(id: entry.id, newText: finalDraft)
         entry.finalTranscript = finalDraft

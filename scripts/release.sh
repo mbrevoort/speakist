@@ -186,6 +186,13 @@ command -v hdiutil    >/dev/null || { echo "hdiutil not found (comes with macOS)
 command -v jq         >/dev/null || { echo "brew install jq"; exit 1; }
 command -v curl       >/dev/null || { echo "curl not found"; exit 1; }
 [ -x "${SPARKLE_TOOLS}/sign_update" ] || { echo "Sparkle sign_update missing at ${SPARKLE_TOOLS}/sign_update"; exit 1; }
+security find-identity -v -p codesigning 2>/dev/null \
+  | grep -F '"Developer ID Application:' \
+  | grep -F "(${TEAM_ID})" >/dev/null || {
+    echo "Developer ID Application certificate with private key not found for team ${TEAM_ID}."
+    echo "Install/import the distribution certificate before building a notarized release."
+    exit 1
+  }
 # CI uses an App Store Connect API key (.p8) for notarization instead
 # of a keychain credential profile. When NOTARY_API_KEY_PATH is set,
 # the corresponding KEY_ID + ISSUER must be too — failure is loud.

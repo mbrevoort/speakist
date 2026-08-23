@@ -38,7 +38,7 @@ export type ServiceScope = (typeof SERVICE_SCOPES)[number];
 
 /** Plaintext token prefix. Lets the bearer dispatcher recognize a
  *  service token at a glance and route it through the right verifier
- *  (vs. the Mac/iOS refresh-token bearer or Auth.js session token). */
+ *  (vs. the Mac refresh-token bearer or Auth.js session token). */
 export const TOKEN_PREFIX = "ssat_";
 
 /** 192 bits of entropy in the random part — far past the brute-force

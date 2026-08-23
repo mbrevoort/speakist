@@ -58,7 +58,7 @@ export function SettingsClient({
     <div className="space-y-12">
       <Group
         label="Personal"
-        description="Settings that apply only to your account. Sync to your Mac and iPhone on next launch."
+        description="Settings that apply only to your cloud account and sync to your Mac on next launch."
       >
         <PolishCard enabled={polishEnabled} />
         <VocabularyCard entries={vocabEntries} />
@@ -374,7 +374,7 @@ function FeedbackCard({
   return (
     <Card
       title="Report bad transcription"
-      description="When on, users in this workspace can submit a transcription for quality review from their History view in the Mac and iOS apps. Audio + texts are sent to Speakist support and used only for transcription accuracy improvements. Turn off to hide the Report button and refuse new submissions for everyone in the workspace."
+      description="When on, users in this workspace can submit a transcription for quality review from History in the Mac app. Audio + texts are sent to Speakist support and used only for transcription accuracy improvements. Turn off to hide the Report button and refuse new submissions for everyone in the workspace."
     >
       <div className="flex flex-wrap items-center gap-3">
         <label

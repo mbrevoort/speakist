@@ -1,6 +1,6 @@
 // POST /api/feedback — "Report bad transcription" submission endpoint.
 //
-// Called from the Mac and iOS clients when a user clicks "Report" on a
+// Called from the Mac client when a user clicks "Report" on a
 // History entry. Stores the audio (if shared), raw STT text, polished
 // text, what the user said it should have been, plus light metadata —
 // the corpus we grow polish-fixtures.ts and vocabulary suggestions

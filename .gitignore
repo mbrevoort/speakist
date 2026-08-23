@@ -2,6 +2,7 @@
 *.xcodeproj
 *.xcworkspace
 build/
+build-*/
 DerivedData/
 xcuserdata/
 *.xcuserstate
@@ -25,6 +26,7 @@ fastlane/screenshots
 web/node_modules/
 web/.next/
 web/.pnpm-store/
+/.pnpm-store/
 web/.wrangler/
 web/.dev.vars
 web/.open-next/

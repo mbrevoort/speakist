@@ -105,9 +105,8 @@ fi
 # and Check-for-Updates always reported "you're up to date" regardless
 # of how many builds had shipped.
 #
-# `100000 + GITHUB_RUN_NUMBER` mirrors the iOS CFBundleVersion strategy
-# in scripts/release-ios-ci.sh — large headroom (you'd need 100k runs to
-# collide with anything plausible) and monotonic by GitHub's contract
+# `100000 + GITHUB_RUN_NUMBER` leaves large headroom before colliding
+# with anything plausible and is monotonic by GitHub's contract
 # on run numbers (only ever increment, even on force-pushes).
 export RELEASE_BUILD_NUMBER=$((100000 + GITHUB_RUN_NUMBER))
 

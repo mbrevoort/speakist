@@ -57,7 +57,9 @@ struct AccountSettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("You're not signed in yet.")
                             .font(.headline)
-                        Text("Sign in to your Speakist account to start transcribing. You'll get $5 in free credit to try it.")
+                        Text(prefs.transcriptionEngine == .parakeet
+                             ? "Parakeet transcription works without an account. Sign in only if you want to use Speakist Cloud."
+                             : "Sign in to use Speakist Cloud. You'll get $5 in free credit to try it.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                         Button("Sign in with Speakist") {
@@ -360,12 +362,46 @@ struct TranscriptionSettingsView: View {
 
     var body: some View {
         Form {
-            // Provider + model selection lives in the super admin org page now.
-            // English defaults to Groq Whisper Turbo (fastest); other languages
-            // default to Groq Whisper Large (most accurate multilingual).
-            // A super admin can override per-org via the allowed-models list.
-            // The Mac side just sends the chosen language and lets the Worker
-            // resolve which model to call.
+            Section("Engine") {
+                Picker("Transcribe with", selection: Binding(
+                    get: { prefs.transcriptionEngine },
+                    set: { prefs.transcriptionEngine = $0 })) {
+                    ForEach(TranscriptionEngine.allCases) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+
+                Text(prefs.transcriptionEngine.detail)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+
+                if prefs.transcriptionEngine == .parakeet {
+                    ParakeetModelStatusView(model: env.parakeetModel)
+                }
+            }
+
+            if prefs.transcriptionEngine == .parakeet {
+                Section("Local cleanup") {
+                    Picker("Clean up with", selection: Binding(
+                        get: { prefs.localCleanupMode },
+                        set: { prefs.localCleanupMode = $0 })) {
+                        ForEach(LocalCleanupMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    Text(prefs.localCleanupMode.detail)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+
+                    if prefs.localCleanupMode == .qwenExperimental {
+                        QwenCleanupStatusView(model: env.qwenCleanupModel)
+                    }
+                }
+            }
+
             Section {
                 Picker("Language", selection: Binding(
                     get: { prefs.language },
@@ -373,7 +409,10 @@ struct TranscriptionSettingsView: View {
                     Text("English").tag("en")
                     Text("Auto-detect").tag("")
                 }
-                Text("Choosing English uses a transcription engine optimized for speed and English accuracy. Other languages and Auto-detect use a multilingual engine.")
+                .disabled(prefs.transcriptionEngine == .parakeet)
+                Text(prefs.transcriptionEngine == .parakeet
+                     ? "Parakeet TDT v2 is optimized for English. Choose Speakist Cloud for multilingual transcription."
+                     : "Choosing English uses a transcription engine optimized for speed and English accuracy. Other languages and Auto-detect use a multilingual engine.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
@@ -384,7 +423,13 @@ struct TranscriptionSettingsView: View {
                 Button(testing ? "Recording…" : "Test recording (2 seconds)") {
                     Task { await runTestRecording() }
                 }
-                .disabled(testing || env.permissions.mic != .granted)
+                .disabled(
+                    testing
+                    || env.permissions.mic != .granted
+                    || (prefs.transcriptionEngine == .parakeet
+                        && (!env.parakeetModel.state.isReady
+                            || (prefs.localCleanupMode == .qwenExperimental
+                                && !env.qwenCleanupModel.state.isReady))))
                 if !testOutput.isEmpty {
                     Text(testOutput)
                         .font(.callout)
@@ -394,6 +439,19 @@ struct TranscriptionSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .task(id: prefs.transcriptionEngine) {
+            if prefs.transcriptionEngine == .parakeet {
+                env.parakeetModel.prepareInBackground()
+            } else {
+                await env.correctionStore.syncFromServer(api: env.apiClient)
+            }
+        }
+        .task(id: prefs.localCleanupMode) {
+            if prefs.transcriptionEngine == .parakeet,
+               prefs.localCleanupMode == .qwenExperimental {
+                env.qwenCleanupModel.prepareInBackground()
+            }
+        }
     }
 
     private func runTestRecording() async {
@@ -401,9 +459,8 @@ struct TranscriptionSettingsView: View {
         testOutput = "Recording…"
         defer { testing = false }
 
-        // Gate on sign-in — test recording needs to mint a Deepgram token,
-        // which needs a Speakist session.
-        guard env.accountManager.isSignedIn else {
+        // Cloud needs an account; Parakeet is intentionally account-free.
+        guard prefs.transcriptionEngine == .parakeet || env.accountManager.isSignedIn else {
             testOutput = "Sign in on the Account tab first, then try again."
             return
         }
@@ -422,45 +479,8 @@ struct TranscriptionSettingsView: View {
 
         testOutput = "Transcribing…"
         do {
-            // Mirror the production path: use SpeakistTranscribeClient when
-            // the proxy pref is on, else the legacy Deepgram direct path.
-            // Keeps test-recording truthful about what a real shortcut press
-            // would do with the current settings.
-            let result: TranscriptionResult
-            if prefs.useTranscribeProxy {
-                guard let token = env.accountManager.bearerToken, !token.isEmpty else {
-                    testOutput = "Sign in on the Account tab first, then try again."
-                    return
-                }
-                let client = SpeakistTranscribeClient(
-                    apiBaseURL: prefs.apiBaseURL,
-                    bearerToken: token,
-                    transcriptionClientId: UUID().uuidString,
-                    dictation: prefs.dictationMode,
-                    fillerWords: prefs.includeFillerWords,
-                    measurements: prefs.convertMeasurements,
-                    profanityFilter: prefs.maskProfanity,
-                    detectLanguage: prefs.autoDetectLanguage,
-                    replaceRules: [])
-                result = try await client.transcribe(
-                    audioURL: rec.url,
-                    keyterms: [],
-                    language: prefs.language.isEmpty ? nil : prefs.language)
-            } else {
-                let token = try await env.apiClient.mintDeepgramToken()
-                let client = DeepgramClient(
-                    apiKey: token.key,
-                    model: prefs.deepgramModel,
-                    dictation: prefs.dictationMode,
-                    fillerWords: prefs.includeFillerWords,
-                    measurements: prefs.convertMeasurements,
-                    profanityFilter: prefs.maskProfanity,
-                    detectLanguage: prefs.autoDetectLanguage)
-                result = try await client.transcribe(
-                    audioURL: rec.url,
-                    keyterms: [],
-                    language: prefs.language.isEmpty ? nil : prefs.language)
-            }
+            let result = try await env.transcriptionService.transcribeForPreview(
+                audioURL: rec.url)
             testOutput = result.text.isEmpty ? "(empty transcript)" : result.text
         } catch SpeakistAPIClient.Error.insufficientCredit {
             testOutput = "Out of credit. Top up in the Account tab."
@@ -468,6 +488,84 @@ struct TranscriptionSettingsView: View {
             testOutput = "Error: \(error.localizedDescription)"
         }
         try? FileManager.default.removeItem(at: rec.url)
+    }
+}
+
+private struct ParakeetModelStatusView: View {
+    @ObservedObject var model: ParakeetModelManager
+
+    var body: some View {
+        switch model.state {
+        case .notInstalled:
+            HStack {
+                Label("Model not installed", systemImage: "arrow.down.circle")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("Download model") {
+                    model.prepareInBackground()
+                }
+            }
+        case .preparing(let progress, let phase):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: progress)
+                Text(phase)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        case .ready:
+            Label("Parakeet is ready for offline transcription", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Model setup failed", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button("Try again") {
+                    model.prepareInBackground()
+                }
+            }
+        }
+    }
+}
+
+private struct QwenCleanupStatusView: View {
+    @ObservedObject var model: QwenCleanupModelManager
+
+    var body: some View {
+        switch model.state {
+        case .notInstalled:
+            HStack {
+                Label("Cleanup model not installed", systemImage: "arrow.down.circle")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("Download model") {
+                    model.prepareInBackground()
+                }
+            }
+        case .preparing(let progress, let phase):
+            VStack(alignment: .leading, spacing: 6) {
+                ProgressView(value: progress)
+                Text(phase)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        case .ready:
+            Label("Qwen is ready for offline cleanup", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Cleanup model setup failed", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Button("Try again") {
+                    model.prepareInBackground()
+                }
+            }
+        }
     }
 }
 
@@ -497,9 +595,11 @@ struct PolishSettingsView: View {
                 Toggle("Polish each transcription", isOn: Binding(
                     get: { prefs.polishEnabled },
                     set: { newValue in saveToggle(newValue) }))
-                    .disabled(savingToggle)
+                    .disabled(savingToggle || prefs.transcriptionEngine == .parakeet)
 
-                Text("A second pass that applies your spoken self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation.")
+                Text(prefs.transcriptionEngine == .parakeet
+                     ? "Cloud polish is not applied to local Parakeet transcripts. Choose Rules only or Local AI cleanup in Transcription; both run entirely on this Mac."
+                     : "A second pass that applies your spoken self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             } header: {
@@ -741,10 +841,9 @@ struct AboutSettingsView: View {
 
                 Divider()
 
-                // Privacy copy. Deliberately provider-agnostic — the
-                // backend can swap upstream STT providers without
-                // requiring a Mac release to update this string.
-                Text("Speakist keeps your data on your Mac. Audio and history live in Application Support. Your Speakist sign-in token lives in the Keychain. Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is ever saved or written to disk in the cloud — only on your device.")
+                Text(env.preferences.transcriptionEngine == .parakeet
+                     ? "Parakeet transcription runs on this Mac. Recorded audio, transcripts, and history stay in Application Support and are not sent to Speakist or an external transcription provider. The model is downloaded once from Hugging Face and then works offline."
+                     : "Speakist keeps your history on your Mac. Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is saved to disk in the cloud. Your sign-in token lives in the Keychain.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

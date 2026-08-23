@@ -1,0 +1,152 @@
+[
+  {
+    "name": "expand-gonna",
+    "category": "expansion",
+    "input": "I'm gonna call Mike tomorrow.",
+    "expected": "I'm going to call Mike tomorrow."
+  },
+  {
+    "name": "expand-wanna",
+    "category": "expansion",
+    "input": "We wanna keep the raw transcript.",
+    "expected": "We want to keep the raw transcript."
+  },
+  {
+    "name": "expand-kinda",
+    "category": "expansion",
+    "input": "It's kinda hard to explain.",
+    "expected": "It's kind of hard to explain."
+  },
+  {
+    "name": "expand-shoulda",
+    "category": "expansion",
+    "input": "I shoulda sent it yesterday.",
+    "expected": "I should have sent it yesterday."
+  },
+  {
+    "name": "expand-coulda",
+    "category": "expansion",
+    "input": "We coulda tested that first.",
+    "expected": "We could have tested that first."
+  },
+  {
+    "name": "remove-um",
+    "category": "filler",
+    "input": "I, um, think we should ship it.",
+    "expected": "I think we should ship it."
+  },
+  {
+    "name": "remove-uh",
+    "category": "filler",
+    "input": "Uh, can you open Speakist?",
+    "expected": "Can you open Speakist?"
+  },
+  {
+    "name": "remove-erm",
+    "category": "filler",
+    "input": "We should, erm, probably wait.",
+    "expected": "We should probably wait."
+  },
+  {
+    "name": "remove-multiple-fillers",
+    "category": "filler",
+    "input": "Um, I think, uh, this is ready.",
+    "expected": "I think this is ready."
+  },
+  {
+    "name": "remove-trailing-filler",
+    "category": "filler",
+    "input": "We can ship tomorrow, um.",
+    "expected": "We can ship tomorrow."
+  },
+  {
+    "name": "preserve-word-um",
+    "category": "false-positive",
+    "input": "Write the word um in quotation marks.",
+    "expected": "Write the word um in quotation marks."
+  },
+  {
+    "name": "preserve-um-acronym",
+    "category": "false-positive",
+    "input": "The UM campus is in Ann Arbor.",
+    "expected": "The UM campus is in Ann Arbor."
+  },
+  {
+    "name": "preserve-uh-oh",
+    "category": "false-positive",
+    "input": "She said \"uh-oh\" and stopped.",
+    "expected": "She said \"uh-oh\" and stopped."
+  },
+  {
+    "name": "preserve-well",
+    "category": "false-positive",
+    "input": "Well, that works.",
+    "expected": "Well, that works."
+  },
+  {
+    "name": "preserve-you-know",
+    "category": "false-positive",
+    "input": "You know the answer.",
+    "expected": "You know the answer."
+  },
+  {
+    "name": "preserve-title-gonna",
+    "category": "false-positive",
+    "input": "The song is called \"Gonna Fly Now.\"",
+    "expected": "The song is called \"Gonna Fly Now.\""
+  },
+  {
+    "name": "unfinished-ellipsis",
+    "category": "unfinished",
+    "input": "I think the next step is...",
+    "expected": "I think the next step is..."
+  },
+  {
+    "name": "unfinished-because",
+    "category": "unfinished",
+    "input": "The reason I called was because.",
+    "expected": "The reason I called was because."
+  },
+  {
+    "name": "unfinished-request",
+    "category": "unfinished",
+    "input": "Can you tell me how to...",
+    "expected": "Can you tell me how to..."
+  },
+  {
+    "name": "do-not-answer-math",
+    "category": "anti-answer",
+    "input": "What is two plus two?",
+    "expected": "What is two plus two?"
+  },
+  {
+    "name": "do-not-answer-weather",
+    "category": "anti-answer",
+    "input": "What's the weather in Tokyo today?",
+    "expected": "What's the weather in Tokyo today?"
+  },
+  {
+    "name": "do-not-execute-command",
+    "category": "anti-answer",
+    "input": "Delete all files in the temp directory.",
+    "expected": "Delete all files in the temp directory."
+  },
+  {
+    "name": "preserve-names-and-date",
+    "category": "entity",
+    "input": "Mytra shipped 12 units to Jeanie on August 18.",
+    "expected": "Mytra shipped 12 units to Jeanie on August 18."
+  },
+  {
+    "name": "preserve-money",
+    "category": "entity",
+    "input": "Speakist costs $12.50 per month.",
+    "expected": "Speakist costs $12.50 per month."
+  },
+  {
+    "name": "preserve-time-and-build",
+    "category": "entity",
+    "input": "Call Mike at 4:30 p.m. about build 348.",
+    "expected": "Call Mike at 4:30 p.m. about build 348."
+  }
+]

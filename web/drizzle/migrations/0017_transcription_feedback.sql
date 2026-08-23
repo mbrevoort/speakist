@@ -1,7 +1,7 @@
 -- "Report bad transcription" feedback corpus.
 --
 -- A row is created exactly when a user clicks "Report" on a History
--- entry in the Mac or iOS app. This is opt-in: nothing is ever sent
+-- entry in the Mac app. This is opt-in: nothing is ever sent
 -- to the server unless the user explicitly reports. Audio + raw +
 -- polished + expected text live indefinitely so we can build a
 -- regression bench from real user-flagged failures.

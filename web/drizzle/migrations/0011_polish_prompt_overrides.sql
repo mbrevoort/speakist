@@ -1,7 +1,7 @@
 -- Super-admin overrides for the two polish-mode system prompts.
 --
 -- End users no longer customize their own prompt — that ability is
--- removed from the Mac, iOS, and web client UIs. The two prompts
+-- removed from the Mac and web client UIs. The two prompts
 -- (intuitive + prescriptive) are now configured globally by a super
 -- admin at /admin/system. NULL in either column means "use the
 -- baked-in default from lib/transcription/polish.ts" — so the

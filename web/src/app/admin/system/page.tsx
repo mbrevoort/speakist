@@ -167,7 +167,7 @@ export default async function AdminSystemPage() {
           <SlackWebhookCard
             destination="feedback"
             title="Bad-transcription report"
-            description="Fires every time a user submits a Report bad transcription from the Mac or iOS app. Message includes the polished/expected diff, failure kind, audio-attached flag, and a Triage button linking to /admin/feedback."
+            description="Fires every time a user submits a Report bad transcription from the Mac app. Message includes the polished/expected diff, failure kind, audio-attached flag, and a Triage button linking to /admin/feedback."
             hasUrl={!!row?.slackFeedbackUrl}
             enabled={row?.slackFeedbackEnabled ?? false}
           />
