@@ -182,6 +182,17 @@ jobs:
       - name: Install xcodegen + jq
         run: brew install xcodegen jq
 
+      - name: Ensure Metal toolchain
+        # MLX compiles Metal shaders during the archive. Newer Xcode installs
+        # can omit this separately downloadable component, especially on a
+        # self-hosted runner whose selected Xcode changes between releases.
+        run: |
+          set -euo pipefail
+          if ! xcrun --find metal >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcrun --find metal
+
       - name: Install Sparkle tools
         # Pin to the same Sparkle version we depend on for the Mac
         # framework so sign_update output stays compatible. The
