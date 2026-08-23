@@ -1,0 +1,300 @@
+.github/workflows/pr.yml
+  s_248c5097e381ff::t_fe87c4dbdde51b 48
+SpeakistTests/ParakeetTranscriptionClientTests.swift
+  s_248c5097e381ff::t_bddd3cd47d678f 1-22,25-42,124-126,128-136,138-140,142,156-160,162-164,167-170,172-173,177,179,184-189
+  s_248c5097e381ff::t_9cd4fbe2f019c7 47,49,52,63-86,178
+  s_248c5097e381ff::t_36d46e02d897a1 89-104,107-121
+  s_248c5097e381ff::t_986c765036a78c 143-147,150-151,153,155,174-176
+  s_248c5097e381ff::t_5a16d923b26dbf 180-181
+  s_248c5097e381ff::t_b36d0847a7436c 45
+  s_248c5097e381ff::t_bacbaf0903401d 46,48,50-51,53-60
+web/src/app/api/feedback/route.ts
+  s_248c5097e381ff::t_28e22a583f2e04 3
+.github/actions/setup-apple-signing/action.yml
+  s_248c5097e381ff::t_a9b1617fb4d951 8-9,22,26
+Shared/Analytics.swift
+  s_248c5097e381ff::t_16fb7607406475 7,14-15,38
+web/src/app/api/me/route.ts
+  s_248c5097e381ff::t_28e22a583f2e04 21
+docs/architecture.md
+  s_248c5097e381ff::t_96c88b5bb185a0 3,5-6,8,10-22,24,26,28,30-32,34,36,38,40,42,44,46,48,50,52-58,60,62,64,66,68-70,72,74,76,78-83,85
+project.yml
+  s_248c5097e381ff::t_ec826fb90b9ca9 12-13,18,53-54,83
+  s_248c5097e381ff::t_20d7fae46601b2 33-36
+  s_248c5097e381ff::t_3fa049967e5aef 58-75,240-251
+Speakist/History/HistoryWindow.swift
+  s_248c5097e381ff::t_7e6945174a8234 312-315
+web/src/app/admin/system/page.tsx
+  s_248c5097e381ff::t_28e22a583f2e04 170
+Speakist/Onboarding/OnboardingWindow.swift
+  s_248c5097e381ff::t_be59f3dfe96ba4 605,607,611-619,621-624,626-628,632-634,636-638,656-658
+  s_248c5097e381ff::t_7e6945174a8234 70,125-126,170,296,314-315,328-330,378-381,383,391-392,394-396,401,408,411,419-421,438-444,448-450,458-462,469-471,473-477,606,625,699
+  s_248c5097e381ff::t_2bc7d630a696fe 384-390,446,490-491,493-500,502-507
+  s_248c5097e381ff::t_090e2a9d69ad31 168-169,174-176,295,300-304,306-313,319-321,323-327,333-334,341-371,373,375-377,472
+  s_248c5097e381ff::t_cdbdb54c70c603 171-173,316-318,335-340,393,397-400,402-407,409-410,412-418,422-437,445,447,451-457,463-468,478-486
+  s_248c5097e381ff::t_9dbfb245ae8098 331-332
+Speakist/Transcription/TranscriptionService.swift
+  s_248c5097e381ff::t_199457ac750982 310-324,412-421,443,503-504,510,514-525
+  s_248c5097e381ff::t_ebc06d09b5ede4 537-542
+  s_248c5097e381ff::t_be59f3dfe96ba4 10-11,14,156,428
+  s_248c5097e381ff::t_c6576f83c59f3b 27,46,59,441-442,444-448
+  s_248c5097e381ff::t_8ff9161ebf8ba0 203,215,278
+  s_248c5097e381ff::t_7c95aaca81d039 26,45,58,79-80,145-147,295,440,449-450,499-502,505-509,511-513
+  s_248c5097e381ff::t_77495d2d59c332 429
+  s_248c5097e381ff::t_e4f9cc7cd08498 526-527
+scripts/release.sh
+  s_248c5097e381ff::t_a044d20c260b27 189-195
+web/src/components/marketing/pricing.tsx
+  s_248c5097e381ff::t_d2b1e7bf133c1c 54,57-59,63,67,70-72,74-78,80,82,87-110
+Speakist/Paste/CursorInserter.swift
+  s_248c5097e381ff::t_28e22a583f2e04 39
+web/src/app/layout.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 28
+web/src/components/marketing/value-props.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 13,28-29,40-42,47,52
+web/drizzle/migrations/0019_service_tokens.sql
+  s_248c5097e381ff::t_28e22a583f2e04 3
+web/src/lib/feedback.ts
+  s_248c5097e381ff::t_28e22a583f2e04 61
+web/src/app/dashboard/settings/settings-client.tsx
+  s_248c5097e381ff::t_a949210fa5ac0b 61
+  s_248c5097e381ff::t_28e22a583f2e04 377
+Makefile
+  s_248c5097e381ff::t_1415122389d271 46,77
+  s_248c5097e381ff::t_a9b1617fb4d951 7,19
+  s_248c5097e381ff::t_5204884eb460c4 45,76
+SpeakistTests/LocalTranscriptCleanupTests.swift
+  s_248c5097e381ff::t_986c765036a78c 110-119,122,152-154
+  s_248c5097e381ff::t_b32c1d5fa8e7cf 1-2,4-43
+  s_248c5097e381ff::t_ecbb1f3ddd3d48 109,123-133
+  s_248c5097e381ff::t_f6cd99a602b9ff 44-54
+  s_248c5097e381ff::t_7f1ff7f32f71b0 55-108,134-151,155-165
+scripts/bench-local-cleanup.py
+  s_248c5097e381ff::t_197c6bf7f46b7a 59,137,142
+  s_248c5097e381ff::t_eba26e3cf4650d 38-44,78-82,111-132,136,207-211,222,274
+  s_248c5097e381ff::t_0f339afc4db9d0 1-37,45-58,60-77,83-110,133-135,138-141,143-175,179-182,184-193,195-206,212-221,223-247,249-273,275-296,298-308
+web/src/components/marketing/hero.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 1,5,27,37-39,57
+  s_248c5097e381ff::t_28e22a583f2e04 45
+  s_248c5097e381ff::t_c44ac5d09ee78f 58
+web/src/app/link/link-client.tsx
+  s_248c5097e381ff::t_69248f83049a8a 28
+web/src/lib/service-tokens.ts
+  s_248c5097e381ff::t_28e22a583f2e04 41
+Speakist/Settings/SettingsWindow.swift
+  s_248c5097e381ff::t_be59f3dfe96ba4 60-62,413-415,598,600,602,844-846
+  s_248c5097e381ff::t_583c7494615a33 365-379,381-383,412,426-429,442-444,453-454,499-504,506-525,566-567
+  s_248c5097e381ff::t_15d35425f9739e 384-399,401-404,447-452,527-530,532,538-543,545-564,568-569
+  s_248c5097e381ff::t_7e6945174a8234 430-432
+  s_248c5097e381ff::t_9dbfb245ae8098 445-446
+  s_248c5097e381ff::t_6db0f881118d91 601
+  s_248c5097e381ff::t_cd5987cee53468 380,400,462-463,482-483,494-498,505,526,531,533-537,544,565,570
+  s_248c5097e381ff::t_ae5e3dd7dc5430 571
+web/src/app/link/device-label.ts
+  s_248c5097e381ff::t_69248f83049a8a 3,6-7,13,16,19
+scripts/bench-local-cleanup-requirements.txt
+  s_248c5097e381ff::t_ec4bc6f528a1b9 1-2
+Speakist/Settings/Preferences.swift
+  s_248c5097e381ff::t_5aeea45c1ca62e 16-38,109,176,374-376,378-380,391-392
+  s_248c5097e381ff::t_073dac55def174 39-46,49-56,58-61,110,381-386,388-390,393
+  s_248c5097e381ff::t_7e6945174a8234 47-48,57,166-169,175,222-225,377,387
+  s_248c5097e381ff::t_91dbd8790c6ec2 62-74,170-174
+  s_248c5097e381ff::t_871f3257eea299 13-15
+web/src/components/marketing/how-it-works.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 17-18,26,38
+web/drizzle/migrations/0011_polish_prompt_overrides.sql
+  s_248c5097e381ff::t_28e22a583f2e04 4
+.github/workflows/deploy-dev.yml
+  s_248c5097e381ff::t_fe87c4dbdde51b 100,168
+  s_248c5097e381ff::t_20d7fae46601b2 112-119
+  s_248c5097e381ff::t_e74363b815bbd3 3,8,10-11,15,30,49,51
+docs/README.md
+  s_248c5097e381ff::t_447579db26fe3d 1,3,5,7-14,16,18-22,24
+Speakist/Corrections/VocabularyBuilder.swift
+  s_248c5097e381ff::t_99d1372f669c01 18
+web/src/app/api/device/start/route.ts
+  s_248c5097e381ff::t_a949210fa5ac0b 25-26,30,62-63
+Speakist/Shortcut/ShortcutManager.swift
+  s_248c5097e381ff::t_99d3ff59c39846 176-179
+docs/releasing.md
+  s_248c5097e381ff::t_e87989b6e23004 1,3,9,11,13-15,19-23,25,27-31,33,35,37-40,42,44-45,47,49,51,53,55-60,62,64-67,69
+  s_248c5097e381ff::t_c644134b6f4d91 16-18
+  s_248c5097e381ff::t_4e23f630cc88f0 5-7
+docs/local-models.md
+  s_248c5097e381ff::t_c303bdea1b7f3f 39-44
+  s_248c5097e381ff::t_1a56c79176b5bd 32,38,45-52
+  s_248c5097e381ff::t_41173145bb326b 1-5,8,10-13,15,18,20,27,59-85
+  s_248c5097e381ff::t_0e4592a0050cea 9,16,19,22-26,28-31,58,86-88
+  s_248c5097e381ff::t_ec4bc6f528a1b9 89-98
+  s_248c5097e381ff::t_4e23f630cc88f0 6-7
+  s_248c5097e381ff::t_6db0f881118d91 14,17,21,33-37,53-57
+web/src/app/privacy/page.tsx
+  s_248c5097e381ff::t_dfb036c3c8b430 14,49-50,65-66,71-72,97-99,123-131,138,239-241
+  s_248c5097e381ff::t_20d7fae46601b2 88-96
+Speakist/History/HistoryStore.swift
+  s_248c5097e381ff::t_9c0a54844fd3a0 13,66,212
+  s_248c5097e381ff::t_9a2914b56716cc 71
+Speakist/Corrections/CorrectionStore.swift
+  s_248c5097e381ff::t_f1a4c2bf9a4d99 502-506,544-545,563-564,570,581-610,612,614,616-625,627-637,639,641,651-658,837-846
+  s_248c5097e381ff::t_7a84ef08fda577 48,86-92,95-110,132-146,148,265,647-649,832-836,847-849,853-944,953-964
+  s_248c5097e381ff::t_9dbfb245ae8098 54,72-75,77,93-94,298,500
+  s_248c5097e381ff::t_c303bdea1b7f3f 4,215-219,221-225
+  s_248c5097e381ff::t_99d1372f669c01 162,168-178,184-185,188
+  s_248c5097e381ff::t_3f3bf88c9989ef 220,626,638
+  s_248c5097e381ff::t_0acb31ffb29bba 640,642-646
+  s_248c5097e381ff::t_659705361c40a0 163-167,179-183,209-214,226-264
+  s_248c5097e381ff::t_dd413953978ec9 147
+  s_248c5097e381ff::t_6bbcf98e9dc256 149
+  s_248c5097e381ff::t_7bc6b2795ce5bc 266
+  s_248c5097e381ff::t_9b7abb3adac0c8 650
+web/src/lib/feedback-access.ts
+  s_248c5097e381ff::t_28e22a583f2e04 5
+scripts/release-ci.sh
+  s_248c5097e381ff::t_959b09cfb18d55 108-109
+web/scripts/bench-stt-fixtures/README.md
+  s_248c5097e381ff::t_2059223db9bb81 64,118-120
+web/src/components/marketing/polished-output.tsx
+  s_248c5097e381ff::t_d2b1e7bf133c1c 7-8,49-51
+scripts/bench-local-cleanup-fixtures.json
+  s_248c5097e381ff::t_0f339afc4db9d0 1-152
+web/src/app/api/transcribe/route.ts
+  s_248c5097e381ff::t_28e22a583f2e04 3,163
+web/src/app/link/page.tsx
+  s_248c5097e381ff::t_69248f83049a8a 1,68
+SpeakistTests/VocabularyBuilderTests.swift
+  s_248c5097e381ff::t_9cd4fbe2f019c7 108-109,111-112
+  s_248c5097e381ff::t_ecbb1f3ddd3d48 83,98,104,110,113-174
+  s_248c5097e381ff::t_9e2e47d314533c 82,177-250
+  s_248c5097e381ff::t_bacbaf0903401d 84-97,99-103,105-107,175-176
+Speakist/Account/SpeakistAPIClient.swift
+  s_248c5097e381ff::t_16fb7607406475 76,240
+web/src/components/ui/switch.tsx
+  s_248c5097e381ff::t_28e22a583f2e04 1
+CLAUDE.md
+  s_248c5097e381ff::t_25c8ba2cb05775 1,3,5,7,9,11,13-19,21,23-25,27-28,31-32,34,36,38,40,42
+  s_248c5097e381ff::t_20d7fae46601b2 29-30
+web/src/lib/mcp/tools.ts
+  s_248c5097e381ff::t_28e22a583f2e04 193
+THIRD_PARTY_NOTICES.md
+  s_248c5097e381ff::t_6c0eec4208a109 11-13,15-16,19-20
+  s_248c5097e381ff::t_6db0f881118d91 14
+  s_248c5097e381ff::t_e66e23291805a6 1-10,17-18
+Speakist/QuickDictate/QuickDictateController.swift
+  s_248c5097e381ff::t_bacbaf0903401d 283
+  s_248c5097e381ff::t_7e6945174a8234 216-221
+  s_248c5097e381ff::t_c73439fd6b93b3 71,90,160,172
+  s_248c5097e381ff::t_dda15bfca88edf 80,100,186-187,215,251,262
+  s_248c5097e381ff::t_199457ac750982 174-175
+  s_248c5097e381ff::t_28e22a583f2e04 6
+web/src/app/faq/page.tsx
+  s_248c5097e381ff::t_69248f83049a8a 10-11,39-42,50-53,70,73-75,80,83-84,89,106,109-112,120
+  s_248c5097e381ff::t_c44ac5d09ee78f 26-34
+  s_248c5097e381ff::t_4a6e4e6e69e7d3 25
+web/drizzle/migrations/0017_transcription_feedback.sql
+  s_248c5097e381ff::t_28e22a583f2e04 4
+web/src/lib/transcription/polish-fixtures.ts
+  s_248c5097e381ff::t_28e22a583f2e04 446
+SECURITY.md
+  s_248c5097e381ff::t_f38070579277ae 23,45
+web/src/app/api/me/polish/route.ts
+  s_248c5097e381ff::t_28e22a583f2e04 5
+Speakist/Account/SpeakistAccountManager.swift
+  s_248c5097e381ff::t_16fb7607406475 50,85,98,312,341
+  s_248c5097e381ff::t_28e22a583f2e04 59
+web/README.md
+  s_248c5097e381ff::t_20d7fae46601b2 10-11
+  s_248c5097e381ff::t_e9df9a4786da92 1,3,5,7,9,12,14,16,18,20-22,24,26,28,30
+docs/local-cleanup-lm-benchmark.md
+  s_248c5097e381ff::t_ec4bc6f528a1b9 1-7,12,20-112
+  s_248c5097e381ff::t_20d7fae46601b2 8-11,13-19
+.gitignore
+  s_248c5097e381ff::t_1d0aec02561374 5,29
+web/src/components/marketing/cta.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 3,14-15,28,30
+Speakist/Settings/KeychainStore.swift
+  s_248c5097e381ff::t_50ea7fa88e5594 12-13,36
+Speakist/Transcription/TranscriptionTypes.swift
+  s_248c5097e381ff::t_4161e64889d7b8 10,22
+  s_248c5097e381ff::t_ecb01be7fc59b4 47-50,53-66
+.github/workflows/deploy-prod.yml
+  s_248c5097e381ff::t_fe87c4dbdde51b 170,260
+  s_248c5097e381ff::t_a9b1617fb4d951 3,18-19,59
+  s_248c5097e381ff::t_20d7fae46601b2 182-189
+web/src/lib/env.ts
+  s_248c5097e381ff::t_69248f83049a8a 17
+web/src/app/dashboard/page.tsx
+  s_248c5097e381ff::t_a949210fa5ac0b 7,42-44,112,120,123-125
+  s_248c5097e381ff::t_c44ac5d09ee78f 135
+SpeakistTests/ParakeetNameBenchmarkTests.swift
+  s_248c5097e381ff::t_9cd4fbe2f019c7 5-6,8-12,21-25,29,36-39,47,51-53,57-61,64-65,68-71
+  s_248c5097e381ff::t_60b5452afabf57 32-33,45-46,63,77-84
+  s_248c5097e381ff::t_409a52b16647f8 26-28,40-43
+  s_248c5097e381ff::t_2343994f2432f4 1-2,4,7,16,20,30-31,35,44,48-50,56,62,66-67,74-76,93-94
+  s_248c5097e381ff::t_e8b3fb95a8ebc8 13-15
+  s_248c5097e381ff::t_0882140226c549 17
+  s_248c5097e381ff::t_55a0396da4eb8c 90-92
+  s_248c5097e381ff::t_ed99c2e3dfe25f 87-89
+web/src/lib/db/schema.ts
+  s_248c5097e381ff::t_28e22a583f2e04 633
+SpeakistTests/DiffEngineTests.swift
+  s_248c5097e381ff::t_16fb7607406475 36
+Speakist/App/AppEnvironment.swift
+  s_248c5097e381ff::t_9dbfb245ae8098 70-74
+  s_248c5097e381ff::t_7e6945174a8234 120-121
+  s_248c5097e381ff::t_80de5015d9779c 19,46-47,80,123,127
+  s_248c5097e381ff::t_bcc5cc44fa56cd 117-119,122
+  s_248c5097e381ff::t_c6576f83c59f3b 20,48-49,81,124-126
+web/src/components/marketing/footer.tsx
+  s_248c5097e381ff::t_f62ac5ef59beed 33
+web/drizzle/migrations/0003_releases.sql
+  s_248c5097e381ff::t_28e22a583f2e04 16
+SpeakistTests/PreferencesMigrationTests.swift
+  s_248c5097e381ff::t_91dbd8790c6ec2 1-31
+Speakist/Transcription/LocalQwenCleanup.swift
+  s_248c5097e381ff::t_c1bdcfe63a3855 1-6,8-19,37-42,44-46,48-50,52-61,63-64,71,73-102,106-128,134-135,139-150,154-160,163-165,169-172,175-184,186-193,196-203,206-209,211-216,218-224,226-251,253-277,280-285,287-293,297-327,329-330,332-352,362,373,376-411,413
+  s_248c5097e381ff::t_f6884846e5b403 20-32,65-70,129-133
+  s_248c5097e381ff::t_4bd35543667b88 286,328,353-356,358,360-361,364-371
+Speakist/Transcription/ParakeetTranscriptionClient.swift
+  s_248c5097e381ff::t_c6576f83c59f3b 177-184
+  s_248c5097e381ff::t_9e2e47d314533c 241,254-255,281-287,289,297-298,303,305
+  s_248c5097e381ff::t_fcdb0843f46ccb 14,32,48,57,60,240,256,262
+  s_248c5097e381ff::t_ec364a3335968c 2-7,21-31,33-47,50-56,58,61-67,69-78,80-83,85-102,118-160,163-167,169-170,172-173,185,187-195,197-205,207-209,211-212,214-215,217-218,220-222,234-238,242-243,247,249,251-253,260,264-269,271,273-274,276-280,288,290-296,299-302
+  s_248c5097e381ff::t_c01dff497d6736 49,59
+  s_248c5097e381ff::t_2f9efb8e0274ac 8-13,15-20,103-117,219,224-233,244-246,248,250,257-259,261,263
+README.md
+  s_248c5097e381ff::t_39b5b76e3872cb 3-8,10-39,42-74
+  s_248c5097e381ff::t_20d7fae46601b2 9,40-41
+docs/cicd.md
+  s_248c5097e381ff::t_4339e7048e82a9 1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31-33,35,37-43,45,47,49-52,54,56,58-59,61-65,67,69,71,73-81,83,85-89
+  s_248c5097e381ff::t_20d7fae46601b2 12,22
+.github/workflows/polish-regression.yml
+  s_248c5097e381ff::t_fe87c4dbdde51b 97
+Speakist/Transcription/LocalTranscriptCleanup.swift
+  s_248c5097e381ff::t_18a1de9b25e4d9 214
+  s_248c5097e381ff::t_1049aff36d507b 19-28,30,33-39,122-130
+  s_248c5097e381ff::t_4305aa9be979bc 1,3-10,12-17,43-52,54-66,68-75,77-83,86-114,117-121,131-138,140-144,147-157,160-179,182-196,198-210,212-213,215-217,219-220,222-223,225-229,231,234-236,239-243,245-250,252-256,258
+  s_248c5097e381ff::t_7857a78de92a2a 84-85
+  s_248c5097e381ff::t_f212509e39936f 218,224
+web/package.json
+  s_248c5097e381ff::t_fe87c4dbdde51b 5
+Speakist/QuickDictate/QuickDictateView.swift
+  s_248c5097e381ff::t_28e22a583f2e04 99
+web/src/app/terms/page.tsx
+  s_248c5097e381ff::t_dfb036c3c8b430 14,48-51,67-70,126-131,151-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "30b1de2cbea4d2e8b14ac2afff63209cb8e82329",
+  "prompts": {},
+  "sessions": {
+    "s_248c5097e381ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a008df-d9d1-7b11-ba98-db86810cd54e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Mike Brevoort <mike@Mikes-MacBook-Air.local>"
+    }
+  }
+}
