@@ -144,9 +144,6 @@ jobs:
     permissions:
       contents: read
     env:
-      # Do not inherit a stale DEVELOPER_DIR from the self-hosted runner service.
-      # The standard Xcode install is kept current on this Mac.
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
       # Web side: wrangler R2 upload + publish-API need these.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
