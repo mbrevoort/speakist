@@ -293,11 +293,15 @@ fi
 
 echo "==> xcodebuild archive (Release)"
 rm -rf "$ARCHIVE_PATH"
+# Headless release runners cannot approve Swift package plug-ins interactively.
+# Match the PR/test build flags so pinned package plug-ins and macros can run.
 xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
     -scheme "${PROJECT_NAME}" \
     -configuration Release \
     -archivePath "${ARCHIVE_PATH}" \
     -destination 'generic/platform=macOS' \
+    -skipPackagePluginValidation \
+    -skipMacroValidation \
     ${POSTHOG_FLAG} \
     archive
 
