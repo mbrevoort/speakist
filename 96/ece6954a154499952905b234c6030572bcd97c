@@ -1,0 +1,19 @@
+Speakist/Onboarding/OnboardingWindow.swift
+  s_248c5097e381ff::t_e106f1dc54e27b 694,712,714
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "96ece6954a154499952905b234c6030572bcd97c",
+  "prompts": {},
+  "sessions": {
+    "s_248c5097e381ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a008df-d9d1-7b11-ba98-db86810cd54e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Mike Brevoort <m@mytra.ai>"
+    }
+  }
+}
