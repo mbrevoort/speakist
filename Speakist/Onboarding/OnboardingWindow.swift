@@ -691,6 +691,7 @@ private struct LaunchPane: View {
 
     var body: some View {
         VStack(spacing: 18) {
+            Spacer()
             Image(systemName: "power.circle.fill")
                 .resizable().aspectRatio(contentMode: .fit)
                 .frame(width: 68, height: 68)
@@ -708,6 +709,8 @@ private struct LaunchPane: View {
             Text("You're ready. Hold your shortcut anywhere on your Mac to dictate.")
                 .foregroundColor(.secondary)
                 .padding(.top, 8)
+            Spacer()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
