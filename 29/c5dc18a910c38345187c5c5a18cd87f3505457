@@ -1,0 +1,19 @@
+project.yml
+  s_248c5097e381ff::t_17bdece0b7536e 31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "29c5dc18a910c38345187c5c5a18cd87f3505457",
+  "prompts": {},
+  "sessions": {
+    "s_248c5097e381ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a008df-d9d1-7b11-ba98-db86810cd54e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Mike Brevoort <m@mytra.ai>"
+    }
+  }
+}
