@@ -71,9 +71,6 @@ vi.mock("@opennextjs/cloudflare", () => ({
   }),
 }));
 
-// PostHog server helper is a no-op in tests — env.public.NEXT_PUBLIC_
-// _POSTHOG_KEY is unset so getClient() returns null. Nothing to mock.
-
 let handle: TestDbHandle;
 let POST: typeof import("../route").POST;
 

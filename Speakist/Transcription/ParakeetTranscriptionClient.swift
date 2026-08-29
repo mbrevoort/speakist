@@ -231,11 +231,7 @@ struct ParakeetTranscriptionClient: TranscriptionClient {
         self.cleanupRuntime = cleanupRuntime
     }
 
-    func transcribe(
-        audioURL: URL,
-        keyterms: [String],
-        language: String?
-    ) async throws -> TranscriptionResult {
+    func transcribe(audioURL: URL) async throws -> TranscriptionResult {
         do {
             let result = try await runtime.transcribe(audioURL: audioURL)
             let corrected = LocalTranscriptCorrections.applyWithCount(
@@ -273,9 +269,8 @@ struct ParakeetTranscriptionClient: TranscriptionClient {
     }
 }
 
-/// Apply the user's explicit vocabulary replacements after local ASR. This
-/// preserves Deepgram's existing case-insensitive, whole-token behavior
-/// without requiring a second network or language-model pass.
+/// Apply the user's explicit vocabulary replacements after local speech
+/// recognition, using case-insensitive whole-token matching.
 enum LocalTranscriptCorrections {
     static func apply(to text: String, rules: [ReplaceRule]) -> String {
         applyWithCount(to: text, rules: rules).text

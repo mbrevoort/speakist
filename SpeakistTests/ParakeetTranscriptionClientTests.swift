@@ -10,9 +10,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
         let client = ParakeetTranscriptionClient(runtime: runtime, replaceRules: [])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: ["Speakist"],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, "hello from parakeet")
         XCTAssertNil(result.rawText)
@@ -35,9 +33,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
             ])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: [],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, "Speakist works with Mytrah but not mythrashing")
     }
@@ -52,9 +48,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
             replaceRules: [ReplaceRule(find: "Breford", replacement: "Brevoort")])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: [],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, "My name is Brevoort")
         XCTAssertEqual(result.rawText, "My name is Breford")
@@ -78,9 +72,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
             ])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: [],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, original)
         XCTAssertNil(result.rawText)
@@ -95,9 +87,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
         let client = ParakeetTranscriptionClient(runtime: runtime, replaceRules: [])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: [],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, "I could use the smaller model")
         XCTAssertEqual(result.rawText, "I could. Use the smaller model")
@@ -113,9 +103,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
         let client = ParakeetTranscriptionClient(runtime: runtime, replaceRules: [])
 
         let result = try await client.transcribe(
-            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-            keyterms: [],
-            language: "en")
+            audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
 
         XCTAssertEqual(result.text, "I could. My colleague agreed")
         XCTAssertFalse(result.cleanupApplied)
@@ -127,9 +115,7 @@ final class ParakeetTranscriptionClientTests: XCTestCase {
 
         do {
             _ = try await client.transcribe(
-                audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"),
-                keyterms: [],
-                language: "en")
+                audioURL: URL(fileURLWithPath: "/tmp/not-read-by-fake.wav"))
             XCTFail("Expected local model error")
         } catch let error as TranscriptionError {
             guard case .localModel(let message) = error else {

@@ -34,12 +34,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let root = MainView(selection: selection)
             .environmentObject(env)
             .environmentObject(env.preferences)
-            .environmentObject(env.keychain)
             .environmentObject(env.correctionStore)
             .environmentObject(env.usageTracker)
             .environmentObject(env.permissions)
             .environmentObject(env.deviceMonitor)
-            .environmentObject(env.accountManager)
             .environmentObject(env.historyStore)
         window.contentView = NSHostingView(rootView: root)
     }
@@ -71,12 +69,10 @@ final class MainSectionStore: ObservableObject {
 enum MainSection: String, CaseIterable, Identifiable, Hashable {
     case quickDictate
     case history
-    case account
     case general
     case shortcuts
     case audio
     case transcription
-    case polish
     case vocabulary
     case storage
     case about
@@ -87,12 +83,10 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .quickDictate: return "Quick Dictate"
         case .history: return "History"
-        case .account: return "Account"
         case .general: return "General"
         case .shortcuts: return "Shortcuts"
         case .audio: return "Audio"
         case .transcription: return "Transcription"
-        case .polish: return "Polish"
         case .vocabulary: return "Vocabulary"
         case .storage: return "Storage"
         case .about: return "About"
@@ -103,12 +97,10 @@ enum MainSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .quickDictate: return "mic.circle.fill"
         case .history: return "clock.arrow.circlepath"
-        case .account: return "person.crop.circle"
         case .general: return "gear"
         case .shortcuts: return "keyboard"
         case .audio: return "mic"
         case .transcription: return "waveform"
-        case .polish: return "sparkles"
         case .vocabulary: return "character.book.closed"
         case .storage: return "externaldrive"
         case .about: return "info.circle"
@@ -214,12 +206,10 @@ struct MainView: View {
             QuickDictateView()
         case .history:
             HistoryView()
-        case .account:      AccountSettingsView()
         case .general:      GeneralSettingsView()
         case .shortcuts:    ShortcutsSettingsView()
         case .audio:        AudioSettingsView()
-        case .transcription: TranscriptionSettingsView()
-        case .polish:       PolishSettingsView()
+        case .transcription: LocalOnlyTranscriptionSettingsView()
         case .vocabulary:   VocabularySettingsView()
         case .storage:      HistorySettingsView()
         case .about:        AboutSettingsView()

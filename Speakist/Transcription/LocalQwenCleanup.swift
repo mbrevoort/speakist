@@ -87,8 +87,8 @@ actor MLXQwenCleanupModelRuntime: QwenCleanupModelRuntimeProtocol {
                     progress?(QwenCleanupLoadProgress(
                         fractionCompleted: downloadProgress.fractionCompleted,
                         phase: downloadProgress.fractionCompleted < 1
-                            ? "Downloading Qwen cleanup model"
-                            : "Loading Qwen cleanup model"))
+                            ? "Downloading large language model"
+                            : "Loading large language model"))
                 })
         }
         loadTask = task
@@ -174,7 +174,7 @@ final class QwenCleanupModelManager: ObservableObject {
 
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            state = .preparing(progress: 0, phase: "Checking Qwen model files")
+            state = .preparing(progress: 0, phase: "Checking large language model files")
             do {
                 try await runtime.prepare { [weak self] update in
                     Task { @MainActor in

@@ -26,7 +26,7 @@ export function ValueProps() {
           <p className="mt-4 text-lg text-muted-foreground">
             Built-in dictation has been a half-finished feature for years.
             Speakist does one thing well: private, fast dictation on your Mac,
-            with cloud transcription still available when you need it.
+            with no account or hosted transcription service.
           </p>
         </div>
 
@@ -49,7 +49,7 @@ export function ValueProps() {
           <Card
             icon={<Lock className="size-5" />}
             title="Your voice stays on your device."
-            body="In local mode, dictation audio and transcript text never leave your Mac. The optional cloud engine is clearly labeled and remains opt-in."
+            body="Dictation audio, transcript text, vocabulary, and usage data stay on your Mac. Only model downloads and app update checks use the network."
             footer={
               <a
                 href="https://github.com/mbrevoort/speakist"

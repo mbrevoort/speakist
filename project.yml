@@ -50,11 +50,6 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.6.4"
-  # PostHog product analytics. Only initialized at runtime on the stable
-  # channel; local and development builds no-op.
-  PostHog:
-    url: https://github.com/PostHog/posthog-ios
-    from: "3.0.0"
   # On-device Parakeet TDT speech recognition. The model weights are not
   # bundled in the app; FluidAudio downloads the selected Core ML bundle on
   # first use and caches it under Application Support.
@@ -80,8 +75,6 @@ targets:
     platform: macOS
     sources:
       - path: Speakist
-      # Shared analytics wrapper used by the Mac target.
-      - path: Shared/Analytics.swift
     resources:
       - path: Speakist/Resources
     info:
@@ -116,25 +109,15 @@ targets:
         NSAppleEventsUsageDescription: "Speakist sends a paste keystroke to the frontmost app so it can insert transcribed text at your cursor."
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
-        # Per-channel URLs. SpeakistDefaultAPIBaseURL and SUFeedURL read
-        # per-configuration build settings (see `configs:` below). For
-        # Local that means localhost + no auto-update. release.sh rewrites
-        # the Release block for dev/beta before xcodegen generate so the
-        # baked-in Info.plist carries the right URLs for each channel.
+        # The Sparkle feed URL is channel-specific. release.sh rewrites the
+        # Release block for dev/beta before xcodegen generate.
         #
         # Channel matrix:
         #   stable → com.brevoort-studio.speakist       / "Speakist"       / speakist.ai/appcast.xml
         #   beta   → com.brevoort-studio.speakist.beta  / "Speakist Beta"  / speakist.ai/appcast-beta.xml
         #   dev    → com.brevoort-studio.speakist.dev   / "Speakist Dev"   / speakist-dev.../appcast-dev.xml
-        #   local  → com.brevoort-studio.speakist.local / "Speakist Local" / localhost:3000 (no appcast)
+        #   local  → com.brevoort-studio.speakist.local / "Speakist Local" / no appcast
         SUFeedURL: $(SPEAKIST_FEED_URL)
-        SpeakistDefaultAPIBaseURL: $(SPEAKIST_API_BASE_URL)
-        # Public PostHog project key (`phc_...`) — only baked into the
-        # stable-channel Release config below. Empty string elsewhere
-        # so Analytics.swift refuses to initialize. Safe to ship in
-        # the Info.plist; PostHog client keys are designed to be
-        # embedded in shipping client binaries.
-        SpeakistPostHogKey: $(SPEAKIST_POSTHOG_KEY)
         SUEnableAutomaticChecks: true
         SUPublicEDKey: "uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ="
     entitlements:
@@ -174,18 +157,13 @@ targets:
         # distinct bundle ID + display name so a developer's Local install
         # coexists with any signed channel (Dev/Beta/Stable) without
         # sharing TCC grants, Keychain items, UserDefaults, or Application
-        # Support data. Points at localhost:3000 by default so `pnpm dev`
-        # in web/ is the assumed backend.
+        # Support data. The local app does not require the web service.
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist.local
           SPEAKIST_DISPLAY_NAME: "Speakist Local"
           SPEAKIST_CHANNEL: local
-          SPEAKIST_API_BASE_URL: "http://localhost:3000"
           SPEAKIST_FEED_URL: ""
-          # Empty key on Local — Analytics.swift no-ops. We deliberately
-          # keep dev/local builds out of the production PostHog project.
-          SPEAKIST_POSTHOG_KEY: ""
-        # Release: stable-channel defaults. release.sh rewrites these five
+        # Release: stable-channel defaults. release.sh rewrites these four
         # lines in-place before xcodegen generate when building beta/dev.
         # CODE_SIGN_STYLE override: only the main Speakist target uses
         # Manual + Developer ID Application — base setting (Automatic)
@@ -202,16 +180,7 @@ targets:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_CHANNEL: stable
-          SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
-          # PostHog project key. Default to empty so dev / local /
-          # uncoordinated `make build` runs never send events. CI
-          # overrides at xcodebuild time via
-          #   xcodebuild SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE …
-          # which propagates through the `SpeakistPostHogKey` Info.plist
-          # substitution above. Analytics.swift refuses to init when
-          # the value is empty, so no key → no PostHog regardless.
-          SPEAKIST_POSTHOG_KEY: ""
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
         # Dev: placeholder, never built directly. release.sh always
@@ -225,9 +194,7 @@ targets:
           PRODUCT_BUNDLE_IDENTIFIER: com.brevoort-studio.speakist
           SPEAKIST_DISPLAY_NAME: "Speakist"
           SPEAKIST_CHANNEL: stable
-          SPEAKIST_API_BASE_URL: "https://speakist.ai"
           SPEAKIST_FEED_URL: "https://speakist.ai/appcast.xml"
-          SPEAKIST_POSTHOG_KEY: ""
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
     dependencies:
@@ -235,8 +202,6 @@ targets:
       - package: GRDB
         product: GRDB
       - package: Sparkle
-      - package: PostHog
-        product: PostHog
       - package: FluidAudio
         product: FluidAudio
       - package: MLXSwiftLM

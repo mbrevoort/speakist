@@ -9,7 +9,7 @@
 #   scripts/release.sh 0.2.0 --notes "..."             # release notes
 #
 # What this does, end to end:
-#   1. Rewrite project.yml with channel-specific SUFeedURL + API URL
+#   1. Rewrite project.yml with the channel-specific bundle identity and feed URL
 #   2. Bump version in project.yml
 #   3. xcodegen + xcodebuild archive → export → notarize → staple
 #   4. hdiutil + AppleScript package the app into a DMG with a Finder
@@ -27,11 +27,11 @@
 #
 # Channel matrix (URLs are overrideable via env vars):
 #
-#   Channel  SUFeedURL                                                API default                               R2 bucket                Download base
-#   -------  -------------------------------------------------------  ---------------------------------------  -----------------------  ----------------------------------------
-#   stable   https://speakist.ai/appcast.xml                          https://speakist.ai                      speakist-releases-prod   https://downloads.speakist.ai
-#   beta     https://speakist.ai/appcast-beta.xml                     https://speakist.ai                      speakist-releases-prod   https://downloads.speakist.ai
-#   dev      https://speakist-dev.brevoortstudio.com/appcast-dev.xml  https://speakist-dev.brevoortstudio.com  speakist-releases-dev    https://downloads-dev.brevoortstudio.com
+#   Channel  SUFeedURL                                                R2 bucket                Download base
+#   -------  -------------------------------------------------------  -----------------------  ----------------------------------------
+#   stable   https://speakist.ai/appcast.xml                          speakist-releases-prod   https://downloads.speakist.ai
+#   beta     https://speakist.ai/appcast-beta.xml                     speakist-releases-prod   https://downloads.speakist.ai
+#   dev      https://speakist-dev.brevoortstudio.com/appcast-dev.xml  speakist-releases-dev    https://downloads-dev.brevoortstudio.com
 #
 # Prerequisites (one-time per machine):
 #   * Xcode + Developer ID Application cert in Keychain for the team
@@ -94,17 +94,14 @@ esac
 # ---- channel → URLs + R2 + publish endpoint -----------------------------
 
 STABLE_FEED_URL="${STABLE_FEED_URL:-https://speakist.ai/appcast.xml}"
-STABLE_API_URL="${STABLE_API_URL:-https://speakist.ai}"
 STABLE_R2_BUCKET="${STABLE_R2_BUCKET:-speakist-releases-prod}"
 STABLE_DOWNLOAD_BASE="${STABLE_DOWNLOAD_BASE:-https://downloads.speakist.ai}"
 
 BETA_FEED_URL="${BETA_FEED_URL:-https://speakist.ai/appcast-beta.xml}"
-BETA_API_URL="${BETA_API_URL:-https://speakist.ai}"
 BETA_R2_BUCKET="${BETA_R2_BUCKET:-speakist-releases-prod}"
 BETA_DOWNLOAD_BASE="${BETA_DOWNLOAD_BASE:-https://downloads.speakist.ai}"
 
 DEV_FEED_URL="${DEV_FEED_URL:-https://speakist-dev.brevoortstudio.com/appcast-dev.xml}"
-DEV_API_URL="${DEV_API_URL:-https://speakist-dev.brevoortstudio.com}"
 DEV_R2_BUCKET="${DEV_R2_BUCKET:-speakist-releases-dev}"
 DEV_DOWNLOAD_BASE="${DEV_DOWNLOAD_BASE:-https://downloads-dev.brevoortstudio.com}"
 
@@ -113,7 +110,7 @@ DEV_PUBLISH_URL="${DEV_PUBLISH_URL:-https://speakist-dev.brevoortstudio.com/api/
 
 case "$CHANNEL" in
   stable)
-    FEED_URL="$STABLE_FEED_URL"; API_URL="$STABLE_API_URL"
+    FEED_URL="$STABLE_FEED_URL"
     R2_BUCKET="$STABLE_R2_BUCKET"; DOWNLOAD_BASE="$STABLE_DOWNLOAD_BASE"
     PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
     WRANGLER_ENV="production"; DMG_SUFFIX=""
@@ -121,7 +118,7 @@ case "$CHANNEL" in
     DISPLAY_NAME="Speakist"
     ;;
   beta)
-    FEED_URL="$BETA_FEED_URL"; API_URL="$BETA_API_URL"
+    FEED_URL="$BETA_FEED_URL"
     R2_BUCKET="$BETA_R2_BUCKET"; DOWNLOAD_BASE="$BETA_DOWNLOAD_BASE"
     PUBLISH_URL="$PROD_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_PROD:-}"
     WRANGLER_ENV="production"; DMG_SUFFIX="-beta"
@@ -129,7 +126,7 @@ case "$CHANNEL" in
     DISPLAY_NAME="Speakist Beta"
     ;;
   dev)
-    FEED_URL="$DEV_FEED_URL"; API_URL="$DEV_API_URL"
+    FEED_URL="$DEV_FEED_URL"
     R2_BUCKET="$DEV_R2_BUCKET"; DOWNLOAD_BASE="$DEV_DOWNLOAD_BASE"
     PUBLISH_URL="$DEV_PUBLISH_URL"; PUBLISH_TOKEN="${SPEAKIST_PUBLISH_TOKEN_DEV:-}"
     WRANGLER_ENV="dev"; DMG_SUFFIX="-dev"
@@ -246,7 +243,6 @@ RELEASE_RANGE='/^        Release:$/,/^    [a-z]/'
 sed -i '' -E "${RELEASE_RANGE} s|(PRODUCT_BUNDLE_IDENTIFIER: )com\\.brevoort-studio\\.speakist\$|\\1${BUNDLE_ID}|" project.yml
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_DISPLAY_NAME: )\"Speakist\"|\\1\"${DISPLAY_NAME}\"|" project.yml
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_CHANNEL: )stable\$|\\1${CHANNEL}|" project.yml
-sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_API_BASE_URL: )\"https://speakist.ai\"|\\1\"${API_URL}\"|" project.yml
 sed -i '' -E "${RELEASE_RANGE} s|(SPEAKIST_FEED_URL: )\"https://speakist.ai/appcast.xml\"|\\1\"${FEED_URL}\"|" project.yml
 
 # ---- version bump -------------------------------------------------------
@@ -278,19 +274,6 @@ sed -i '' -E "s/(CURRENT_PROJECT_VERSION: +\")[0-9]+(\")/\1${NEW_BUILD}\2/" proj
 echo "==> xcodegen generate"
 xcodegen generate
 
-# PostHog override — only meaningful for the stable channel. The Mac
-# Release config in project.yml ships `SPEAKIST_POSTHOG_KEY: ""`, so
-# uncoordinated dev/local builds never accidentally hit production
-# PostHog. CI exports SPEAKIST_POSTHOG_KEY_STABLE for stable runs and
-# we forward it here as a build-setting override; xcodebuild applies
-# command-line build settings with highest precedence, which then feeds
-# the `SpeakistPostHogKey` Info.plist substitution. Empty for dev/beta
-# CI runs and laptop builds → Analytics.swift refuses to init.
-POSTHOG_FLAG=""
-if [ "$CHANNEL" = "stable" ] && [ -n "${SPEAKIST_POSTHOG_KEY_STABLE:-}" ]; then
-  POSTHOG_FLAG="SPEAKIST_POSTHOG_KEY=$SPEAKIST_POSTHOG_KEY_STABLE"
-fi
-
 echo "==> xcodebuild archive (Release)"
 rm -rf "$ARCHIVE_PATH"
 # Headless release runners cannot approve Swift package plug-ins interactively.
@@ -305,7 +288,6 @@ xcodebuild -project "${PROJECT_NAME}.xcodeproj" \
     ARCHS=arm64 \
     -skipPackagePluginValidation \
     -skipMacroValidation \
-    ${POSTHOG_FLAG} \
     archive
 
 echo "==> xcodebuild -exportArchive"

@@ -56,7 +56,6 @@ import {
   usageEvents,
 } from "@/lib/db/schema";
 import { env as appEnv } from "@/lib/env";
-import { captureServerEvent } from "@/lib/posthog/server";
 import { notifyFeedback } from "@/lib/slack";
 
 /** Same audio cap as /api/transcribe — keeps a single 5-min recording
@@ -265,24 +264,7 @@ export async function POST(req: Request): Promise<Response> {
     status: "new",
   });
 
-  // 7. PostHog signal so we can graph submission rate, audio-share
-  //    rate, and failure_kind distribution.
-  captureServerEvent({
-    distinctId: user.id,
-    event: "feedback_submitted",
-    groups: { organization: orgRow.id },
-    properties: {
-      feedback_id: id,
-      failure_kind: failureKind ?? "unspecified",
-      audio_shared: audioObjectKey !== null,
-      raw_chars: rawText.length,
-      polished_chars: polishedText.length,
-      expected_chars: expectedText.length,
-      has_note: userNote !== null,
-    },
-  });
-
-  // 8. Optional Slack notify. No-ops cleanly when the destination is
+  // 7. Optional Slack notify. No-ops cleanly when the destination is
   //    disabled or unconfigured; never blocks the response. See
   //    lib/slack.ts for the async/swallowing semantics — we don't
   //    await it here either, so a slow Slack endpoint can't add tail

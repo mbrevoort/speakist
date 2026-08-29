@@ -70,7 +70,7 @@ The bits worth focusing your time on:
 
 - **Third-party dependencies** running on currently-supported
   versions — report those upstream (Auth.js, Drizzle, Stripe SDK,
-  PostHog, etc.). We'll bump them once the upstream fix lands.
+  Sparkle, etc.). We'll bump them once the upstream fix lands.
 - **Issues that require a compromised super-admin account** to
   exploit. Super admins can write to the system-wide keys, edit
   polish prompts, mint service tokens, etc. — that's the design;

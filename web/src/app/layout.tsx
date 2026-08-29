@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { PostHogProvider } from "@/components/posthog-provider";
-import { env } from "@/lib/env";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -10,8 +8,7 @@ const inter = Inter({
 });
 
 // Force dynamic rendering for every route. Our app reads from D1 via
-// getCloudflareContext() almost everywhere (landing page's Pricing component,
-// auth check in middleware-ish layouts, every dashboard / admin page),
+// getCloudflareContext() across legacy authenticated and admin routes,
 // and the sync form of getCloudflareContext can't run at build-time
 // prerendering. Marking root-level `dynamic = "force-dynamic"` tells
 // Next.js to skip static generation entirely — which matches reality,
@@ -25,7 +22,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Speakist — push-to-talk dictation for macOS",
   description:
-    "Hold a key, speak, release. Parakeet transcription and local AI cleanup run privately on your Mac, then clean text appears at your cursor.",
+    "Hold a key, speak, release. Private speech-to-text and language-model cleanup run on your Mac, then clean text appears at your cursor.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
 };
 
@@ -33,12 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${inter.variable} font-sans antialiased`}>
-        <PostHogProvider
-          apiKey={env.public.NEXT_PUBLIC_POSTHOG_KEY}
-          apiHost={env.public.NEXT_PUBLIC_POSTHOG_HOST}
-        >
-          {children}
-        </PostHogProvider>
+        {children}
       </body>
     </html>
   );

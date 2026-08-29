@@ -39,9 +39,9 @@ export default async function DashboardHome() {
           Welcome to Speakist.
         </h1>
         <p className="mt-2 text-muted-foreground max-w-xl">
-          Your optional cloud workspace is set up. Install Speakist on your
-          Mac, then choose local or cloud transcription in the app. Only cloud
-          transcription draws from the word balance below.
+          This legacy workspace remains available while older Speakist
+          versions upgrade. The current Mac app processes transcription and
+          cleanup locally and does not use this word balance.
         </p>
       </header>
 

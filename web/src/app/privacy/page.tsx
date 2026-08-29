@@ -11,7 +11,7 @@ import { Footer } from "@/components/marketing/footer";
 
 export const metadata = { title: "Privacy Policy — Speakist" };
 
-const LAST_UPDATED = "August 22, 2026";
+const LAST_UPDATED = "August 29, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -40,14 +40,17 @@ export default function PrivacyPage() {
                 we handle the information you share with us.
               </P>
               <P>
-                We take a conservative approach to privacy. We collect only
-                what we need to run the service, never sell or rent your
-                data, and don&apos;t use your content to train AI models.
+                Current Speakist releases process dictation entirely on your
+                Mac. We temporarily continue operating the legacy account and
+                cloud service for people upgrading from older releases; the
+                legacy disclosures below remain in effect while that service
+                is available.
               </P>
               <P>If you&apos;ve read enough, here&apos;s the short version:</P>
               <UL>
-                <LI>In local mode, audio and transcript text never leave your Mac.</LI>
-                <LI>In cloud mode, we process but do not retain audio or transcript text.</LI>
+                <LI>In current releases, audio and transcript text never leave your Mac.</LI>
+                <LI>Speakist does not collect product-usage telemetry from the Mac app.</LI>
+                <LI>Legacy cloud requests are processed but their audio and transcript text are not retained.</LI>
                 <LI>
                   We don&apos;t share your personal information with anyone
                   except the infrastructure providers we need to operate.
@@ -85,18 +88,10 @@ export default function PrivacyPage() {
                 audio.
               </P>
               <P>
-                <strong>Product analytics.</strong> Stable releases may record
-                app lifecycle and screen-navigation events so we can understand
-                reliability and feature use. If you sign in, those events may
-                be associated with your account. Local mode does not send
-                per-dictation events, audio, transcript text, word count,
-                recording duration, model details, paste status, or the target
-                application to analytics.
-              </P>
-              <P>
-                <strong>Custom vocabulary.</strong> Local vocabulary is stored
-                on your Mac. If you use cloud sync, we also store those terms
-                in your cloud account.
+                <strong>Custom vocabulary.</strong> Current releases store
+                vocabulary only on your Mac. Vocabulary previously synchronized
+                by a legacy release remains in that legacy account until it is
+                deleted under the retention terms below.
               </P>
               <P>
                 <strong>Billing information.</strong> We track your credit
@@ -120,14 +115,14 @@ export default function PrivacyPage() {
 
             <Section title="What we don&rsquo;t store">
               <P>
-                <strong>Local mode.</strong> Dictation audio and transcript text
+                <strong>Current releases.</strong> Dictation audio and transcript text
                 are processed on your Mac and are not sent to us. The app can
                 retain recent local audio and history according to settings you
                 control; you can turn audio retention off.
               </P>
               <P>
-                <strong>Cloud audio.</strong> When you explicitly use Speakist
-                Cloud, audio is sent to our backend and forwarded to our
+                <strong>Legacy cloud audio.</strong> When an earlier Speakist
+                release uses the legacy cloud service, audio is sent to our backend and forwarded to our
                 transcription provider. The
                 audio is held only for the duration of the request —
                 typically under a second — and then discarded. It never
@@ -135,7 +130,7 @@ export default function PrivacyPage() {
                 system we control.
               </P>
               <P>
-                <strong>Cloud transcript text.</strong> The transcribed and
+                <strong>Legacy cloud transcript text.</strong> The transcribed and
                 polished text returned to your device is not stored on our
                 servers. It exists only in transit between you, our
                 transcription provider, and your device. Your final text
@@ -150,48 +145,20 @@ export default function PrivacyPage() {
               </P>
             </Section>
 
-            <Section title="When you report a bad transcription">
+            <Section title="Reports from earlier releases">
               <P>
-                The Speakist apps include a &ldquo;Report bad
-                transcription&rdquo; option in your History view. This is
-                the <strong>only</strong> path that uploads any of your
-                dictation data to our servers for storage. It runs only
-                when you explicitly tap or click Report — there is no
-                background submission, no telemetry that mirrors a
-                transcription without your action.
-              </P>
-              <P>When you report a transcription, with your permission we receive:</P>
-              <UL>
-                <LI>
-                  The audio recording (you can uncheck this in the report
-                  dialog to send a text-only report)
-                </LI>
-                <LI>The raw text our transcription model produced</LI>
-                <LI>The polished text we delivered to your device</LI>
-                <LI>
-                  Your correction — what you said the transcript should
-                  have been
-                </LI>
-                <LI>
-                  Any optional note or category you chose (&ldquo;wrong
-                  word&rdquo;, &ldquo;punctuation&rdquo;, etc.)
-                </LI>
-              </UL>
-              <P>
-                We use this data exclusively to improve transcription
-                accuracy — specifically, to grow our regression test
-                suite and to tune the prompts used by our polish model.
-                We retain it indefinitely so that a fix for your reported
-                issue today can keep working a year from now without
-                regressing.
+                Current releases do not include transcription reporting or
+                feedback upload. Earlier releases offered an explicit
+                &ldquo;Report bad transcription&rdquo; action. Reports already
+                submitted through that legacy action may contain the audio,
+                raw transcript, delivered text, correction, and optional note
+                the user chose to send.
               </P>
               <P>
-                <strong>Workspace opt-out.</strong> Your workspace owner
-                can turn off the Report feature for everyone in the
-                workspace. When disabled, the Report button is hidden
-                from the apps and the server refuses any submission. Ask
-                your owner if you&rsquo;d like to discuss enabling or
-                disabling it for your team.
+                Those reports remain subject to the retention and deletion
+                provisions below while we operate the compatibility backend.
+                The current Mac app has no path that creates or uploads a new
+                report.
               </P>
             </Section>
 
@@ -217,6 +184,14 @@ export default function PrivacyPage() {
               <P>We do not:</P>
               <UL>
                 <LI>
+                  <strong>Hugging Face</strong> — distribution of the model
+                  files downloaded during setup. Hugging Face receives the
+                  ordinary network metadata needed to serve those files, such
+                  as IP address and request headers; Speakist does not send
+                  dictation audio, transcripts, vocabulary, or history with a
+                  model download.
+                </LI>
+                <LI>
                   Sell, rent, or trade your personal information to anyone,
                   ever
                 </LI>
@@ -237,8 +212,9 @@ export default function PrivacyPage() {
             <Section title="Third-party services">
               <P>
                 Local transcription does not send dictation content to these
-                providers. Account, payment, and optional cloud features use
-                the following providers, each with their own privacy commitments:
+                providers. Model delivery and the temporary legacy account,
+                payment, and cloud services use the following providers, each
+                with their own privacy commitments:
               </P>
               <UL>
                 <LI>

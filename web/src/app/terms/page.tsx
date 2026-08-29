@@ -11,7 +11,7 @@ import { Footer } from "@/components/marketing/footer";
 
 export const metadata = { title: "Terms of Service — Speakist" };
 
-const LAST_UPDATED = "August 22, 2026";
+const LAST_UPDATED = "August 29, 2026";
 
 export default function TermsPage() {
   return (
@@ -47,9 +47,11 @@ export default function TermsPage() {
               <P>
                 Speakist is a push-to-talk dictation tool for macOS. You hold
                 a shortcut, speak, and clean text appears at your cursor in
-                any app. Local transcription is the default; an optional
-                cloud transcription service is also available. The product is currently in beta —
-                features may change as we develop the product.
+                any app. Current releases perform speech recognition and
+                language-model cleanup on your Mac. We temporarily maintain
+                the legacy account and cloud service for users upgrading from
+                older releases. The product is currently in beta — features
+                may change as we develop the product.
               </P>
             </Section>
 
@@ -63,10 +65,10 @@ export default function TermsPage() {
               </P>
             </Section>
 
-            <Section title="3. Your account">
+            <Section title="3. Legacy accounts">
               <P>
-                You do not need an account for local transcription. If you
-                create an account to use Speakist Cloud, you agree to:
+                Current releases do not require an account. If you already have
+                an account for the legacy Speakist Cloud service, you agree to:
               </P>
               <UL>
                 <LI>Provide accurate information</LI>
@@ -123,9 +125,9 @@ export default function TermsPage() {
                 ownership rights.
               </P>
               <P>
-                In local mode, your content is processed on your Mac and no
-                license to transmit it to us is required. When you choose
-                Speakist Cloud, you grant us a limited, non-exclusive license
+                In current releases, your content is processed on your Mac and no
+                license to transmit it to us is required. When an older release uses
+                the legacy Speakist Cloud service, you grant us a limited, non-exclusive license
                 to send audio to our transcription provider, return the
                 transcript, and record metadata necessary for billing. This
                 license does not extend to using your
@@ -148,12 +150,9 @@ export default function TermsPage() {
 
             <Section title="6. Payment, credits, and refunds">
               <P>
-                <strong>Pricing.</strong> Local transcription is free and
-                unlimited. Speakist Cloud is consumption-priced. The current
-                per-word rate, top-up tiers, and bonus
-                structure are listed on our pricing page. Prices may
-                change; we will notify you of changes before they take
-                effect for new top-ups.
+                <strong>Pricing.</strong> Current on-device transcription is
+                free and unlimited. Existing credits and charges apply only to
+                the temporary legacy cloud service used by older releases.
               </P>
               <P>
                 <strong>Credits.</strong> When you top up, you purchase

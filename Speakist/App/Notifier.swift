@@ -30,19 +30,14 @@ final class Notifier {
              body: "\(error). Audio saved — retry from History.")
     }
 
+    func modelsPreparing() {
+        post(title: "Speakist is getting ready",
+             body: "The on-device models are still being prepared. Check Settings → Transcription for progress.")
+    }
+
     func maxDurationHit(minutes: Int) {
         post(title: "Reached max recording length",
              body: "Transcribing the first \(minutes) minutes.")
-    }
-
-    func apiKeyRejected(provider: String) {
-        post(title: "API key rejected",
-             body: "Check your \(provider) key in Settings.")
-    }
-
-    func missingApiKey(provider: String) {
-        post(title: "\(provider) key missing",
-             body: "Add it in Settings → Transcription.")
     }
 
     func micDenied() {

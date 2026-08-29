@@ -26,7 +26,7 @@ export function Footer() {
   return (
     <footer className="border-t border-border/60 bg-white/30">
       <div className="container max-w-6xl py-12">
-        <div className="grid sm:grid-cols-[1fr_auto_auto_auto_auto] gap-8 sm:gap-12">
+        <div className="grid sm:grid-cols-[1fr_auto_auto_auto] gap-8 sm:gap-12">
           <div className="max-w-sm">
             <Wordmark />
             <p className="mt-4 text-sm text-muted-foreground leading-relaxed">
@@ -72,13 +72,12 @@ export function Footer() {
 
           <FooterCol title="Product">
             <FooterLink href="/#how">How it works</FooterLink>
-            <FooterLink href="/#pricing">Pricing</FooterLink>
             <FooterLink href="/faq">FAQ</FooterLink>
-          </FooterCol>
-
-          <FooterCol title="Account">
-            <FooterLink href="/auth/signin?intent=signin">Sign in</FooterLink>
-            <FooterLink href="/auth/signin?intent=signup">Get started</FooterLink>
+            <li>
+              <a href="/api/download/mac" download className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                Download for Mac
+              </a>
+            </li>
           </FooterCol>
 
           <FooterCol title="Source">

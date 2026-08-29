@@ -46,9 +46,5 @@
 	<string>uBl1QE2lgZst3OSgHaY3kcSWMVgH4ergMacrne2wuvQ=</string>
 	<key>SpeakistChannel</key>
 	<string>$(SPEAKIST_CHANNEL)</string>
-	<key>SpeakistDefaultAPIBaseURL</key>
-	<string>$(SPEAKIST_API_BASE_URL)</string>
-	<key>SpeakistPostHogKey</key>
-	<string>$(SPEAKIST_POSTHOG_KEY)</string>
 </dict>
 </plist>

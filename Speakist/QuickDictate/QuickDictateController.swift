@@ -64,15 +64,14 @@ final class QuickDictateController: ObservableObject {
     private let audioRecorder: AudioRecorder
     private let history: HistoryStore
     private let preferences: Preferences
-    private let accountManager: SpeakistAccountManager
     private let audioArchive: AudioArchive
     private let correctionStore: CorrectionStore
     private let audioMuter: SystemAudioMuter
     private let transcriptionService: TranscriptionService
 
     private var levelSubscription: AnyCancellable?
-    /// Carried across phases so save() can construct a feedback-ready
-    /// TranscriptionEntry without re-driving the network. Cleared on
+    /// Carried across phases so save() can construct the local history
+    /// entry without transcribing again. Cleared on
     /// `reset()` so a discarded session can't leak into the next.
     private var pendingEntryID: String?
     private var pendingAudioURL: URL?
@@ -83,7 +82,6 @@ final class QuickDictateController: ObservableObject {
         self.audioRecorder = env.audioRecorder
         self.history = env.historyStore
         self.preferences = env.preferences
-        self.accountManager = env.accountManager
         self.audioArchive = env.audioArchive
         self.correctionStore = env.correctionStore
         self.audioMuter = env.audioMuter
@@ -139,8 +137,8 @@ final class QuickDictateController: ObservableObject {
         }
     }
 
-    /// User clicked Stop. Recorder finalizes, audio uploads to
-    /// `/api/transcribe`, and we land in `.reviewing` or `.error`.
+    /// User clicked Stop. Recorder finalizes, audio is transcribed on this
+    /// Mac, and we land in `.reviewing` or `.error`.
     func stop() async {
         guard case .recording = phase else { return }
         phase = .transcribing
@@ -157,8 +155,9 @@ final class QuickDictateController: ObservableObject {
             return
         }
 
-        guard preferences.transcriptionEngine == .parakeet || accountManager.isSignedIn else {
-            phase = .error(message: "Sign in to Speakist before transcribing.")
+        guard transcriptionService.modelsReady else {
+            transcriptionService.prepareModelsInBackground()
+            phase = .error(message: "Speakist is still preparing its on-device models. Check Settings → Transcription for progress.")
             audioArchive.discard(tempURL: result.url)
             return
         }
@@ -170,9 +169,7 @@ final class QuickDictateController: ObservableObject {
 
         do {
             let response = try await transcriptionService.transcribeForPreview(
-                audioURL: result.url,
-                transcriptionClientId: entryID,
-                reportCloudUsage: true)
+                audioURL: result.url)
             let raw = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !raw.isEmpty else {
                 phase = .error(message: "Didn't catch anything — try again.")

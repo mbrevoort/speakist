@@ -3,22 +3,19 @@ import GRDB
 import Combine
 import AppKit
 
-/// Whether a learned correction reaches the upstream STT provider or
-/// stays client-side only. Mirrors the `applies_to` column on the
-/// server's vocabulary_entries table (see web/drizzle/migrations/0021).
+/// Whether a learned correction is active or remains staged for explicit
+/// approval. The raw values are retained for database compatibility with
+/// earlier Speakist releases.
 ///
-///   * `.local` — stored + visible in the Vocabulary UI, but NEVER
-///     sent to the STT provider. This is the new safe default for
+///   * `.local` — stored locally but not applied. This is the safe default for
 ///     auto-ingested entries from inline transcript edits. Without
 ///     this gate, every word-level edit became a global rewrite rule
 ///     ("as" → "given") applied to every future dictation.
 ///
-///   * `.stt`   — sent to the STT provider as a keyterm bias and as a
-///     replace=find:replacement rule. Promoted from `.local` either
-///     by the user explicitly in Settings or by the reactive LLM
-///     classifier (count ≥ 2 + "looks like a real vocab item"). This
-///     is the value migration 0021 backfilled for legacy entries that
-///     passed a tight safety screen.
+///   * `.stt` — applied as an exact, case-insensitive replacement after
+///     on-device speech recognition. Users activate rules explicitly; a new
+///     spelling variant may also inherit approval from an existing proper-noun
+///     rule when it passes the conservative similarity checks below.
 enum CorrectionAppliesTo: String, Codable, Equatable {
     case local
     case stt
@@ -46,36 +43,6 @@ final class CorrectionStore: ObservableObject {
 
     private var dbQueue: DatabaseQueue?
     private static let stableRulesImportKey = "stable_explicit_replace_rules_v1"
-
-    /// API client used to mirror local edits up to the server. Bound
-    /// from `AppEnvironment` after construction so the store can stay
-    /// network-agnostic at the file level. Nil = no push (local-only).
-    private var apiClient: SpeakistAPIClient?
-    private var cloudSyncEnabled: () -> Bool = { true }
-
-    /// In-memory "already tried this session" set for the reactive
-    /// classifier. Keyed by the (from, to) pair. Prevents the same
-    /// row from being re-classified multiple times during one app
-    /// session — without this, every ingest() that touches a row at
-    /// count ≥ 2 would re-call the classifier.
-    ///
-    /// Deliberately in-memory only (not persisted). Across launches
-    /// we DO want to re-attempt classification for rows that are
-    /// still local + count ≥ 2: the classifier is deterministic at
-    /// temp=0 + strict structured outputs, so a repeat call returns
-    /// the same verdict — but if the previous call hit a transient
-    /// network error or rate limit, the next launch gets a clean
-    /// retry. The wasted cost (~5-20 classifier calls per launch
-    /// for a typical user's local-only set) is well under a cent.
-    private var classifierAttempted: Set<String> = []
-
-    func bind(
-        api: SpeakistAPIClient,
-        cloudSyncEnabled: @escaping () -> Bool = { true }
-    ) {
-        self.apiClient = api
-        self.cloudSyncEnabled = cloudSyncEnabled
-    }
 
     func bootstrap() {
         do {
@@ -193,21 +160,13 @@ final class CorrectionStore: ObservableObject {
                 }
             }
             reload()
-            // Mirror the touched rows up to the server so the web view
-            // shows what the Mac just learned.
-            pushTouchedPairs(pairs)
-            // After ingest, any row that just crossed count ≥ 2 and
-            // is still applies_to=local is eligible for the reactive
-            // classifier. Fire-and-forget so the user's save path
-            // doesn't pay for the LLM round-trip.
-            promotePromotables()
         } catch {
             Logger.shared.error("ingest corrections failed: \(error.localizedDescription)")
         }
     }
 
-    /// Automatic aliases are deliberately narrower than the server-side
-    /// classifier. They must resemble an already-approved canonical spelling
+    /// Automatic aliases are deliberately narrow. They must resemble an
+    /// already-approved canonical spelling
     /// after punctuation and whitespace are removed. This catches variants
     /// such as `brevort`/`prevoort` -> `Brevoort` while rejecting ordinary
     /// words that were corrected to a name in one particular sentence.
@@ -263,109 +222,6 @@ final class CorrectionStore: ObservableObject {
         }
         return previous[right.count]
     }
-
-    /// Find every local-only row and dispatch it to the classifier.
-    /// Each callback runs on its own Task; we don't block the
-    /// caller.
-    ///
-    /// There is intentionally NO count threshold. The classifier is
-    /// the gate: it decides whether an auto-ingested correction
-    /// looks like a real vocab item or a one-off contextual edit.
-    /// Earlier iterations of this code required `count >= 2` (the
-    /// user had to make the same correction twice before anything
-    /// happened), then a partial relaxation that ran at count=1
-    /// for proper-noun-like edits but still required count>=2 for
-    /// everything else — both versions leaked the count threshold
-    /// into UX. From the user's perspective, "I gave the system a
-    /// correction and it did nothing" is broken, regardless of how
-    /// cheap or conservative the gate was internally. The bench
-    /// established 100% precision on every skip category (common-
-    /// word swaps, grammar fixes, function words, self-corrections,
-    /// punctuation, multi-word rewrites, single-char finds), so
-    /// the threshold was guarding against a failure mode that
-    /// doesn't actually appear.
-    ///
-    /// In-memory dedup via `classifierAttempted` still prevents
-    /// re-classifying the same (from, to) pair within a single
-    /// session.
-    ///
-    /// Also called from `syncFromServer` so a fresh launch picks up
-    /// any rows that were left local-only on a previous session
-    /// (offline, classifier rate-limited, etc.) — the in-memory
-    /// `classifierAttempted` set is empty at launch so everything
-    /// gets a clean re-try.
-    private func promotePromotables() {
-        guard cloudSyncEnabled(), apiClient != nil else { return }
-        for row in all where row.appliesTo == .local {
-            let key = wireKey(from: row.fromText, to: row.toText)
-            guard !classifierAttempted.contains(key) else { continue }
-            classifierAttempted.insert(key)
-            attemptPromotion(row)
-        }
-    }
-
-    /// Run a single (from, to) pair through the server's classifier
-    /// endpoint. If the classifier returns add=true, flip the local
-    /// row's applies_to to .stt + push the change to the server.
-    /// All errors are swallowed (best-effort) — the row stays local,
-    /// which is the safe default.
-    private func attemptPromotion(_ row: CorrectionRow) {
-        guard let api = apiClient else { return }
-        Task { [weak self, fromText = row.fromText, toText = row.toText] in
-            do {
-                let result = try await api.classifyVocabPair(
-                    find: fromText,
-                    replacement: toText
-                )
-                guard result.applied else {
-                    // Classifier itself didn't run cleanly (no Groq
-                    // key, timeout, etc). Leave the row local. The
-                    // next ingest on the same key won't re-attempt
-                    // (in-memory dedup), but a fresh launch will.
-                    Logger.shared.info(
-                        "classifier skipped \(fromText)→\(toText): \(result.errorReason ?? "no_detail")"
-                    )
-                    return
-                }
-                Logger.shared.info(
-                    "classifier verdict for \(fromText)→\(toText): " +
-                    "add=\(result.add) category=\(result.category)"
-                )
-                guard result.add else { return }
-                await self?.applyPromotion(fromText: fromText, toText: toText)
-            } catch SpeakistAPIClient.Error.notSignedIn {
-                // Silent — the row stays local. Promotion will be
-                // re-attempted next launch when the user signs in.
-            } catch {
-                Logger.shared.warn(
-                    "classifier call failed for \(fromText)→\(toText): \(String(describing: error))"
-                )
-            }
-        }
-    }
-
-    /// Promote a local row to applies_to=.stt and push the change up
-    /// to the server. Looks the row up fresh from `all` so we don't
-    /// race with concurrent mutations.
-    private func applyPromotion(fromText: String, toText: String) {
-        guard
-            var row = all.first(where: {
-                $0.fromText == fromText && $0.toText == toText
-            }),
-            row.appliesTo == .local
-        else {
-            // Either the row was deleted between classifier-call and
-            // -response, or it was already promoted by something else
-            // (the user manually edited it in Settings, a server sync
-            // landed first). Either way, nothing to do.
-            return
-        }
-        row.appliesTo = .stt
-        // upsert pushes to the server too, so the web view sees the
-        // promotion and other clients pick it up on next sync.
-        upsert(row)
-    }
-
     func upsert(_ row: CorrectionRow) {
         guard let dbQueue else { return }
         do {
@@ -396,7 +252,6 @@ final class CorrectionStore: ObservableObject {
                 }
             }
             reload()
-            pushUpsert(row)
         } catch {
             Logger.shared.error("upsert correction failed: \(error.localizedDescription)")
         }
@@ -409,299 +264,16 @@ final class CorrectionStore: ObservableObject {
                 try db.execute(literal: "DELETE FROM corrections WHERE id = \(id)")
             }
             reload()
-            pushDelete(from: row.fromText, to: row.toText)
         } catch {
             Logger.shared.error("delete correction failed: \(error.localizedDescription)")
         }
     }
-
-    // MARK: - Server sync
-
-    /// Apply a batch of vocabulary entries from the server. Tombstoned
-    /// rows (`deleted == true`) are deleted locally; live rows are
-    /// upserted by `(from_text, to_text)`. Used by `syncFromServer`
-    /// after a `/api/vocabulary` GET, and is what makes web edits show
-    /// up on the Mac.
-    func merge(serverEntries entries: [SpeakistAPIClient.VocabEntryWire]) {
-        guard let dbQueue else { return }
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let parserNoFractional = ISO8601DateFormatter()
-        parserNoFractional.formatOptions = [.withInternetDateTime]
-
-        func parseTime(_ s: String?) -> TimeInterval {
-            guard let s else { return Date().timeIntervalSince1970 }
-            if let d = parser.date(from: s) ?? parserNoFractional.date(from: s) {
-                return d.timeIntervalSince1970
-            }
-            return Date().timeIntervalSince1970
-        }
-
-        do {
-            try dbQueue.write { db in
-                for entry in entries {
-                    let from = entry.from.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let to = entry.to.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !from.isEmpty, !to.isEmpty else { continue }
-
-                    if entry.deleted == true {
-                        // Tombstone — drop the local row if it exists.
-                        // No-op if we never had it.
-                        try db.execute(literal: """
-                            DELETE FROM corrections
-                            WHERE from_text = \(from) AND to_text = \(to)
-                        """)
-                        continue
-                    }
-
-                    let count = entry.count ?? 1
-                    let isProperNoun = entry.isProperNoun ?? false
-                    let lastSeen = parseTime(entry.lastSeen)
-                    // Trust the server's applies_to over the local
-                    // value — the server is the source of truth and
-                    // is where classifier promotion lives. When the
-                    // wire entry omits applies_to (older server, or
-                    // a partial update), default to `local` so the
-                    // safe-by-default invariant holds.
-                    let appliesTo = entry.appliesTo ?? "local"
-
-                    // Treat server-sourced rows as user_managed so they
-                    // survive any future eviction/aging logic. The web
-                    // editor is by definition a deliberate user action.
-                    try db.execute(literal: """
-                        INSERT INTO corrections (from_text, to_text, count, last_seen, is_proper_noun, user_managed, applies_to)
-                        VALUES (\(from), \(to), \(count), \(lastSeen), \(isProperNoun ? 1 : 0), 1, \(appliesTo))
-                        ON CONFLICT(from_text, to_text) DO UPDATE SET
-                          count = \(count),
-                          last_seen = \(lastSeen),
-                          is_proper_noun = \(isProperNoun ? 1 : 0),
-                          user_managed = 1,
-                          applies_to = \(appliesTo)
-                    """)
-                }
-            }
-            reload()
-        } catch {
-            Logger.shared.error("merge corrections from server failed: \(error.localizedDescription)")
-        }
-    }
-
-    /// Pull the latest server-side vocabulary and merge it into the
-    /// local store, then push any local entries the server hasn't seen
-    /// (back-fill for entries that existed locally before push-on-edit
-    /// was wired up). Safe to call on a no-op state — silently returns
-    /// if the user is signed out or the request fails.
+    /// Exact local replacement rules. The find side is lowercased because the
+    /// on-device replacement pass matches case-insensitively; the replacement
+    /// preserves the user's intended casing. De-duplicated by source phrase.
     ///
-    /// Called from app launch and `didBecomeActive`, so anything edited
-    /// in the web dashboard appears on the Mac the next time the app
-    /// comes to the foreground, and anything edited (or auto-learned)
-    /// on the Mac before sync was wired up shows up on the web.
-    func syncFromServer(api: SpeakistAPIClient) async {
-        guard cloudSyncEnabled() else { return }
-        do {
-            // Local mode and signed-out use are allowed to mutate vocabulary.
-            // Replay those durable mutations before reading remote state so a
-            // stale server row cannot resurrect a rule the user deleted or
-            // overwrite an edit made while Cloud was not selected.
-            try await flushPendingVocabularyChanges(using: api)
-            let response = try await api.fetchVocabulary()
-            merge(serverEntries: response.entries)
-
-            // Back-fill: any local entry whose (from, to) pair never
-            // made it to the server (server has no row, alive or
-            // tombstoned) gets pushed once. The server's POST is
-            // idempotent so a duplicate push is harmless if we ever
-            // double-fire this path.
-            let serverKeys: Set<String> = Set(response.entries.map { wireKey(from: $0.from, to: $0.to) })
-            let toPush = all.compactMap { row -> SpeakistAPIClient.VocabEntryWire? in
-                let key = wireKey(from: row.fromText, to: row.toText)
-                guard !serverKeys.contains(key) else { return nil }
-                return makeWire(from: row)
-            }
-            if !toPush.isEmpty {
-                _ = try? await api.pushVocabulary(entries: toPush)
-            }
-            // After we've reconciled with the server, re-check for
-            // any local rows that should now be promoted. Catches
-            // rows that were left local-only on a previous session
-            // (e.g., user dictated offline, or the classifier was
-            // rate-limited and we gave up after the in-memory cap).
-            promotePromotables()
-        } catch SpeakistAPIClient.Error.notSignedIn {
-            // Silent — nothing to sync.
-        } catch {
-            Logger.shared.warn("vocab sync failed: \(String(describing: error))")
-        }
-    }
-
-    // MARK: - Push helpers (best-effort, fire-and-forget)
-
-    /// Push a single locally-edited row up to the server. Called after
-    /// the local DB write so the web dashboard sees the change without
-    /// waiting for the next sync.
-    private func pushUpsert(_ row: CorrectionRow) {
-        let wire = makeWire(from: row)
-        enqueuePendingVocabularyChange(wire)
-        flushPendingVocabularyChangesInBackground()
-    }
-
-    /// Push a tombstone for a `(from, to)` pair the user just deleted.
-    private func pushDelete(from fromText: String, to toText: String) {
-        let wire = SpeakistAPIClient.VocabEntryWire(
-            from: fromText,
-            to: toText,
-            count: nil,
-            isProperNoun: nil,
-            // Tombstone — server uses (from, to) as the key and the
-            // `deleted: true` marker to soft-delete; applies_to is
-            // irrelevant for a delete and stays nil.
-            appliesTo: nil,
-            lastSeen: nil,
-            updatedAt: nil,
-            deleted: true
-        )
-        enqueuePendingVocabularyChange(wire)
-        flushPendingVocabularyChangesInBackground()
-    }
-
-    /// Push the rows touched by a recent `ingest(pairs:)` so auto-
-    /// learned corrections show up on the web alongside manual ones.
-    private func pushTouchedPairs(_ pairs: [CorrectionPair]) {
-        guard !pairs.isEmpty else { return }
-        let touchedKeys: Set<String> = Set(pairs.map { pair in
-            wireKey(
-                from: pair.from.trimmingCharacters(in: .whitespacesAndNewlines),
-                to: pair.to.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-        })
-        let wire = all
-            .filter { touchedKeys.contains(wireKey(from: $0.fromText, to: $0.toText)) }
-            .map(makeWire(from:))
-        guard !wire.isEmpty else { return }
-        wire.forEach(enqueuePendingVocabularyChange)
-        flushPendingVocabularyChangesInBackground()
-    }
-
-    private func enqueuePendingVocabularyChange(
-        _ wire: SpeakistAPIClient.VocabEntryWire
-    ) {
-        guard let dbQueue else { return }
-        do {
-            let payload = try JSONEncoder().encode(wire)
-            try dbQueue.write { db in
-                try db.execute(
-                    sql: """
-                        INSERT INTO correction_sync_queue
-                          (from_text, to_text, payload)
-                        VALUES (?, ?, ?)
-                        ON CONFLICT(from_text, to_text) DO UPDATE SET
-                          payload = excluded.payload
-                        """,
-                    arguments: [wire.from, wire.to, payload])
-            }
-        } catch {
-            Logger.shared.error(
-                "queue vocabulary change failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func flushPendingVocabularyChangesInBackground() {
-        guard cloudSyncEnabled(), let api = apiClient else { return }
-        Task { [weak self] in
-            do {
-                try await self?.flushPendingVocabularyChanges(using: api)
-            } catch SpeakistAPIClient.Error.notSignedIn {
-                // Keep the durable queue for the next signed-in Cloud sync.
-            } catch {
-                Logger.shared.warn(
-                    "push queued vocabulary changes failed: \(String(describing: error))")
-            }
-        }
-    }
-
-    private func flushPendingVocabularyChanges(
-        using api: SpeakistAPIClient
-    ) async throws {
-        guard let dbQueue else { return }
-        let pending = try await dbQueue.read { db -> [SpeakistAPIClient.VocabEntryWire] in
-            let payloads = try Data.fetchAll(
-                db,
-                sql: "SELECT payload FROM correction_sync_queue ORDER BY rowid")
-            return try payloads.map { try JSONDecoder().decode(
-                SpeakistAPIClient.VocabEntryWire.self,
-                from: $0)
-            }
-        }
-        guard !pending.isEmpty else { return }
-
-        _ = try await api.pushVocabulary(entries: pending)
-        try await dbQueue.write { db in
-            for wire in pending {
-                let payload = try JSONEncoder().encode(wire)
-                try db.execute(
-                    sql: """
-                        DELETE FROM correction_sync_queue
-                        WHERE from_text = ? AND to_text = ? AND payload = ?
-                        """,
-                    arguments: [wire.from, wire.to, payload])
-            }
-        }
-    }
-
-    func pendingVocabularyChangesForTesting() throws -> [SpeakistAPIClient.VocabEntryWire] {
-        guard let dbQueue else { return [] }
-        return try dbQueue.read { db in
-            let payloads = try Data.fetchAll(
-                db,
-                sql: "SELECT payload FROM correction_sync_queue ORDER BY rowid")
-            return try payloads.map {
-                try JSONDecoder().decode(SpeakistAPIClient.VocabEntryWire.self, from: $0)
-            }
-        }
-    }
-
-    private func makeWire(from row: CorrectionRow) -> SpeakistAPIClient.VocabEntryWire {
-        SpeakistAPIClient.VocabEntryWire(
-            from: row.fromText,
-            to: row.toText,
-            count: row.count,
-            isProperNoun: row.isProperNoun,
-            appliesTo: row.appliesTo.rawValue,
-            lastSeen: ISO8601DateFormatter().string(from: row.lastSeen),
-            updatedAt: nil,
-            deleted: nil
-        )
-    }
-
-    private func wireKey(from: String, to: String) -> String {
-        "\(from)|\(to)"
-    }
-
-    /// Top-ranked corrections for STT custom-vocab bias. Filtered to
-    /// `applies_to = stt` so that local-only entries (the new default
-    /// for auto-ingested edits) never reach the upstream STT provider.
-    /// The previous behavior — every is_proper_noun row reached STT
-    /// regardless of intent — turned out to misclassify common-word
-    /// swaps as "proper nouns" and globally rewrite unrelated dictation.
-    func keyterms(limit: Int) -> [String] {
-        all.filter { $0.appliesTo == .stt && $0.isProperNoun }
-            .sorted(by: { ($0.count, $0.lastSeen) > ($1.count, $1.lastSeen) })
-            .prefix(limit)
-            .map(\.toText)
-    }
-
-    /// Corrections formatted for Deepgram's `replace=find:replacement`
-    /// param. The find side is lowercased because Deepgram matches it
-    /// case-insensitively; the replacement preserves the user's
-    /// intended casing. De-duplicated on the lowercased find so we
-    /// don't send conflicting pairs that Deepgram would resolve
-    /// unpredictably.
-    ///
-    /// Filtered to `applies_to = stt` (same gate as keyterms, see
-    /// above). Without this filter the bench captured "as → given",
-    /// "a → an", "this → is a" being sent to Deepgram on every
-    /// transcribe call — auto-ingested from inline transcript edits
-    /// the user never intended as global rewrite rules.
+    /// Only explicitly approved or conservatively promoted rows become active,
+    /// preventing ordinary one-off edits from becoming global substitutions.
     func replaceRules(limit: Int) -> [ReplaceRule] {
         var seen = Set<String>()
         var out: [ReplaceRule] = []
@@ -734,12 +306,8 @@ final class CorrectionStore: ObservableObject {
                 """)
                 var results: [CorrectionRow] = []
                 while let row = try cursor.next() {
-                    // Unknown future enum value (e.g. server adds a
-                    // third applies_to mode before the Mac knows about
-                    // it) falls back to .local — the safe default that
-                    // never reaches STT. Better to under-promote than
-                    // to misinterpret as `.stt` and ship something
-                    // unintended to the upstream provider.
+                    // Unknown values fall back to `.local`, the safe staged
+                    // state that cannot rewrite future dictation.
                     let appliesToRaw: String = row["applies_to"] ?? "local"
                     let appliesTo = CorrectionAppliesTo(rawValue: appliesToRaw) ?? .local
                     results.append(CorrectionRow(
@@ -780,9 +348,8 @@ final class CorrectionStore: ObservableObject {
                 ON corrections(count DESC, last_seen DESC);
             """)
         }
-        // v2 — add `applies_to` so corrections can be local-only
-        // (stored, shown in UI, not sent to STT) vs sent to STT.
-        // Mirrors the server-side migration 0021 column + backfill.
+        // v2 — add `applies_to` so corrections can be staged safely instead
+        // of immediately becoming active replacement rules.
         // The local default protects users from accidentally global-
         // rewriting common words via auto-ingestion from inline
         // transcript edits. See `CorrectionAppliesTo` in this file
@@ -798,11 +365,9 @@ final class CorrectionStore: ObservableObject {
             // active in transcription. Everything else falls back
             // to 'local' so dangerous globals (as → given, a → an,
             // this → is a) stop reaching STT immediately on next
-            // dictation. Server-side syncFromServer will then
-            // overwrite each row's applies_to with the server's
-            // canonical value, but this local-side backfill keeps
-            // the Mac safe during the brief window between launch
-            // and the first /api/vocabulary GET.
+            // dictation. The local database is now the source of truth,
+            // so this conservative backfill permanently protects existing
+            // installations as they upgrade to the local-only release.
             //
             // Keep the blocklist in sync with the server migration
             // (0021_vocabulary_applies_to.sql) — same set of words.
@@ -834,16 +399,6 @@ final class CorrectionStore: ObservableObject {
                 CREATE TABLE IF NOT EXISTS correction_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
-                );
-            """)
-        }
-        migrator.registerMigration("v4_correction_sync_queue") { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS correction_sync_queue (
-                    from_text TEXT NOT NULL,
-                    to_text TEXT NOT NULL,
-                    payload BLOB NOT NULL,
-                    PRIMARY KEY(from_text, to_text)
                 );
             """)
         }

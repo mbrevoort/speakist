@@ -1,6 +1,6 @@
 # Speakist documentation
 
-Speakist is a macOS-first dictation product. New installs use local Parakeet transcription and guarded local cleanup by default; existing users retain their chosen engine. The web service provides the landing page, downloads, accounts, and optional Cloud transcription.
+Speakist is a local-only macOS dictation product. Current releases use on-device speech recognition and guarded language-model cleanup. The web service provides the landing page and downloads; legacy account and cloud routes remain temporarily for older binaries.
 
 ## Start here
 
@@ -10,8 +10,8 @@ Speakist is a macOS-first dictation product. New installs use local Parakeet tra
 - local-cleanup-lm-benchmark.md — tiny-model benchmark and safety gates
 - cicd.md — development and production automation
 - releasing.md — release checklist and rollback
-- polish-prompt-mirror.md — Cloud prompt synchronization
-- feedback-agent.md — opt-in quality-report workflow
+- polish-prompt-mirror.md — legacy cloud prompt synchronization
+- feedback-agent.md — legacy opt-in quality-report workflow
 
 ## Environments
 
@@ -21,4 +21,4 @@ Speakist is a macOS-first dictation product. New installs use local Parakeet tra
 | Mac app | Speakist Local | Speakist Dev | Speakist, plus beta channel |
 | Backend | local D1 | Cloudflare dev resources | Cloudflare production resources |
 
-Local dictation does not require any backend. The local web stack is needed only for website, account, or Cloud-path development.
+Dictation does not require any backend. The local web stack is needed for website work or explicit legacy-backend maintenance.

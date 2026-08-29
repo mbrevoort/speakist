@@ -1,7 +1,7 @@
 # Production CI/CD — runs when a GitHub Release is published.
 #
-# Two shipping jobs (plus release context; no dependency between web and Mac):
-# doesn't block the others):
+# Two shipping jobs plus release context; the web and Mac jobs are independent,
+# so a failure in one does not block the other:
 #   * web — Cloudflare Worker (speakist-web-prod) + D1 prod migrations
 #   * mac — Mac DMG, notarized + Sparkle-signed, uploaded to R2 prod,
 #           registered in D1 prod via /api/admin/releases/publish
@@ -9,7 +9,6 @@
 # Release semantics:
 #   tag      v0.2.0          → MARKETING_VERSION 0.2.0
 #   body     (markdown)      → Sparkle <description> HTML (Mac)
-#                               in App Store Connect (altool can't push it)
 #   prerel   off (default)   → channel=stable
 #   prerel   on              → channel=beta (uses the same prod Worker
 #                              + D1, but the appcast is /appcast-beta.xml)
@@ -150,13 +149,6 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      # PostHog — baked into the client bundle at build time via Next.js's
-      # NEXT_PUBLIC_* inlining. Production-only (the dev workflow doesn't
-      # export it), so the prod build is the only place that ships a key
-      # to the browser. The same value drives posthog-node on the
-      # server-side capture path. Project keys are public by design;
-      # the secret only protects which environment they end up baked into.
-      NEXT_PUBLIC_POSTHOG_KEY: ${{ secrets.NEXT_PUBLIC_POSTHOG_KEY }}
     steps:
       # Check out the tagged commit, not main, so the deployed code
       # matches what the user clicked Publish on. main may have moved
@@ -225,12 +217,6 @@ jobs:
       # stable for normal releases or beta for prereleases.
       RELEASE_VERSION: ${{ needs.context.outputs.version }}
       RELEASE_CHANNEL: ${{ needs.context.outputs.channel }}
-      # PostHog project key for stable Mac builds. release.sh forwards
-      # this as a `SPEAKIST_POSTHOG_KEY=…` xcodebuild build setting,
-      # which feeds the `SpeakistPostHogKey` Info.plist substitution.
-      # release.sh only forwards when CHANNEL=stable so beta archives
-      # never bake a production key.
-      SPEAKIST_POSTHOG_KEY_STABLE: ${{ secrets.SPEAKIST_POSTHOG_KEY_STABLE }}
       # Skip the Finder-driven DMG styling on this self-hosted runner.
       # AppleScript→Finder hangs from the launchd LaunchAgent context
       # for the full 120s AE default timeout; release.sh's symlink +

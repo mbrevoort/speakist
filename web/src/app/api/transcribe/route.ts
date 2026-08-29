@@ -56,7 +56,6 @@ import { logTranscriptionEvent } from "@/lib/transcription/analytics";
 import { resolveProviderForOrg } from "@/lib/transcription/orgAccess";
 import { finalizeTranscription, readPolishPrefs } from "@/lib/transcription/finalize";
 import { type ProviderId, type TranscriptionInput } from "@/lib/transcription/types";
-import { captureServerEvent } from "@/lib/posthog/server";
 
 /** Workers' default request-body cap is generous; we enforce a sensible
  *  one to keep audio from blowing past reasonable batch-transcription
@@ -106,34 +105,8 @@ export async function POST(req: Request): Promise<Response> {
       latencyMs: totalLatencyMs,
       upstreamStatus,
     });
-    // Mirror to PostHog as a product event so the LLM Analytics dashboard
-    // shows transcription alongside polish. distinctId falls back to
-    // orgId when the request didn't authenticate (we still want to see
-    // unauth failures bucketed by status). No-op when key isn't set.
-    captureServerEvent({
-      distinctId: posthogDistinctId ?? orgId,
-      event:
-        status === "ok"
-          ? "transcription_completed"
-          : "transcription_failed",
-      groups: orgId !== "unknown" ? { organization: orgId } : undefined,
-      properties: {
-        provider: providerId,
-        model,
-        status,
-        audio_ms: audioMs,
-        latency_ms: totalLatencyMs,
-        upstream_status: upstreamStatus,
-        upstream_millicents: upstreamMc,
-        retail_millicents: retailMc,
-      },
-    });
     return response;
   }
-
-  // distinctId for PostHog is the user.id once auth resolves; before that
-  // we'll fall back to orgId (set inside finish()).
-  let posthogDistinctId: string | undefined;
 
   // ---- auth + org ---------------------------------------------------------
   let user;
@@ -143,8 +116,6 @@ export async function POST(req: Request): Promise<Response> {
     const status = err instanceof AuthzError ? err.status : 401;
     return finish("invalid_input", json({ error: "unauthorized" }, status));
   }
-
-  posthogDistinctId = user.id;
 
   const org = await getCurrentOrgForUser(user.id);
   if (!org) {

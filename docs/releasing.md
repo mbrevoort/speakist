@@ -1,6 +1,6 @@
 # Releasing Speakist
 
-This checklist prepares a local-first Mac release while retaining Speakist Cloud for users who choose it.
+This checklist prepares the local-only Mac release while retaining the hosted backend temporarily for older binaries.
 
 This release supports Apple silicon Macs running macOS 14 or later. The MLX
 cleanup dependency is not shipped for Intel Macs; website requirements and the
@@ -10,16 +10,17 @@ arm64-only archive must remain aligned.
 
 This release is ready to publish when:
 
-- Fresh installs default to Parakeet and local AI cleanup.
-- Existing installs with completed onboarding and no prior engine key remain on Cloud.
-- Explicit engine and cleanup choices survive upgrade.
-- Onboarding requires the Parakeet transcription model before the first test,
-  clearly reports its download progress and failures, and lets users continue
-  with rules-only cleanup while the optional Qwen model downloads or is retried.
-- Settings can switch both directions and accurately describe the data path.
+- Fresh installs and existing upgrades enter the versioned local-only onboarding.
+- Onboarding automatically downloads both required models, reports progress and
+  failures clearly, and does not offer engine or model choices.
+- Dictation remains disabled until both models are ready.
+- Settings accurately describe the local data path and expose only progress,
+  retry, English support, and diagnostics.
 - Exact vocabulary replacements work without fuzzy name substitution.
 - Only explicit user edits are learned.
-- Website copy presents local as free, private, and default, with Cloud as optional.
+- The public website presents one private, free, Mac-only product with no account.
+- The Mac app has no third-party product analytics, cloud transcription,
+  account, feedback, evaluation, or vocabulary-sync runtime path.
 - Native and web tests, type checking, build, and runtime smoke tests pass.
 
 ## Version preparation
@@ -41,8 +42,9 @@ This release is ready to publish when:
 
 Also perform two manual upgrade scenarios using isolated preferences:
 
-1. Fresh install: local selected, no sign-in prompt, models visibly download, test dictation succeeds.
-2. Existing install: onboarding already complete with no engine key, Cloud remains selected; switching to local prepares models and succeeds.
+1. Fresh install: no sign-in prompt, both models visibly download, test dictation succeeds.
+2. Existing install: preload a legacy Cloud preference and token, then verify the
+   local-only onboarding appears, both models prepare, and offline dictation succeeds.
 
 Record a retained-audio regression with both proper-name aliases and ordinary near-sounding words. Require positive alias replacements and zero ordinary-word substitutions.
 
@@ -57,13 +59,17 @@ After CI completes, verify the exact artifact rather than relying only on green 
 - codesign assessment and notarization ticket pass.
 - Sparkle feed reports the expected version and build.
 - Landing, FAQ, privacy, and terms pages show local-first copy.
-- Optional Cloud sign-in and transcription still work for an existing account.
+- Public pages promote only the private, local Mac experience and use generic
+  model names.
+- Legacy backend health remains green for older installed binaries.
 
 ## Rollback
 
 - Web: redeploy the last known-good commit and compatible migrations.
 - Mac: republish the last known-good signed artifact and appcast entry for the affected channel.
-- Data-path emergency: existing users can switch engines in Settings. Do not silently force Cloud or local for users who already chose.
-- Model emergency: preserve Parakeet transcription and fall back from local AI cleanup to deterministic rules.
+- Data-path emergency: republish the last known-good Mac artifact; existing
+  Keychain tokens and the legacy backend remain available during this transition.
+- Model emergency: preserve on-device speech recognition and fall back from
+  guarded language-model cleanup to deterministic rules.
 
 Do not publish a production release from an ad-hoc signed build.

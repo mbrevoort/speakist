@@ -7,8 +7,7 @@
 //
 // Question set focuses on what visitors plausibly wonder about that the
 // landing-page sections don't cleanly answer (offline support, languages,
-// app compatibility, local privacy, optional cloud billing, other
-// platforms, refunds). Avoid restating the value
+// app compatibility, privacy, and other platforms). Avoid restating the value
 // props that already live on the home page.
 
 import { Nav } from "@/components/marketing/nav";
@@ -36,10 +35,9 @@ const QUESTIONS: QA[] = [
     q: "Does Speakist work offline?",
     a: (
       <>
-        Yes. The recommended Parakeet transcription model and small cleanup
-        model download during setup. After that, local dictation works without
-        an internet connection. Downloading models, checking for app updates,
-        and the optional Speakist Cloud engine still require a connection.
+        Yes. The speech-to-text model and local language model download during
+        setup. After that, dictation works without an internet connection.
+        Downloading models and checking for app updates require a connection.
       </>
     ),
   },
@@ -47,10 +45,8 @@ const QUESTIONS: QA[] = [
     q: "Which languages does Speakist support?",
     a: (
       <>
-        Local Parakeet mode is optimized for English. The optional Speakist
-        Cloud engine supports many major languages and automatic language
-        detection. You can switch engines at any time in Transcription
-        settings.
+        This release is optimized for English. We are focusing on making the
+        on-device English experience excellent before adding more languages.
       </>
     ),
   },
@@ -70,23 +66,8 @@ const QUESTIONS: QA[] = [
     q: "Is local dictation really unlimited?",
     a: (
       <>
-        Yes. Local transcription runs on hardware you already own, so there is
-        no account, subscription, or per-word charge. If you explicitly switch
-        to Speakist Cloud, only cloud transcriptions use your word balance.
-      </>
-    ),
-  },
-  {
-    q: "What happens when my cloud balance reaches zero?",
-    a: (
-      <>
-        Local dictation keeps working. For Speakist Cloud, you have two options.
-        If you turn on auto top-up, Speakist will refill your
-        balance automatically when it falls below the threshold you set,
-        up to a monthly cap you also control — so you never get a surprise
-        bill. If auto top-up is off and your balance hits zero, dictation
-        simply pauses until you top up manually. Either way, nothing
-        cloud transcription runs without your consent.
+        Yes. Transcription runs on hardware you already own, so there is no
+        account, subscription, or per-word charge.
       </>
     ),
   },
@@ -103,13 +84,12 @@ const QUESTIONS: QA[] = [
     ),
   },
   {
-    q: "What leaves my Mac in local mode?",
+    q: "What leaves my Mac?",
     a: (
       <>
-        Your dictation audio and transcript text stay on your Mac. The app may
-        still use the network to download model files, check for updates, or
-        access account features you choose. Switching to Speakist Cloud clearly
-        changes the audio path and requires an account.
+        Your dictation audio, transcript text, vocabulary, history, and usage
+        data stay on your Mac. The app uses the network only to download model
+        files and check for updates.
       </>
     ),
   },
@@ -127,24 +107,6 @@ const QUESTIONS: QA[] = [
           hello@speakist.ai
         </a>{" "}
         — we read everything.
-      </>
-    ),
-  },
-  {
-    q: "Can I get a refund?",
-    a: (
-      <>
-        Credit purchases are non-refundable in general, but if you were
-        charged in error, hit a long outage, or otherwise feel something
-        went wrong, email{" "}
-        <a
-          href="mailto:hello@speakist.ai"
-          className="text-peach-deep hover:underline underline-offset-4"
-        >
-          hello@speakist.ai
-        </a>
-        . We review case-by-case and we&apos;d rather you be happy than
-        right about a clause.
       </>
     ),
   },

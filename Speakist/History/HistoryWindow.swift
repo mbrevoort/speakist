@@ -106,12 +106,6 @@ private struct HistoryRow: View {
                         .foregroundColor(.secondary)
                         .imageScale(.small)
                 }
-                if entry.reportedAt != nil {
-                    Image(systemName: "flag.fill")
-                        .foregroundColor(.secondary)
-                        .imageScale(.small)
-                        .help("You reported this transcription as bad")
-                }
                 Text(shortDate(entry.createdAt))
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -143,16 +137,13 @@ private struct DetailView: View {
 
     @State private var finalDraft: String = ""
     @State private var showingDeleteConfirm = false
-    @State private var showingReportSheet = false
     @State private var player: AVAudioPlayer?
     @State private var isPlayingAudio = false
     /// Drives the save-on-blur behavior for the Final transcript
     /// TextEditor below. SwiftUI fires our `.onChange(of:)` whenever
     /// the editor gains or loses key focus; we save on the
     /// false-transition. Without this the user had to navigate to a
-    /// different history row before edits committed — a confusing
-    /// failure mode that also caused the "Report bad transcription"
-    /// button to read stale text from the store.
+    /// different history row before edits committed.
     @FocusState private var finalDraftFocused: Bool
 
     init(entry: TranscriptionEntry) {
@@ -185,27 +176,6 @@ private struct DetailView: View {
                                 .labelStyle(.iconOnly)
                                 .help("Re-transcribe from saved audio")
                         }
-                        if entry.reportedAt == nil {
-                            Button {
-                                // Commit any in-flight TextEditor edit
-                                // BEFORE the sheet binds to `entry` — the
-                                // sheet captures `entry` at present-time,
-                                // so unsaved finalDraft would otherwise
-                                // be lost from the feedback payload.
-                                // (FocusState save-on-blur covers the
-                                // common case; this is the belt for the
-                                // user who clicks Report without
-                                // tabbing out of the text field first.)
-                                saveEditsIfChanged()
-                                showingReportSheet = true
-                            } label: { Label("Report bad transcription", systemImage: "flag") }
-                                .labelStyle(.iconOnly)
-                                .help("Report this transcription as bad")
-                        } else {
-                            Image(systemName: "flag.fill")
-                                .foregroundColor(.secondary)
-                                .help("You reported this transcription on \(fullDate(entry.reportedAt ?? Date()))")
-                        }
                         Button(role: .destructive) {
                             showingDeleteConfirm = true
                         } label: {
@@ -231,9 +201,7 @@ private struct DetailView: View {
                         .onAppear { finalDraft = entry.finalTranscript }
                         // Save when the editor loses focus — this makes
                         // the GroupBox label literally true. Belt + the
-                        // `.onDisappear` below + the explicit save at
-                        // the Report button so an edited-but-not-blurred
-                        // draft still rides into a feedback report.
+                        // the `.onDisappear` below.
                         .onChange(of: finalDraftFocused) { _, focused in
                             if !focused { saveEditsIfChanged() }
                         }
@@ -271,19 +239,6 @@ private struct DetailView: View {
                 history.delete(id: entry.id)
             }
         }
-        .sheet(isPresented: $showingReportSheet) {
-            ReportFeedbackSheet(entry: entry, env: env)
-                .onDisappear {
-                    // After the sheet closes, re-pull the entry so the
-                    // toolbar's Report→Reported flag transition shows
-                    // immediately (sheet bumps `reported_at` via
-                    // markReported). `try?` collapses error → nil; the
-                    // inner Optional comes from get's return type.
-                    if let fresh = (try? history.get(id: entry.id)) ?? nil {
-                        entry.reportedAt = fresh.reportedAt
-                    }
-                }
-        }
         .onSubmit { saveEditsIfChanged() }
         .background(
             // Save on focus loss via a dummy TextField workaround: save when the view leaves window focus.
@@ -293,7 +248,7 @@ private struct DetailView: View {
 
     private var metaLine: String {
         var parts: [String] = []
-        parts.append(entry.provider + (entry.model.isEmpty ? "" : " \(entry.model)"))
+        parts.append("On this Mac")
         parts.append(String(format: "%.1fs", Double(entry.durationMs) / 1000.0))
         parts.append(entry.pasteStatus)
         if let bundle = entry.targetBundleID { parts.append(bundle) }

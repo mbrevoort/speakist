@@ -19,194 +19,11 @@ struct BrandHeader: View {
     }
 }
 
-// The settings detail views (`AccountSettingsView`, `GeneralSettingsView`,
-// etc.) below are now mounted directly by `MainView`'s sidebar
+// These settings detail views are mounted directly by `MainView`'s sidebar
 // dispatcher. The earlier `SettingsWindow` wrapper + `SettingsSection`
 // enum were removed when the standalone Settings window was folded
 // into the unified main window.
 
-// MARK: - Account
-
-/// BIGINT millicents → "$N.NN" for the Settings display. Mirrors the web's
-/// formatDollars() helper. Kept inline here because it's only one consumer.
-private func formatDollars(balanceMillicents: Int) -> String {
-    let dollars = Double(balanceMillicents) / 100_000.0
-    return NumberFormatter.usd.string(from: NSNumber(value: dollars)) ?? "$\(dollars)"
-}
-
-private extension NumberFormatter {
-    static let usd: NumberFormatter = {
-        let f = NumberFormatter()
-        f.numberStyle = .currency
-        f.currencyCode = "USD"
-        f.minimumFractionDigits = 2
-        f.maximumFractionDigits = 2
-        return f
-    }()
-}
-
-struct AccountSettingsView: View {
-    @EnvironmentObject var prefs: Preferences
-    @EnvironmentObject var manager: SpeakistAccountManager
-
-    var body: some View {
-        Form {
-            Section {
-                switch manager.state {
-                case .signedOut:
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("You're not signed in yet.")
-                            .font(.headline)
-                        Text(prefs.transcriptionEngine == .parakeet
-                             ? "Parakeet transcription works without an account. Sign in only if you want to use Speakist Cloud."
-                             : "Sign in to use Speakist Cloud. You'll get $5 in free credit to try it.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        Button("Sign in with Speakist") {
-                            Task { await manager.startSignIn() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    }
-                    .padding(.vertical, 6)
-
-                case .signingIn(let code, let url, let expiresAt):
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Finish signing in")
-                            .font(.headline)
-                        Text("Your browser should have opened. If not, visit \(url.absoluteString) and enter this code:")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        Text(code)
-                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.primary)
-                            .kerning(3)
-                            .padding(.vertical, 4)
-                        HStack {
-                            Button("Copy code") {
-                                let pb = NSPasteboard.general
-                                pb.clearContents()
-                                pb.setString(code, forType: .string)
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Open link again") {
-                                NSWorkspace.shared.open(url)
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                            Button("Cancel") {
-                                manager.signOut()
-                            }
-                        }
-                        Text("Expires \(expiresAt.formatted(date: .omitted, time: .shortened))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 6)
-
-                case .signedIn(let identity):
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.system(size: 20))
-                            VStack(alignment: .leading, spacing: 2) {
-                                if let id = identity {
-                                    Text(id.displayName ?? id.email)
-                                        .font(.headline)
-                                    Text(id.email)
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Text("Signed in")
-                                        .font(.headline)
-                                    Text("Loading your account details…")
-                                        .font(.footnote)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Spacer()
-                        }
-
-                        if let id = identity, let org = id.orgName {
-                            Divider()
-                            HStack(spacing: 8) {
-                                Image(systemName: "building.2")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 18)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(org).font(.callout.weight(.medium))
-                                    HStack(spacing: 6) {
-                                        if let role = id.orgRole {
-                                            Text(role.capitalized)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        if let bal = id.balanceMillicents {
-                                            Text("·")
-                                                .foregroundColor(.secondary.opacity(0.5))
-                                            Text(formatDollars(balanceMillicents: bal))
-                                                .font(.caption.monospacedDigit())
-                                                .foregroundColor(bal < 0 ? .red : .secondary)
-                                        }
-                                    }
-                                }
-                                Spacer()
-                            }
-                            // Each user belongs to exactly one workspace at
-                            // a time. To switch, leave the current
-                            // workspace from the web dashboard's settings
-                            // page (deleting it first if you're the sole
-                            // owner), then accept a pending invitation or
-                            // create a new workspace on next sign-in.
-                        }
-
-                        HStack {
-                            Button("Open dashboard") {
-                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard"))
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Top up credit") {
-                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard/billing"))
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Usage") {
-                                NSWorkspace.shared.open(prefs.apiBaseURL.appendingPathComponent("dashboard/usage"))
-                            }
-                            .buttonStyle(.bordered)
-                            Spacer()
-                            Button("Sign out", role: .destructive) {
-                                manager.signOut()
-                            }
-                        }
-                    }
-                    .padding(.vertical, 6)
-                    .task { await manager.refreshIdentity() }
-                }
-
-                if let err = manager.lastError {
-                    Text(err)
-                        .font(.footnote)
-                        .foregroundColor(.red)
-                }
-            } header: {
-                Text("Speakist account")
-            }
-
-            Section {
-                LabeledContent("API endpoint", value: prefs.apiBaseURL.absoluteString)
-                    .font(.system(.body, design: .monospaced))
-                Text("Change with: `defaults write \(AppIdentity.bundleID) apiBaseURL \"https://speakist.ai\"` and restart the app.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("Advanced")
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-}
 
 // MARK: - General
 
@@ -353,83 +170,43 @@ struct AudioSettingsView: View {
 
 // MARK: - Transcription
 
-struct TranscriptionSettingsView: View {
-    @EnvironmentObject var prefs: Preferences
+struct LocalOnlyTranscriptionSettingsView: View {
     @EnvironmentObject var env: AppEnvironment
 
-    @State private var testOutput: String = ""
+    @State private var testOutput = ""
     @State private var testing = false
 
     var body: some View {
         Form {
-            Section("Engine") {
-                Picker("Transcribe with", selection: Binding(
-                    get: { prefs.transcriptionEngine },
-                    set: { prefs.transcriptionEngine = $0 })) {
-                    ForEach(TranscriptionEngine.allCases) { engine in
-                        Text(engine.displayName).tag(engine)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-
-                Text(prefs.transcriptionEngine.detail)
+            Section("Private by design") {
+                Label("Everything happens on this Mac", systemImage: "lock.shield.fill")
+                    .foregroundColor(.speakistSage)
+                Text("Your recordings, transcripts, vocabulary, and usage data are not sent to Speakist or an external transcription service. Internet access is only needed to download the models and app updates.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-
-                if prefs.transcriptionEngine == .parakeet {
-                    ParakeetModelStatusView(model: env.parakeetModel)
-                }
             }
 
-            if prefs.transcriptionEngine == .parakeet {
-                Section("Local cleanup") {
-                    Picker("Clean up with", selection: Binding(
-                        get: { prefs.localCleanupMode },
-                        set: { prefs.localCleanupMode = $0 })) {
-                        ForEach(LocalCleanupMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-
-                    Text(prefs.localCleanupMode.detail)
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-
-                    if prefs.localCleanupMode == .qwenExperimental {
-                        QwenCleanupStatusView(model: env.qwenCleanupModel)
-                    }
-                }
-            }
-
-            Section {
-                Picker("Language", selection: Binding(
-                    get: { prefs.language },
-                    set: { prefs.language = $0 })) {
-                    Text("English").tag("en")
-                    Text("Auto-detect").tag("")
-                }
-                .disabled(prefs.transcriptionEngine == .parakeet)
-                Text(prefs.transcriptionEngine == .parakeet
-                     ? "Parakeet TDT v2 is optimized for English. Choose Speakist Cloud for multilingual transcription."
-                     : "Choosing English uses a transcription engine optimized for speed and English accuracy. Other languages and Auto-detect use a multilingual engine.")
+            Section("On-device models") {
+                LocalModelStatusView(
+                    title: "Speech-to-text model",
+                    state: setupState(env.parakeetModel.state),
+                    retry: env.parakeetModel.prepareInBackground)
+                LocalModelStatusView(
+                    title: "Large language model",
+                    state: setupState(env.qwenCleanupModel.state),
+                    retry: env.qwenCleanupModel.prepareInBackground)
+                Text("Speakist downloads both models automatically. They are cached on this Mac and work offline after setup. Speech recognition currently supports English.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
-            } header: {
-                Text("Language")
             }
 
             Section("Diagnostics") {
                 Button(testing ? "Recording…" : "Test recording (2 seconds)") {
                     Task { await runTestRecording() }
                 }
-                .disabled(
-                    testing
-                    || env.permissions.mic != .granted
-                    || (prefs.transcriptionEngine == .parakeet
-                        && (!env.parakeetModel.state.isReady
-                            || (prefs.localCleanupMode == .qwenExperimental
-                                && !env.qwenCleanupModel.state.isReady))))
+                .disabled(testing
+                          || env.permissions.mic != .granted
+                          || !env.transcriptionService.modelsReady)
                 if !testOutput.isEmpty {
                     Text(testOutput)
                         .font(.callout)
@@ -439,18 +216,8 @@ struct TranscriptionSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .task(id: prefs.transcriptionEngine) {
-            if prefs.transcriptionEngine == .parakeet {
-                env.parakeetModel.prepareInBackground()
-            } else {
-                await env.correctionStore.syncFromServer(api: env.apiClient)
-            }
-        }
-        .task(id: prefs.localCleanupMode) {
-            if prefs.transcriptionEngine == .parakeet,
-               prefs.localCleanupMode == .qwenExperimental {
-                env.qwenCleanupModel.prepareInBackground()
-            }
+        .task {
+            env.transcriptionService.prepareModelsInBackground()
         }
     }
 
@@ -459,12 +226,6 @@ struct TranscriptionSettingsView: View {
         testOutput = "Recording…"
         defer { testing = false }
 
-        // Cloud needs an account; Parakeet is intentionally account-free.
-        guard prefs.transcriptionEngine == .parakeet || env.accountManager.isSignedIn else {
-            testOutput = "Sign in on the Account tab first, then try again."
-            return
-        }
-
         do {
             try await env.audioRecorder.start()
         } catch {
@@ -472,183 +233,88 @@ struct TranscriptionSettingsView: View {
             return
         }
         try? await Task.sleep(nanoseconds: 2_000_000_000)
-        guard let rec = env.audioRecorder.stop() else {
+        guard let recording = env.audioRecorder.stop() else {
             testOutput = "No recording captured."
             return
         }
 
-        testOutput = "Transcribing…"
+        testOutput = "Transcribing on this Mac…"
         do {
             let result = try await env.transcriptionService.transcribeForPreview(
-                audioURL: rec.url)
+                audioURL: recording.url)
             testOutput = result.text.isEmpty ? "(empty transcript)" : result.text
-        } catch SpeakistAPIClient.Error.insufficientCredit {
-            testOutput = "Out of credit. Top up in the Account tab."
         } catch {
             testOutput = "Error: \(error.localizedDescription)"
         }
-        try? FileManager.default.removeItem(at: rec.url)
+        try? FileManager.default.removeItem(at: recording.url)
+    }
+
+    private func setupState(_ state: ParakeetModelManager.State) -> LocalModelSetupState {
+        switch state {
+        case .notInstalled: return .notInstalled
+        case .preparing(let progress, let phase): return .preparing(progress, phase)
+        case .ready: return .ready
+        case .failed(let message): return .failed(message)
+        }
+    }
+
+    private func setupState(_ state: QwenCleanupModelManager.State) -> LocalModelSetupState {
+        switch state {
+        case .notInstalled: return .notInstalled
+        case .preparing(let progress, let phase): return .preparing(progress, phase)
+        case .ready: return .ready
+        case .failed(let message): return .failed(message)
+        }
     }
 }
 
-private struct ParakeetModelStatusView: View {
-    @ObservedObject var model: ParakeetModelManager
+private enum LocalModelSetupState {
+    case notInstalled
+    case preparing(Double, String)
+    case ready
+    case failed(String)
+}
+
+private struct LocalModelStatusView: View {
+    let title: String
+    let state: LocalModelSetupState
+    let retry: () -> Void
 
     var body: some View {
-        switch model.state {
+        switch state {
         case .notInstalled:
-            HStack {
-                Label("Model not installed", systemImage: "arrow.down.circle")
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button("Download model") {
-                    model.prepareInBackground()
-                }
-            }
+            Label("Preparing \(title.lowercased())…", systemImage: "arrow.down.circle")
+                .foregroundColor(.secondary)
         case .preparing(let progress, let phase):
             VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.callout.weight(.medium))
                 ProgressView(value: progress)
-                Text(phase)
+                Text(progress > 0 && progress < 1
+                     ? "\(Int(progress * 100))% · \(phase)"
+                     : phase)
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
         case .ready:
-            Label("Parakeet is ready for offline transcription", systemImage: "checkmark.circle.fill")
-                .foregroundColor(.green)
+            Label("\(title) is ready", systemImage: "checkmark.circle.fill")
+                .foregroundColor(.speakistSage)
         case .failed(let message):
             VStack(alignment: .leading, spacing: 6) {
-                Label("Model setup failed", systemImage: "exclamationmark.triangle.fill")
+                Label("\(title) setup failed", systemImage: "exclamationmark.triangle.fill")
                     .foregroundColor(.red)
                 Text(message)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Button("Try again") {
-                    model.prepareInBackground()
-                }
+                    .textSelection(.enabled)
+                Text("Check your internet connection and available disk space, then try again. Already-downloaded files will be reused.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Button("Try again", action: retry)
             }
         }
     }
 }
 
-private struct QwenCleanupStatusView: View {
-    @ObservedObject var model: QwenCleanupModelManager
-
-    var body: some View {
-        switch model.state {
-        case .notInstalled:
-            HStack {
-                Label("Cleanup model not installed", systemImage: "arrow.down.circle")
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button("Download model") {
-                    model.prepareInBackground()
-                }
-            }
-        case .preparing(let progress, let phase):
-            VStack(alignment: .leading, spacing: 6) {
-                ProgressView(value: progress)
-                Text(phase)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        case .ready:
-            Label("Qwen is ready for offline cleanup", systemImage: "checkmark.circle.fill")
-                .foregroundColor(.green)
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Cleanup model setup failed", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                Text(message)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Button("Try again") {
-                    model.prepareInBackground()
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Polish
-//
-// Post-transcription LLM polish pass. Settings here mutate the server's
-// source-of-truth on PUT — the local Preferences cache is refreshed from
-// the PUT's response shape, so the UI always reflects what the server
-// saved. Offline writes surface as an inline error; user retries.
-
-struct PolishSettingsView: View {
-    @EnvironmentObject var prefs: Preferences
-    @EnvironmentObject var env: AppEnvironment
-
-    @State private var savingToggle = false
-    @State private var lastError: String?
-    @State private var lastSavedAt: Date?
-
-    var body: some View {
-        Form {
-            // Single behavior since the mode split was retired: Deepgram's
-            // smart formatting covers punctuation/capitalization natively,
-            // so polish is only about what an LLM adds — self-corrections,
-            // stumble cleanup, and paragraph breaks. The server ignores the
-            // legacy mode field.
-            Section {
-                Toggle("Polish each transcription", isOn: Binding(
-                    get: { prefs.polishEnabled },
-                    set: { newValue in saveToggle(newValue) }))
-                    .disabled(savingToggle || prefs.transcriptionEngine == .parakeet)
-
-                Text(prefs.transcriptionEngine == .parakeet
-                     ? "Cloud polish is not applied to local Parakeet transcripts. Choose Rules only or Local AI cleanup in Transcription; both run entirely on this Mac."
-                     : "A second pass that applies your spoken self-corrections (\u{201C}I mean…\u{201D}, \u{201C}scratch that…\u{201D}), removes false starts, and breaks long dictations into paragraphs. Adds a moment of processing after each dictation.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            } header: {
-                Text("Post-transcription polish")
-            } footer: {
-                if let err = lastError {
-                    Text(err).font(.footnote).foregroundColor(.red)
-                } else if let savedAt = lastSavedAt {
-                    Text("Saved \(relativeTimeString(savedAt)).")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .padding()
-    }
-
-    // MARK: - Actions
-
-    private func saveToggle(_ newValue: Bool) {
-        savingToggle = true
-        lastError = nil
-        Task {
-            defer { savingToggle = false }
-            do {
-                let resp = try await env.apiClient.updatePolish(enabled: newValue, systemPrompt: nil)
-                prefs.applyPolishFromServer(
-                    enabled: resp.enabled,
-                    mode: resp.mode,
-                    systemPrompt: resp.systemPrompt,
-                    isCustom: resp.isCustom,
-                    defaultPrompt: resp.defaultPrompt
-                )
-                lastSavedAt = Date()
-            } catch {
-                lastError = "Couldn't save: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func relativeTimeString(_ d: Date) -> String {
-        let secs = Int(-d.timeIntervalSinceNow)
-        if secs < 5 { return "just now" }
-        if secs < 60 { return "\(secs)s ago" }
-        if secs < 3600 { return "\(secs / 60)m ago" }
-        return "\(secs / 3600)h ago"
-    }
-}
 
 // MARK: - Vocabulary
 
@@ -657,15 +323,9 @@ struct VocabularySettingsView: View {
     @State private var newFrom = ""
     @State private var newTo = ""
 
-    /// Display-side filter: hide internal-only entries that haven't
-    /// been promoted to STT vocabulary. Speakist auto-ingests every
-    /// inline transcript edit into a local-only staging area so the
-    /// reactive classifier can decide whether the correction looks
-    /// like a real vocab item (proper noun, technical term, slang,
-    /// abbreviation) or a one-off contextual edit. Surfacing the
-    /// staging entries in the UI would just add noise — the user
-    /// only cares about entries that actually affect transcription.
-    /// Anything they explicitly Add below also goes straight to .stt.
+    /// Hide staged corrections that have not been explicitly approved. A
+    /// deliberately added rule is active immediately, while inline edits stay
+    /// staged unless they are a safe spelling variant of an approved name.
     private var visibleEntries: [CorrectionRow] {
         store.all.filter { $0.appliesTo == .stt }
     }
@@ -677,23 +337,12 @@ struct VocabularySettingsView: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
-            Text("Words and phrases Speakist uses to bias your transcriptions and apply post-transcription replacements. Add proper nouns, slang you prefer in writing, or any term Speakist consistently mishears. Inline edits you make in History also feed this list automatically when the same correction recurs.")
+            Text("Words and phrases Speakist replaces after on-device transcription. Add proper nouns, preferred written forms, or terms Speakist consistently mishears. Similar spellings of an approved name can be learned from corrections you make in History.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
 
-            // Count + Proper-noun columns are intentionally not shown.
-            // Both still drive behavior internally — count gates
-            // classifier promotion at ≥ 2 and supplies sort order;
-            // isProperNoun decides whether the entry rides as a
-            // Deepgram acoustic keyterm bias on top of the always-
-            // applied find/replace — but neither is something the
-            // user needs to manage. Surfacing them was internal-
-            // mechanics noise: it suggested actions the user shouldn't
-            // have to take. The values are set automatically on
-            // insert (DiffEngine.isProperNounLike for the flag;
-            // ON CONFLICT increment for the count) and the visible
-            // table shows just what the user manages: the pair, and
-            // whether they want it.
+            // Count and proper-noun metadata drive sorting and conservative
+            // alias learning but are intentionally hidden from the user.
             Table(visibleEntries) {
                 TableColumn("From") { row in
                     TextField("", text: Binding(
@@ -725,12 +374,8 @@ struct VocabularySettingsView: View {
                     let f = newFrom.trimmingCharacters(in: .whitespacesAndNewlines)
                     let t = newTo.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !f.isEmpty, !t.isEmpty else { return }
-                    // Manual additions are by definition deliberate
-                    // user actions, so they default to `.stt` (sent to
-                    // the upstream STT provider). Auto-ingested entries
-                    // from inline transcript edits default to `.local`
-                    // — see CorrectionAppliesTo and migration v2 for
-                    // the full mental model.
+                    // Manual additions are deliberate and become active local
+                    // replacement rules immediately.
                     store.upsert(CorrectionRow(
                         dbID: nil,
                         fromText: f,
@@ -841,9 +486,7 @@ struct AboutSettingsView: View {
 
                 Divider()
 
-                Text(env.preferences.transcriptionEngine == .parakeet
-                     ? "Parakeet transcription runs on this Mac. Recorded audio, transcripts, and history stay in Application Support and are not sent to Speakist or an external transcription provider. The model is downloaded once from Hugging Face and then works offline."
-                     : "Speakist keeps your history on your Mac. Audio is sent to our backend, transcribed, and the result is returned. Neither the audio nor the transcript is saved to disk in the cloud. Your sign-in token lives in the Keychain.")
+                Text("Speech recognition and guarded language-model cleanup run on this Mac. Recordings, transcripts, vocabulary, history, and usage data are not sent to Speakist or an external transcription provider. The models download once and then work offline.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

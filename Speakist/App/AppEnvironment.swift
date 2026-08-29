@@ -5,7 +5,6 @@ import Combine
 @MainActor
 final class AppEnvironment: ObservableObject {
     let preferences: Preferences
-    let keychain: KeychainStore
     let permissions: PermissionCoordinator
     let deviceMonitor: DeviceMonitor
     let audioArchive: AudioArchive
@@ -22,8 +21,6 @@ final class AppEnvironment: ObservableObject {
     let hudController: HUDController
     let notifier: Notifier
     let updater: UpdaterController
-    let accountManager: SpeakistAccountManager
-    let apiClient: SpeakistAPIClient
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -31,8 +28,6 @@ final class AppEnvironment: ObservableObject {
         Logger.shared.bootstrap()
         let prefs = Preferences()
         self.preferences = prefs
-        let keychain = KeychainStore()
-        self.keychain = keychain
         self.permissions = PermissionCoordinator()
         self.deviceMonitor = DeviceMonitor()
         self.audioArchive = AudioArchive(preferences: prefs)
@@ -51,32 +46,8 @@ final class AppEnvironment: ObservableObject {
         self.notifier = Notifier()
         self.updater = UpdaterController()
 
-        // Speakist account manager + API client. AccountManager owns the
-        // bearer token; APIClient reads it back via a @MainActor closure so
-        // there's no construction-order deadlock (account manager is built
-        // without the client and has `bind(client:)` called after).
-        let accountManager = SpeakistAccountManager(keychain: keychain)
-        self.accountManager = accountManager
-        let apiClient = SpeakistAPIClient(
-            baseURL: prefs.apiBaseURL,
-            tokenProvider: { [weak accountManager] in accountManager?.bearerToken }
-        )
-        self.apiClient = apiClient
-        accountManager.bind(client: apiClient)
-        // Lets refreshIdentity write the polish block back into Preferences.
-        accountManager.bind(preferences: prefs)
-        // Lets the correction store mirror local edits + ingests up to
-        // the server so the web vocabulary view stays in sync.
-        correctionStore.bind(
-            api: apiClient,
-            cloudSyncEnabled: { [weak prefs] in
-                prefs?.transcriptionEngine == .cloud
-            })
-
         self.transcriptionService = TranscriptionService(
             preferences: prefs,
-            accountManager: accountManager,
-            apiClient: apiClient,
             parakeetModel: parakeetModel,
             qwenCleanupModel: qwenCleanupModel,
             correctionStore: correctionStore,
@@ -118,12 +89,9 @@ final class AppEnvironment: ObservableObject {
         // deterministic and fast: their fake Parakeet runtime should never be
         // accompanied by a real Core ML load from this launch-time prewarm.
         if preferences.onboardingCompleted,
-           preferences.transcriptionEngine == .parakeet,
            ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             parakeetModel.prepareInBackground()
-            if preferences.localCleanupMode == .qwenExperimental {
-                qwenCleanupModel.prepareInBackground()
-            }
+            qwenCleanupModel.prepareInBackground()
         }
         // If mic access is granted later in this session (user came
         // back from System Settings, or completed onboarding), re-run
@@ -134,13 +102,5 @@ final class AppEnvironment: ObservableObject {
                 if state == .granted { audioRecorder.prewarm() }
             }
             .store(in: &cancellables)
-
-        // Pull any vocabulary edits made on the web (or another device)
-        // since the app last ran. No-op if the user is signed out.
-        // didBecomeActive in AppDelegate will keep us in sync after
-        // launch.
-        Task { @MainActor [correctionStore, apiClient] in
-            await correctionStore.syncFromServer(api: apiClient)
-        }
     }
 }

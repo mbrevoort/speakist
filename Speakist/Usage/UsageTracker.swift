@@ -83,13 +83,4 @@ final class UsageTracker: ObservableObject {
             return UsageRollup(transcriptionCount: 0, totalAudioSeconds: 0)
         }
     }
-
-    func cost(for rollup: UsageRollup, model: String, preferences: Preferences) -> Double {
-        let minutes = rollup.totalAudioSeconds / 60.0
-        switch model {
-        case DeepgramModel.nova3.rawValue: return minutes * preferences.rateDeepgramNova3
-        case DeepgramModel.nova2.rawValue: return minutes * preferences.rateDeepgramNova2
-        default: return minutes * preferences.rateDeepgramNova3
-        }
-    }
 }

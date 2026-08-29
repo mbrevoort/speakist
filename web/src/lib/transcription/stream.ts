@@ -28,7 +28,6 @@ import {
   logTranscriptionEvent,
   type TranscriptionEventStatus,
 } from "@/lib/transcription/analytics";
-import { captureServerEvent } from "@/lib/posthog/server";
 
 const DEEPGRAM_STREAM_URL = "https://api.deepgram.com/v1/listen";
 
@@ -215,8 +214,8 @@ async function handleTranscribeStreamInner(
   const finalSegments: string[] = [];
   let durationSeconds = 0;
 
-  // Mirror the batch route's per-transcription analytics (Workers Analytics
-  // Engine + PostHog) so streaming shows up alongside batch. Emitted once,
+  // Mirror the batch route's legacy operational event in Workers Analytics
+  // Engine so streaming shows up alongside batch. Emitted once,
   // at the terminal outcome in finalizeAndClose. `streaming: true` +
   // `latency_ms` here spans the whole recording (the socket opens at
   // record-start), unlike the batch route's release-to-done latency — so
@@ -238,22 +237,6 @@ async function handleTranscribeStreamInner(
       retailMc: opts.retailMc ?? 0,
       latencyMs,
       upstreamStatus: opts.upstreamStatus ?? 0,
-    });
-    captureServerEvent({
-      distinctId: user.id,
-      event: status === "ok" ? "transcription_completed" : "transcription_failed",
-      groups: { organization: org.id },
-      properties: {
-        provider: "deepgram",
-        model,
-        status,
-        audio_ms: audioMs,
-        latency_ms: latencyMs,
-        upstream_status: opts.upstreamStatus ?? 0,
-        upstream_millicents: opts.upstreamMc ?? 0,
-        retail_millicents: opts.retailMc ?? 0,
-        streaming: true,
-      },
     });
   };
   let finalized = false;

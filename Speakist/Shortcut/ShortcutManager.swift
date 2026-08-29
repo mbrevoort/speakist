@@ -155,43 +155,19 @@ final class ShortcutManager {
     private func pushDown() {
         guard !env.preferences.shortcutPaused else { return }
         guard handlePermissionPrecondition() else { return }
+        guard env.transcriptionService.modelsReady else {
+            env.transcriptionService.prepareModelsInBackground()
+            env.notifier.modelsPreparing()
+            return
+        }
         // Debounce: ignore key-down while a prior recording is still transcribing.
         if env.hudController.state == .transcribing { return }
         if env.audioRecorder.isRecording { return }
         // Drop repeat key-downs that arrive while a previous press is
         // still warming up the engine on a background task.
         if pendingStart != nil { return }
-        // Pre-warm the network path to the Worker so TLS + the V8
-        // isolate are hot by the time the user releases the key. Fire-
-        // and-forget HEAD against the lightweight /api/me endpoint —
-        // we don't care about the response, only the connection state.
-        // Measurement showed first-of-session auth at 629ms vs warm at
-        // 67ms (live press 1 vs press 2); a HEAD started at key-down
-        // and a recording held for ≥200ms hides that 562ms cold spike.
-        prewarmTranscriptionConnection()
+        env.transcriptionService.prepareModelsInBackground()
         beginRecording()
-    }
-
-    private func prewarmTranscriptionConnection() {
-        if env.preferences.transcriptionEngine == .parakeet {
-            env.parakeetModel.prepareInBackground()
-            return
-        }
-        let url = URL(string: "/api/me", relativeTo: env.preferences.apiBaseURL)
-        guard let url else { return }
-        let token = env.accountManager.bearerToken
-        Task.detached(priority: .userInitiated) {
-            var req = URLRequest(url: url)
-            req.httpMethod = "HEAD"
-            req.timeoutInterval = 5
-            if let token, !token.isEmpty {
-                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
-            // We don't care about the result — failures here just mean
-            // the actual transcribe call will pay the cold-connection
-            // cost itself, which is the status quo.
-            _ = try? await URLSession.shared.data(for: req)
-        }
     }
 
     /// Check mic + accessibility. Returns `true` only if both are granted
@@ -272,6 +248,11 @@ final class ShortcutManager {
             releaseRequestedDuringStart = true
         } else {
             guard handlePermissionPrecondition() else { return }
+            guard env.transcriptionService.modelsReady else {
+                env.transcriptionService.prepareModelsInBackground()
+                env.notifier.modelsPreparing()
+                return
+            }
             isToggleRecording = true
             beginRecording()
         }
@@ -299,19 +280,10 @@ final class ShortcutManager {
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
             guard let self else { return }
-            // Open the real-time streaming session (no-op when the feature
-            // is off) and route the recorder's live PCM into it. Set the
-            // sink BEFORE start() installs the tap, per AudioRecorder's
-            // threading contract.
-            if let stream = self.env.transcriptionService.beginStreamingSession() {
-                self.env.audioRecorder.onPCMChunk = { [stream] data in stream.sendPCM(data) }
-            }
             do {
                 try await self.env.audioRecorder.start()
             } catch {
                 Logger.shared.error("recorder.start failed: \(error.localizedDescription)")
-                self.env.audioRecorder.onPCMChunk = nil
-                self.env.transcriptionService.endStreamingSession()
                 // Engine never came up → finishRecording() won't run, so
                 // unmute here (no-op if we didn't mute). The engine may
                 // have half-engaged a Bluetooth flip before failing, so
@@ -347,11 +319,7 @@ final class ShortcutManager {
 
     private func finishRecording() {
         cancelMaxDurationTimer()
-        // stop() removes the tap; clear the PCM sink afterward so no stray
-        // callback outlives the recording (matches AudioRecorder's ordering
-        // contract: set before start, clear after stop).
         let recordingResult = env.audioRecorder.stop()
-        env.audioRecorder.onPCMChunk = nil
         // Recording is over — unmute other apps' audio now (at key-release),
         // regardless of what happens with the transcription afterward.
         // No-op if we didn't mute. This is the choke point for
@@ -361,7 +329,6 @@ final class ShortcutManager {
         // and QuickDictate unmute on their own paths.
         env.audioMuter.unmute(afterBluetoothInput: env.audioRecorder.lastInputWasBluetooth)
         guard let result = recordingResult else {
-            env.transcriptionService.endStreamingSession()
             env.hudController.hide()
             return
         }
@@ -369,7 +336,6 @@ final class ShortcutManager {
         let minMs = env.preferences.minDurationMs
         let durationMs = Int(result.durationSeconds * 1000)
         if durationMs < minMs {
-            env.transcriptionService.endStreamingSession()
             try? FileManager.default.removeItem(at: result.url)
             env.hudController.hide()
             Logger.shared.debug("Ignored sub-minimum recording (\(durationMs)ms < \(minMs)ms)")

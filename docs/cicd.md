@@ -1,6 +1,9 @@
 # CI and CD
 
 Speakist ships a Cloudflare web application and a notarized Mac application.
+There is no iOS build or deployment workflow. The hosted web deployment remains
+for the public website, downloads and update feeds, plus temporary compatibility
+routes used by older Mac releases.
 
 ## Workflows
 
@@ -13,6 +16,10 @@ Speakist ships a Cloudflare web application and a notarized Mac application.
 - mac: regenerates the Xcode project, builds and signs the development channel, notarizes the DMG, signs the Sparkle update, uploads it, and publishes the development feed entry.
 
 The web and Mac jobs are independent after change detection.
+
+The removed cloud-polish regression workflow is intentionally not replaced:
+current releases transcribe and clean up on-device, so CI does not call paid
+speech or language-model APIs and does not require their credentials.
 
 ### Production
 
@@ -77,8 +84,10 @@ A green compile is insufficient. Confirm:
 5. The Sparkle signature and appcast entry match the exact build.
 6. The deployed website download endpoint resolves to that artifact.
 7. A clean-install onboarding smoke test downloads models and completes local dictation.
-8. An existing-install upgrade preserves its prior engine selection.
-9. Switching to Cloud still requires and uses a valid account.
+8. An existing install with legacy Cloud preferences is routed through the
+   local-only onboarding and completes offline dictation.
+9. The deployed compatibility backend remains healthy for older binaries, while
+   the current Mac build exposes no sign-in or Cloud-transcription controls.
 
 ## Common failures
 

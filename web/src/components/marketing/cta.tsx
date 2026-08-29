@@ -11,7 +11,7 @@ export function FinalCTA() {
           Stop typing at the speed of your fingers.
         </h2>
         <p className="mt-5 text-lg text-muted-foreground max-w-2xl mx-auto">
-          Install on your Mac and start dictating. Local transcription and
+          Install on your Mac and start dictating. On-device transcription and
           cleanup are free, unlimited, and account-free.
         </p>
         {/* Primary action gets its own row; install options sit underneath
@@ -24,11 +24,6 @@ export function FinalCTA() {
             </a>
           </Button>
         </div>
-        <p className="mt-6 text-sm text-muted-foreground">
-          <a href="#pricing" className="hover:text-foreground underline-offset-4 hover:underline">
-            See pricing details
-          </a>
-        </p>
       </div>
     </section>
   );

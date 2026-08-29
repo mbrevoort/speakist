@@ -24,7 +24,7 @@ export function Hero() {
           <div className="max-w-2xl">
             <p className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/60 px-3 py-1 text-xs font-medium text-muted-foreground">
               <span className="h-1.5 w-1.5 rounded-full bg-peach animate-pulse" />
-              Local-first dictation for Mac
+              Private dictation for Mac
             </p>
 
             <h1 className="mt-6 text-5xl sm:text-6xl lg:text-7xl font-semibold tracking-tight leading-[1.05] text-foreground">
@@ -34,8 +34,8 @@ export function Hero() {
             </h1>
 
             <p className="mt-6 text-lg sm:text-xl text-muted-foreground leading-relaxed max-w-xl">
-              Hold a key, speak, and release. Parakeet transcribes on your Mac,
-              a small local model cleans up the presentation, and the result
+              Hold a key, speak, and release. A speech-to-text model and a
+              guarded local language model run on your Mac, then the result
               lands at your cursor in any app. No account required.
             </p>
 
@@ -54,7 +54,7 @@ export function Hero() {
             </div>
 
             <p className="mt-6 text-sm text-muted-foreground">
-              Free and unlimited in local mode. Models download once, then work
+              Free and unlimited. Models download once, then work
               offline. Requires an Apple silicon Mac with macOS 14+.
             </p>
           </div>

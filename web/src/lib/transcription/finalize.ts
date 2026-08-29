@@ -22,9 +22,8 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { debitForAudioTranscription } from "@/lib/credits";
-import { runPolish, POLISH_MODEL, type PolishMode } from "@/lib/transcription/polish";
+import { runPolish, type PolishMode } from "@/lib/transcription/polish";
 import { getProviderPricing, computeCost } from "@/lib/transcription/pricing";
-import { captureAIGeneration } from "@/lib/posthog/server";
 import type { ProviderKeyEnv } from "@/lib/transcription/secrets";
 import type { ProviderId } from "@/lib/transcription/types";
 
@@ -204,25 +203,6 @@ export async function finalizeTranscription(args: FinalizeArgs): Promise<Finaliz
           } else {
             polishErrorReason = polish.errorReason;
           }
-          captureAIGeneration({
-            distinctId: userId,
-            traceId: transcriptionClientId,
-            provider: "groq",
-            model: POLISH_MODEL,
-            inputTokens: polish.promptTokens,
-            outputTokens: polish.completionTokens,
-            latencySeconds: polish.latencyMs / 1000,
-            httpStatus: polish.applied ? 200 : 0,
-            isError: !polish.applied,
-            groups: { organization: orgId },
-            extra: {
-              polish_mode: mode,
-              polish_applied: polish.applied,
-              polish_error_reason: polish.errorReason,
-              input_chars: rawText.length,
-              output_chars: polish.text.length,
-            },
-          });
         }
       }
     } else if (polishSkip && polishPrefs?.polishEnabled) {

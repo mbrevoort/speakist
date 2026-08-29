@@ -49,7 +49,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.installMainMenu()
         }
 
-        Analytics.shared.bootstrap()
         env.start()
 
         menuBar = MenuBarController(env: env) { [weak self] action in
@@ -62,26 +61,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
-        // Refresh /api/me + vocabulary whenever the app comes back to
-        // the foreground. Picks up account-level state changes the user
-        // made in the browser — invitation accepted, workspace switched
-        // via the dashboard topbar, balance topped up, dictionary
-        // entries added/edited/deleted, etc. Both calls are idempotent
-        // and cheap, so re-firing them on every foreground is harmless.
+        // Re-install the AppKit menu whenever the app becomes active in case
+        // SwiftUI rebuilt it while the app was in the background.
         let center = NotificationCenter.default
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                // Re-install in case SwiftUI rebuilt the menu since
-                // last activation. No-op cost if the menu pointer is
-                // already ours.
-                self.installMainMenu()
-                await self.env.accountManager.refreshIdentity()
-                await self.env.correctionStore.syncFromServer(api: self.env.apiClient)
-            }
+            self?.installMainMenu()
         }
 
-        if env.preferences.onboardingCompleted {
+        if env.preferences.onboardingCompleted,
+           !env.preferences.needsLocalOnlyOnboarding {
             // First-launch UX: show the unified main window so users
             // discover the new in-app surface immediately. Skipped
             // during onboarding because the onboarding window owns
@@ -109,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .openMain:
             showMainWindow()
         case .openSettings:
-            showMainWindow(section: .account)
+            showMainWindow(section: .general)
         case .openHistory:
             showMainWindow(section: .history)
         case .openQuickDictate:
@@ -137,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showOnboarding() {
         if onboardingWindow == nil {
             onboardingWindow = OnboardingWindowController(env: env) { [weak self] in
-                self?.env.preferences.onboardingCompleted = true
+                self?.env.preferences.markLocalOnlyOnboardingComplete()
                 self?.onboardingWindow?.close()
                 self?.onboardingWindow = nil
                 // Drop the user into the main window the moment they

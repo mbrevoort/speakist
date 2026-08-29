@@ -1,6 +1,6 @@
 # Speakist repository guidance
 
-Speakist is a macOS push-to-talk dictation app with a Next.js and Cloudflare backend for the website, accounts, and optional Cloud transcription.
+Speakist is a local-only macOS push-to-talk dictation app with a Next.js and Cloudflare deployment for the public website, downloads, update feeds, and temporary compatibility routes for older binaries.
 
 ## Source of truth
 
@@ -10,10 +10,10 @@ Use pnpm 10.28.0 for web work. Keep local D1 initialized before running backend 
 
 ## Product behavior
 
-- New installs default to on-device Parakeet transcription and guarded local AI cleanup.
-- Existing installs that predate the engine setting remain on Speakist Cloud until the user switches.
-- Local mode does not require sign-in and does not send dictation audio or transcript text to the backend.
-- Cloud mode remains an explicit option for multilingual transcription, synced vocabulary, billing, and cloud polish.
+- New installs and existing upgrades use on-device speech recognition and guarded local language-model cleanup.
+- The current Mac app has no sign-in, Cloud-transcription, feedback, analytics, evaluation, or vocabulary-synchronization path.
+- Dictation audio, transcript text, vocabulary, history, and usage data stay on the Mac.
+- Keep the legacy backend deployable until older binaries have had time to upgrade, but do not link its account or Cloud features from the current product flow.
 - Vocabulary replacements are exact whole-token rules. Do not introduce fuzzy acoustic rewriting without a measured false-positive gate.
 - Automatic cleanup must never be learned as a user correction. Learn only explicit edits made after processed text is shown.
 - The cleanup model must preserve word content or fall back to deterministic cleanup.
