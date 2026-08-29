@@ -125,7 +125,7 @@ jobs:
           echo "==> rendered $(wc -c < notes/release-notes.md) bytes md → $(wc -c < notes/release-notes.html) bytes html"
 
       - name: Upload release notes artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: notes/
@@ -153,17 +153,17 @@ jobs:
       # Check out the tagged commit, not main, so the deployed code
       # matches what the user clicked Publish on. main may have moved
       # forward by the time the workflow fires.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.tag }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.28.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
@@ -228,12 +228,12 @@ jobs:
       # AppleScript work on the host.
       SPEAKIST_DMG_NO_FINDER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.tag }}
 
       - name: Download release notes artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-notes
           path: notes
@@ -241,13 +241,13 @@ jobs:
       - name: Point release-ci.sh at the rendered notes
         run: echo "RELEASE_NOTES_FILE=$PWD/notes/release-notes.html" >> "$GITHUB_ENV"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.28.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
@@ -300,7 +300,7 @@ jobs:
           api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
 
       - name: Cache Swift packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/Library/Developer/Xcode/DerivedData/Speakist-*/SourcePackages
