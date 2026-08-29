@@ -1,0 +1,26 @@
+.github/workflows/pr.yml
+  s_248c5097e381ff::t_1b1a117872f739 52
+  s_248c5097e381ff::t_879e1b7f798c2d 44,46,50,85,94
+.github/workflows/deploy-prod.yml
+  s_248c5097e381ff::t_1b1a117872f739 166,250
+  s_248c5097e381ff::t_879e1b7f798c2d 128,156,160,164,231,236,244,248,303
+.github/workflows/deploy-dev.yml
+  s_248c5097e381ff::t_879e1b7f798c2d 64-65,96,98,102,164,166,170,230
+  s_248c5097e381ff::t_1b1a117872f739 104,172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3977698ae8807489447cb7643d67c62d75db1f5d",
+  "prompts": {},
+  "sessions": {
+    "s_248c5097e381ff": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a008df-d9d1-7b11-ba98-db86810cd54e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Mike Brevoort <m@mytra.ai>"
+    }
+  }
+}
