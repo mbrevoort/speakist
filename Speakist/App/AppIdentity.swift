@@ -15,7 +15,9 @@ import Foundation
 /// Because bundle-id and display-name are different across channels, macOS
 /// treats each channel as a distinct app: TCC grants, UserDefaults,
 /// Keychain items, and filesystem data folders are all partitioned. You
-/// can install all four side-by-side without cross-contamination.
+/// can install all four side-by-side without cross-contamination. A shared
+/// process lock prevents multiple channels from owning the microphone and
+/// global shortcut at the same time.
 enum AppIdentity {
     /// Reverse-DNS identifier, e.g. `com.brevoort-studio.speakist.dev`. Used
     /// as the Keychain service name and `os.Logger` subsystem. Falls back

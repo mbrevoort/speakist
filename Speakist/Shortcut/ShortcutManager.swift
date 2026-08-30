@@ -275,11 +275,13 @@ final class ShortcutManager {
         // excludes our own process, so the "Tink" start cue below plays at
         // full volume regardless. Unmuted in finishRecording() and in the
         // engine-start-failure branch below.
-        env.audioMuter.mute()
-
         releaseRequestedDuringStart = false
         pendingStart = Task { @MainActor [weak self] in
             guard let self else { return }
+            // Process-tap setup runs on its own Core Audio queue. Await its
+            // normal fast completion without blocking AppKit; a watchdog
+            // degrades to unmuted recording if the HAL is unhealthy.
+            await self.env.audioMuter.mute()
             do {
                 try await self.env.audioRecorder.start()
             } catch {

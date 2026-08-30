@@ -2,6 +2,14 @@ import Foundation
 import AudioToolbox
 import CoreAudio
 
+private enum SystemAudioMuterError: LocalizedError {
+    case unsupportedOS
+
+    var errorDescription: String? {
+        "System audio muting requires macOS 14.2 or newer."
+    }
+}
+
 /// Mutes every other process's audio while a dictation is recording, then
 /// unmutes when it ends — so background audio (music, a video, anything)
 /// doesn't compete with the user's voice or bleed into the mic.
@@ -46,6 +54,18 @@ final class SystemAudioMuter {
     /// availability-free protocol because `TapEngine` itself is
     /// macOS 14.2+ and stored properties can't carry `#available`.
     private var engine: TapEngineInvalidating?
+    /// Core Audio process-tap creation and destruction can block inside the
+    /// HAL when coreaudiod is unhealthy. They must never run on the main
+    /// actor. This serial queue also prevents an old tap teardown from racing
+    /// a new tap creation during rapid back-to-back dictations.
+    private let coreAudioQueue: DispatchQueue
+    private let engineFactory: @Sendable () throws -> TapEngineInvalidating
+    private let operationTimeout: Duration
+    private var creationID: UUID?
+    private var creationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseID: UUID?
+    private var wantsMuted = false
+    private var disabledForSession = false
     /// In-flight deferred unmute (see `unmute()`): waits for a Bluetooth
     /// output to renegotiate HFP → A2DP before releasing the tap. Non-nil
     /// only while that wait is running.
@@ -54,8 +74,18 @@ final class SystemAudioMuter {
     private var loggedUnsupported = false
     private var loggedFailure = false
 
-    init(preferences: Preferences) {
+    init(
+        preferences: Preferences,
+        engineFactory: (@Sendable () throws -> TapEngineInvalidating)? = nil,
+        coreAudioQueue: DispatchQueue = DispatchQueue(
+            label: "com.speakist.audio-mute-lifecycle",
+            qos: .userInitiated),
+        operationTimeout: Duration = .seconds(2)
+    ) {
         self.preferences = preferences
+        self.engineFactory = engineFactory ?? { try Self.makeTapEngine() }
+        self.coreAudioQueue = coreAudioQueue
+        self.operationTimeout = operationTimeout
     }
 
     // MARK: - Public API
@@ -63,8 +93,10 @@ final class SystemAudioMuter {
     /// Called when a recording starts: mute all other processes' audio.
     /// No-op when the feature is off, when already muted, or when the OS
     /// is too old / permission was declined.
-    func mute() {
+    func mute() async {
         guard preferences.muteAudioDuringDictation else { return }
+        guard !disabledForSession else { return }
+        wantsMuted = true
         // A deferred unmute from the previous dictation may still be
         // waiting out the Bluetooth HFP → A2DP renegotiation. Cancel it and
         // keep that tap alive — rapid back-to-back dictations reuse the
@@ -74,6 +106,9 @@ final class SystemAudioMuter {
             pendingUnmute = nil
             return
         }
+        // If a previous tap is still being destroyed, don't overlap another
+        // Core Audio graph mutation. Muting is optional; recording is not.
+        guard releaseID == nil else { return }
         guard #available(macOS 14.2, *) else {
             if !loggedUnsupported {
                 loggedUnsupported = true
@@ -81,13 +116,11 @@ final class SystemAudioMuter {
             }
             return
         }
-        do {
-            engine = try TapEngine()
-            Logger.shared.info("Audio: muted other apps' audio for dictation")
-        } catch {
-            if !loggedFailure {
-                loggedFailure = true
-                Logger.shared.warn("Audio mute failed (System Audio Recording permission declined, or tap error): \(error.localizedDescription)")
+
+        await withCheckedContinuation { continuation in
+            creationWaiters.append(continuation)
+            if creationID == nil {
+                beginCreatingTap()
             }
         }
     }
@@ -106,60 +139,32 @@ final class SystemAudioMuter {
     /// renegotiation arrives and cuts it out mid-note (users reported
     /// exactly this on/off/on pattern). So when the recording used a
     /// Bluetooth input, `unmute(afterBluetoothInput: true)` holds the mute
-    /// through the whole disturbance window: wait until we've *seen* the
-    /// churn (call-mode sample rate or a device swap) — or waited long
-    /// enough to be confident none is coming — and then require the route
-    /// to hold steady before releasing. Hard 6s cap so a stuck
-    /// renegotiation can never leave audio muted.
+    /// through a fixed route-settle window. We intentionally do not poll the
+    /// HAL during that window: route queries are synchronous and can beachball
+    /// the app when coreaudiod is unhealthy.
     ///
     /// - Parameter afterBluetoothInput: true when the just-finished
     ///   recording captured from a Bluetooth mic (the only case that
     ///   triggers the HFP flip). Callers pass
     ///   `AudioRecorder.lastInputWasBluetooth`.
     func unmute(afterBluetoothInput: Bool) {
+        wantsMuted = false
         guard engine != nil, pendingUnmute == nil else { return }
-        guard afterBluetoothInput,
-              let output = Self.defaultOutputDeviceID(),
-              Self.isBluetoothTransport(output) else {
+        guard afterBluetoothInput else {
             releaseTap()
             return
         }
         Logger.shared.info("Audio: holding mute through Bluetooth HFP → A2DP renegotiation")
         pendingUnmute = Task { @MainActor [weak self] in
-            let start = ContinuousClock.now
-            let totalDeadline = start.advanced(by: Self.unmuteTotalCap)
-            // Phase 1 window: how long we wait to *observe* churn before
-            // concluding none is coming (the flip-back usually starts
-            // within ~2s of the engine teardown).
-            let churnDeadline = start.advanced(by: Self.unmuteChurnWindow)
-            var sawChurn = false
-            var lastDevice: AudioObjectID? = output
-            var stablePolls = 0
-            while ContinuousClock.now < totalDeadline {
-                let device = Self.defaultOutputDeviceID()
-                let deviceChanged = device != lastDevice
-                lastDevice = device
-                if deviceChanged || device.map(Self.inCallMode) == true {
-                    // Renegotiation in progress (or just re-published the
-                    // device). Note it and reset the stability counter —
-                    // release only after the route settles.
-                    sawChurn = true
-                    stablePolls = 0
-                } else if sawChurn || ContinuousClock.now >= churnDeadline {
-                    stablePolls += 1
-                    if stablePolls >= Self.unmuteStablePollsRequired { break }
-                }
-                do {
-                    try await Task.sleep(for: Self.unmutePollInterval)
-                } catch {
-                    return // cancelled — a new dictation took the tap over
-                }
-            }
+            // Never poll Core Audio synchronously from the main actor while a
+            // Bluetooth route is renegotiating. A fixed hold spans the normal
+            // HFP → A2DP churn without giving a wedged HAL another UI-blocking
+            // call site. A new dictation cancels this task and reuses the tap.
+            do { try await Task.sleep(for: Self.bluetoothUnmuteDelay) }
+            catch { return }
             guard let self else { return }
             self.pendingUnmute = nil
-            let heldMs = Int(start.duration(to: ContinuousClock.now) / .milliseconds(1))
-            Logger.shared.info(
-                "Audio: releasing mute after \(heldMs)ms (churn \(sawChurn ? "observed" : "not observed"))")
+            Logger.shared.info("Audio: releasing mute after Bluetooth route-settle delay")
             self.releaseTap()
         }
     }
@@ -170,81 +175,106 @@ final class SystemAudioMuter {
     // resume, widen the churn window; if the resume feels sluggish on
     // setups that never renegotiate, shrink it.
 
-    /// How often the deferred unmute re-probes the output route.
-    private static let unmutePollInterval: Duration = .milliseconds(150)
-    /// Consecutive healthy polls required before release (~600ms steady).
-    private static let unmuteStablePollsRequired = 4
-    /// How long to wait for churn to *start* before assuming none is
-    /// coming. The flip-back is triggered by the recorder's async BT
-    /// teardown and typically begins within ~2s of key-release.
-    private static let unmuteChurnWindow: Duration = .milliseconds(2500)
-    /// Absolute ceiling on the hold — audio can never stay muted longer.
-    private static let unmuteTotalCap: Duration = .seconds(6)
+    private static let bluetoothUnmuteDelay: Duration = .milliseconds(3200)
 
     /// Destroy the tap (which un-mutes) immediately.
     private func releaseTap() {
         guard let engine else { return }
         self.engine = nil
-        engine.invalidate()
+        let operationID = UUID()
+        releaseID = operationID
+        coreAudioQueue.async { [weak self] in
+            engine.invalidate()
+            Task { @MainActor in
+                self?.finishReleasingTap(operationID)
+            }
+        }
+        scheduleReleaseWatchdog(operationID)
+    }
+
+    private func beginCreatingTap() {
+        let operationID = UUID()
+        creationID = operationID
+        let factory = engineFactory
+        coreAudioQueue.async { [weak self] in
+            let result = Result { try factory() }
+            Task { @MainActor in
+                self?.finishCreatingTap(operationID, result: result)
+            }
+        }
+        scheduleCreationWatchdog(operationID)
+    }
+
+    private func finishCreatingTap(
+        _ operationID: UUID,
+        result: Result<TapEngineInvalidating, Error>
+    ) {
+        guard creationID == operationID else {
+            if case let .success(abandonedEngine) = result {
+                coreAudioQueue.async { abandonedEngine.invalidate() }
+            }
+            return
+        }
+        creationID = nil
+
+        switch result {
+        case let .success(newEngine):
+            if wantsMuted && !disabledForSession {
+                engine = newEngine
+                Logger.shared.info("Audio: muted other apps' audio for dictation")
+            } else {
+                coreAudioQueue.async { newEngine.invalidate() }
+            }
+        case let .failure(error):
+            if !loggedFailure {
+                loggedFailure = true
+                Logger.shared.warn("Audio mute failed (System Audio Recording permission declined, or tap error): \(error.localizedDescription)")
+            }
+        }
+        resumeCreationWaiters()
+    }
+
+    private func finishReleasingTap(_ operationID: UUID) {
+        guard releaseID == operationID else { return }
+        releaseID = nil
         Logger.shared.info("Audio: unmuted other apps' audio after dictation")
     }
 
-    // MARK: - Bluetooth route probing
-
-    /// True for Bluetooth Classic or LE — the only transports exposed to
-    /// HFP renegotiation churn.
-    private static func isBluetoothTransport(_ device: AudioObjectID) -> Bool {
-        let transport = transportType(of: device)
-        return transport == kAudioDeviceTransportTypeBluetooth
-            || transport == kAudioDeviceTransportTypeBluetoothLE
-    }
-
-    /// True while a Bluetooth device's nominal sample rate is call-grade —
-    /// the signature of HFP. A2DP restores 44.1/48kHz. Non-Bluetooth
-    /// devices always return false.
-    private static func inCallMode(_ device: AudioObjectID) -> Bool {
-        guard isBluetoothTransport(device), let rate = nominalSampleRate(of: device) else {
-            return false
+    private func scheduleCreationWatchdog(_ operationID: UUID) {
+        let timeout = operationTimeout
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard let self, self.creationID == operationID else { return }
+            self.creationID = nil
+            self.disabledForSession = true
+            self.wantsMuted = false
+            Logger.shared.warn("Audio mute setup exceeded the Core Audio timeout; muting is disabled until Speakist restarts")
+            self.resumeCreationWaiters()
         }
-        return rate <= 32_000
     }
 
-    private static func defaultOutputDeviceID() -> AudioObjectID? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var device = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr,
-            device != kAudioObjectUnknown else { return nil }
-        return device
-    }
-
-    private static func transportType(of device: AudioObjectID) -> UInt32 {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr else {
-            return 0
+    private func scheduleReleaseWatchdog(_ operationID: UUID) {
+        let timeout = operationTimeout
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard let self, self.releaseID == operationID else { return }
+            self.disabledForSession = true
+            self.wantsMuted = false
+            Logger.shared.warn("Audio mute teardown exceeded the Core Audio timeout; muting is disabled until Speakist restarts")
         }
-        return transport
     }
 
-    private static func nominalSampleRate(of device: AudioObjectID) -> Double? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var rate: Float64 = 0
-        var size = UInt32(MemoryLayout<Float64>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr,
-              rate > 0 else { return nil }
-        return rate
+    private func resumeCreationWaiters() {
+        let waiters = creationWaiters
+        creationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    nonisolated private static func makeTapEngine() throws -> TapEngineInvalidating {
+        guard #available(macOS 14.2, *) else {
+            throw SystemAudioMuterError.unsupportedOS
+        }
+        return try TapEngine()
     }
 }
 
@@ -252,7 +282,7 @@ final class SystemAudioMuter {
 
 /// Availability-free facade over `TapEngine` so `SystemAudioMuter` (which
 /// still deploys to macOS 14.0) can hold one as a stored property.
-private protocol TapEngineInvalidating: AnyObject {
+protocol TapEngineInvalidating: AnyObject, Sendable {
     func invalidate()
 }
 
@@ -262,7 +292,7 @@ private protocol TapEngineInvalidating: AnyObject {
 /// — its only job is to keep the tap "tapped" so the mute stays engaged;
 /// relying on tap creation alone leaves the mute behavior undefined.
 @available(macOS 14.2, *)
-private final class TapEngine: TapEngineInvalidating {
+private final class TapEngine: TapEngineInvalidating, @unchecked Sendable {
     enum TapError: LocalizedError {
         case osStatus(String, OSStatus)
         var errorDescription: String? {

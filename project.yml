@@ -28,8 +28,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     ENABLE_HARDENED_RUNTIME: YES
     CODE_SIGN_STYLE: Automatic
-    CURRENT_PROJECT_VERSION: "14"
-    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "15"
+    MARKETING_VERSION: "1.0.1"
     # Parakeet runs through Core ML and the guarded cleanup model uses MLX,
     # which requires Apple silicon. Declare the shipped architecture instead
     # of producing an Intel slice that cannot complete the local model path.

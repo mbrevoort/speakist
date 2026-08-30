@@ -6,6 +6,7 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let env: AppEnvironment
 
+    private var instanceLock: SpeakistInstanceLock?
     private var menuBar: MenuBarController!
     private var shortcutManager: ShortcutManager!
     private var mainWindow: MainWindowController?
@@ -17,6 +18,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // XCTest uses the app as its host and may run while an installed
+        // Speakist copy is open. Bootstrap dependencies for the tests, but do
+        // not install menus, windows, notifications, or global shortcuts and
+        // do not contend with the user's real app for the instance lock.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            env.start()
+            return
+        }
+
+        if !acquireInstanceLock() {
+            return
+        }
+
         // Speakist now ships as a regular Dock + Cmd+Tab app. Earlier
         // versions were menu-bar-only (`.accessory`) and only became
         // regular while a user-facing window was on screen — but users
@@ -77,6 +91,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showMainWindow()
         } else {
             showOnboarding()
+        }
+    }
+
+    private func acquireInstanceLock() -> Bool {
+        do {
+            instanceLock = try SpeakistInstanceLock()
+            return true
+        } catch let SpeakistInstanceLock.LockError.alreadyRunning(owner) {
+            NSApp.setActivationPolicy(.regular)
+            if let owner,
+               let running = NSRunningApplication.runningApplications(
+                   withBundleIdentifier: owner.bundleID
+               ).first(where: { $0.processIdentifier == owner.processID }) {
+                running.activate(options: [.activateAllWindows])
+            }
+
+            let ownerName = owner?.displayName ?? "Another copy of Speakist"
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "\(ownerName) is already running"
+            alert.informativeText = "Only one Speakist app can own the microphone and dictation shortcut at a time. Quit \(ownerName) before opening \(AppIdentity.displayName)."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            NSApp.terminate(nil)
+            return false
+        } catch {
+            // A cache-directory permission problem should not make Speakist
+            // unusable. Log and fail open; the lock's normal contention path
+            // above remains fail-closed and covers actual duplicate apps.
+            Logger.shared.error("Instance lock unavailable: \(error.localizedDescription)")
+            return true
         }
     }
 

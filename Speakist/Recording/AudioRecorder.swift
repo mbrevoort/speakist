@@ -233,6 +233,15 @@ final class AudioRecorder: ObservableObject {
     @MainActor
     func start() async throws {
         guard !isRecording else { return }
+        // Device discovery is intentionally asynchronous because Core Audio's
+        // first HAL lookup can block forever when coreaudiod is unhealthy.
+        // Do not fall through to AVAudioEngine's synchronous input-node setup
+        // until that background probe has produced a usable device snapshot.
+        guard deviceMonitor.isAudioAvailable else {
+            throw AudioRecorderError.engineStartFailed(
+                "macOS audio devices are unavailable. Wait a moment and try again; if it continues, restart your Mac's audio service."
+            )
+        }
         // Captured up front — even when start() later throws — because a
         // Bluetooth input means the engine may (half-)engage the HFP flip,
         // and the unmute paths need this fact AFTER stop()/cancel(), when

@@ -3,7 +3,7 @@ import CoreAudio
 import AudioToolbox
 import Combine
 
-struct AudioInputDevice: Identifiable, Hashable {
+struct AudioInputDevice: Identifiable, Hashable, Sendable {
     let id: AudioDeviceID
     let uid: String
     let name: String
@@ -24,9 +24,19 @@ struct AudioInputDevice: Identifiable, Hashable {
     }
 }
 
+struct AudioDeviceSnapshot: Sendable {
+    let inputs: [AudioInputDevice]
+    let defaultInputID: AudioDeviceID?
+}
+
 @MainActor
 final class DeviceMonitor: ObservableObject {
     @Published private(set) var inputs: [AudioInputDevice] = []
+    /// Becomes true only after Core Audio has returned a usable input-device
+    /// snapshot. App startup uses this as the gate for audio prewarming so a
+    /// wedged HAL can never pull synchronous audio work back onto the main
+    /// thread.
+    @Published private(set) var isAudioAvailable = false
 
     /// Fires when the system's default input or output device changes
     /// (user picked a new device in System Settings, plugged in a USB
@@ -38,15 +48,45 @@ final class DeviceMonitor: ObservableObject {
     /// updated `inputs` list when they react.
     let routingChanged = PassthroughSubject<Void, Never>()
 
-    private var listenerInstalled = false
+    private var defaultInputID: AudioDeviceID?
+    private var started = false
+    private let snapshotProvider: @Sendable () -> AudioDeviceSnapshot?
+    private let installsListeners: Bool
+    nonisolated private let coreAudioQueue = DispatchQueue(
+        label: "com.speakist.audio.devices",
+        qos: .userInitiated)
+
+    init(
+        snapshotProvider: @escaping @Sendable () -> AudioDeviceSnapshot? = { DeviceMonitor.captureSnapshot() },
+        installsListeners: Bool = true
+    ) {
+        self.snapshotProvider = snapshotProvider
+        self.installsListeners = installsListeners
+    }
 
     func start() {
-        refresh()
-        installListener()
+        guard !started else { return }
+        started = true
+
+        // Core Audio's first property lookup initializes the HAL client and
+        // can wait forever if coreaudiod is wedged. Keep both the initial scan
+        // and listener registration off the main thread so Speakist can still
+        // present its UI and let the user quit normally in that state.
+        scheduleRefresh()
+
+        guard installsListeners else { return }
+        let notify: @Sendable (Bool) -> Void = { [weak self] routingChanged in
+            Task { @MainActor in
+                self?.scheduleRefresh(notifyRoutingChange: routingChanged)
+            }
+        }
+        coreAudioQueue.async {
+            Self.installListeners(notify: notify)
+        }
     }
 
     func refresh() {
-        inputs = Self.enumerateInputDevices()
+        scheduleRefresh()
     }
 
     func device(withUID uid: String) -> AudioInputDevice? {
@@ -61,11 +101,52 @@ final class DeviceMonitor: ObservableObject {
         if let uid = preferredUID, let device = device(withUID: uid) {
             return device
         }
-        guard let defaultID = defaultInputDeviceID() else { return nil }
+        guard let defaultID = defaultInputID else { return nil }
         return inputs.first(where: { $0.id == defaultID })
     }
 
     func defaultInputDeviceID() -> AudioDeviceID? {
+        defaultInputID
+    }
+
+    // MARK: - Background refresh
+
+    private func scheduleRefresh(notifyRoutingChange: Bool = false) {
+        let provider = snapshotProvider
+        coreAudioQueue.async { [weak self] in
+            let snapshot = provider()
+            Task { @MainActor in
+                self?.apply(snapshot, notifyRoutingChange: notifyRoutingChange)
+            }
+        }
+    }
+
+    private func apply(_ snapshot: AudioDeviceSnapshot?, notifyRoutingChange: Bool) {
+        if let snapshot {
+            inputs = snapshot.inputs
+            defaultInputID = snapshot.defaultInputID
+            isAudioAvailable = snapshot.defaultInputID != nil && !snapshot.inputs.isEmpty
+        } else {
+            inputs = []
+            defaultInputID = nil
+            isAudioAvailable = false
+        }
+
+        if notifyRoutingChange {
+            routingChanged.send()
+        }
+    }
+
+    // MARK: - Enumeration
+
+    nonisolated private static func captureSnapshot() -> AudioDeviceSnapshot? {
+        guard let inputs = enumerateInputDevices() else { return nil }
+        return AudioDeviceSnapshot(
+            inputs: inputs,
+            defaultInputID: queryDefaultInputDeviceID())
+    }
+
+    nonisolated private static func queryDefaultInputDeviceID() -> AudioDeviceID? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -77,21 +158,19 @@ final class DeviceMonitor: ObservableObject {
         return deviceID
     }
 
-    // MARK: - Enumeration
-
-    private static func enumerateInputDevices() -> [AudioInputDevice] {
+    nonisolated private static func enumerateInputDevices() -> [AudioInputDevice]? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr else {
-            return []
+            return nil
         }
         let count = Int(size) / MemoryLayout<AudioDeviceID>.size
         var ids = [AudioDeviceID](repeating: 0, count: count)
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids) == noErr else {
-            return []
+            return nil
         }
 
         return ids.compactMap { id -> AudioInputDevice? in
@@ -102,7 +181,7 @@ final class DeviceMonitor: ObservableObject {
         }
     }
 
-    private static func deviceTransportType(_ id: AudioDeviceID) -> UInt32 {
+    nonisolated private static func deviceTransportType(_ id: AudioDeviceID) -> UInt32 {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -113,7 +192,7 @@ final class DeviceMonitor: ObservableObject {
         return status == noErr ? transport : 0
     }
 
-    private static func deviceHasInputStreams(_ id: AudioDeviceID) -> Bool {
+    nonisolated private static func deviceHasInputStreams(_ id: AudioDeviceID) -> Bool {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreams,
             mScope: kAudioDevicePropertyScopeInput,
@@ -123,7 +202,7 @@ final class DeviceMonitor: ObservableObject {
         return size > 0
     }
 
-    private static func deviceProperty(_ id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
+    nonisolated private static func deviceProperty(_ id: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
         var addr = AudioObjectPropertyAddress(
             mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -137,15 +216,15 @@ final class DeviceMonitor: ObservableObject {
 
     // MARK: - Listener
 
-    private func installListener() {
-        guard !listenerInstalled else { return }
-        listenerInstalled = true
+    nonisolated private static func installListeners(
+        notify: @escaping @Sendable (Bool) -> Void
+    ) {
         var devicesAddr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddr, DispatchQueue.main) { [weak self] _, _ in
-            Task { @MainActor in self?.refresh() }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &devicesAddr, DispatchQueue.main) { _, _ in
+            notify(false)
         }
 
         // Default-device flips fire here even when the device list
@@ -160,11 +239,8 @@ final class DeviceMonitor: ObservableObject {
                 mSelector: selector,
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain)
-            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main) { [weak self] _, _ in
-                Task { @MainActor in
-                    self?.refresh()
-                    self?.routingChanged.send()
-                }
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main) { _, _ in
+                notify(true)
             }
         }
     }

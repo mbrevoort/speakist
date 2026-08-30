@@ -56,10 +56,10 @@ final class Preferences: ObservableObject {
             // Globe monitor. Off by default; opt-in.
             K.useGlobeKey: false,
             K.localOnlySetupVersion: 0,
-            // Mute other apps' audio while a dictation is recording, unmute
-            // when it ends. On by default. Requires the System Audio
-            // Recording permission (macOS prompts on first use).
-            K.muteAudioDuringDictation: true
+            // Optional because it requires a Core Audio process tap and an
+            // additional System Audio Recording permission. Dictation itself
+            // never depends on this convenience feature.
+            K.muteAudioDuringDictation: false
         ])
     }
 
@@ -133,8 +133,8 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue, forKey: K.useGlobeKey); objectWillChange.send() }
     }
     /// Mute other apps' audio (music, video, anything) while a dictation is
-    /// recording, unmute when it ends. On by default. User-overridable via
-    /// `defaults write <bundleID> duckAudioDuringDictation 0` (legacy key
+    /// recording, unmute when it ends. Off by default. User-overridable via
+    /// `defaults write <bundleID> duckAudioDuringDictation 1` (legacy key
     /// name — see K.muteAudioDuringDictation).
     var muteAudioDuringDictation: Bool {
         get { defaults.bool(forKey: K.muteAudioDuringDictation) }

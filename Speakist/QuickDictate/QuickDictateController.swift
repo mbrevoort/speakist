@@ -121,7 +121,7 @@ final class QuickDictateController: ObservableObject {
         // Mute background audio for the duration of the recording — same
         // behavior as push-to-talk. No-op when the feature is off; unmuted
         // in stop()/cancel().
-        audioMuter.mute()
+        await audioMuter.mute()
 
         do {
             try await audioRecorder.start()

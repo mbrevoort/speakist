@@ -71,11 +71,12 @@ final class AppEnvironment: ObservableObject {
         audioArchive.pruneToKeepLast(preferences.keepAudio ? preferences.keepAudioCount : 0)
         updater.bootstrap()
 
-        // Pre-warm the audio engine so the first shortcut press doesn't
-        // pay 100–250ms of HAL cold-start latency. Self-gates on mic
-        // permission and silently no-ops if it's not granted yet — so
-        // the OS mic prompt is still tied to the user's first
-        // deliberate shortcut press, not launch.
+        // Pre-warm the audio engine so the first shortcut press doesn't pay
+        // the HAL cold-start latency, but only after the background device
+        // scan proves Core Audio is responding and microphone access exists.
+        // The first HAL lookup can otherwise wait forever when coreaudiod is
+        // wedged; doing any prewarm work synchronously here would turn that
+        // system failure into a beach ball before Speakist shows a window.
         //
         // We deliberately do *not* prewarm the HUD panel here. The
         // construction is fast (~10–30ms), and creating an
@@ -84,7 +85,6 @@ final class AppEnvironment: ObservableObject {
         // modifier renders empty until the next layout cycle. Lazy
         // first-show construction in `showPreparing()` is correct; the
         // persistent-panel change in `hide()` already covers presses 2+.
-        audioRecorder.prewarm()
         // The XCTest host constructs the full app environment. Keep unit tests
         // deterministic and fast: their fake Parakeet runtime should never be
         // accompanied by a real Core ML load from this launch-time prewarm.
@@ -93,13 +93,28 @@ final class AppEnvironment: ObservableObject {
             parakeetModel.prepareInBackground()
             qwenCleanupModel.prepareInBackground()
         }
-        // If mic access is granted later in this session (user came
-        // back from System Settings, or completed onboarding), re-run
-        // the audio prewarm so the first post-grant press is also fast.
-        permissions.$mic
-            .removeDuplicates()
-            .sink { [audioRecorder] state in
-                if state == .granted { audioRecorder.prewarm() }
+        // This also covers a permission granted later in the session: the
+        // combined state emits once both the permission and a healthy device
+        // snapshot are available.
+        Publishers.CombineLatest(deviceMonitor.$isAudioAvailable, permissions.$mic)
+            .removeDuplicates { lhs, rhs in
+                lhs.0 == rhs.0 && lhs.1 == rhs.1
+            }
+            .sink { [audioRecorder] audioAvailable, micState in
+                // Local builds are frequently launched alongside an installed
+                // channel during development. The cross-channel instance lock
+                // now prevents that at runtime, and skipping Local prewarm also
+                // ensures unit-test/dev hosts never retain an idle HAL client.
+                // Shipped stable/dev/beta builds keep the first-press latency
+                // optimization when they are the sole Speakist process.
+                let isTestHost = ProcessInfo.processInfo.environment[
+                    "XCTestConfigurationFilePath"] != nil
+                if audioAvailable,
+                   micState == .granted,
+                   AppIdentity.channel != "local",
+                   !isTestHost {
+                    audioRecorder.prewarm()
+                }
             }
             .store(in: &cancellables)
     }
